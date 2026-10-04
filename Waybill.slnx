@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Waybill.EntityFrameworkCore.PostgreSql/Waybill.EntityFrameworkCore.PostgreSql.csproj" />
+    <Project Path="src/Waybill.RabbitMQ/Waybill.RabbitMQ.csproj" />
+    <Project Path="src/Waybill/Waybill.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Waybill.Tests.Chaos/Waybill.Tests.Chaos.csproj" />
+    <Project Path="tests/Waybill.Tests.Integration/Waybill.Tests.Integration.csproj" />
+    <Project Path="tests/Waybill.Tests.Unit/Waybill.Tests.Unit.csproj" />
+  </Folder>
+</Solution>
