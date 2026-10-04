@@ -7,7 +7,9 @@
 - [x] Workflows `ci`, `scheduled` e `release`
 - [x] `README.md` (estado experimental), `SECURITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`
 - [x] ADR 0001 em `docs/adr/`; spike arquivado em `spike/`
-- [ ] Repositório público `Joseleno/Waybill` no GitHub e primeiro push
-- [ ] CI verde no `main`
+- [x] Repositório público `Joseleno/Waybill` no GitHub; `main` e `develop` com o commit inicial (licença)
+- [x] Git flow: `main` (releases), `develop` (integração), `feature/*` com PR para `develop`; documentado no `CONTRIBUTING.md`
+- [ ] PR `feature/etapa-1-repositorio-e-ci` → `develop` revisada e mergeada pelo autor
+- [ ] CI verde na PR e no `develop`
 - [ ] Tag `v0.0.0-test.1` validando o pipeline de release
 - [ ] Habilitar private vulnerability reporting no GitHub (citado no `SECURITY.md`)

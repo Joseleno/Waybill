@@ -28,8 +28,18 @@ dotnet test --project tests/Waybill.Tests.Chaos --filter-not-trait "Category=Lon
 
 Long-running scenarios (`[Trait("Category", "Long")]`) run in the scheduled CI workflow, not on pull requests.
 
+## Branching (git flow)
+
+- `main` holds released code only; every release is a tag on `main`.
+- `develop` is the integration branch.
+- Work happens on `feature/<short-name>` branches created from `develop`, and reaches it only through a pull request.
+- Releases go through `release/<version>` (from `develop`, merged into `main` and back into `develop`); urgent fixes
+  through `hotfix/<version>` (from `main`, merged into `main` and `develop`).
+- Nobody pushes directly to `main` or `develop`.
+
 ## Commits and pull requests
 
+- Pull requests target `develop` (or `main` for `release/*` and `hotfix/*`), and CI must be green before merging.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `test:`, `docs:`, `build:`, `ci:`).
 - One commit per proven test scenario, with the test name in the message.
 - By contributing, you agree that your contributions are licensed under the [Apache-2.0 license](LICENSE).

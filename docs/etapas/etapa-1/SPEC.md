@@ -25,5 +25,6 @@ Qualquer API do pacote. O README descreve só o estado experimental.
 
 - Piso do PostgreSQL: 15 (Oct 4, 2026).
 - Repositório público desde o primeiro commit; arquivos de repositório em inglês, design em português.
+- Git flow: todo trabalho em `feature/*` com PR para `develop`; `main` só recebe releases.
 - Notas de trabalho locais (resumo de sessão e instruções do ambiente) ficam fora do git.
 - Runners do GitHub têm limite de 6 h por job: o cenário de 24 h da etapa 5 precisa de runner próprio ou de duração menor. Decidir antes da etapa 5.
