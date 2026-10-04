@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -25,6 +26,7 @@ public static class WaybillDispatcherServiceCollectionExtensions
             .Validate(o => o.PublishTimeout > TimeSpan.Zero, "WaybillDispatcherOptions.PublishTimeout must be positive.")
             .Validate(o => o.LeaseMargin > TimeSpan.Zero, "WaybillDispatcherOptions.LeaseMargin must be positive.")
             .Validate(o => o.MaxReturns > 0, "WaybillDispatcherOptions.MaxReturns must be positive.")
+            .Validate(o => o.MetricsInterval > TimeSpan.Zero, "WaybillDispatcherOptions.MetricsInterval must be positive.")
             .ValidateOnStart();
 
         services.TryAddSingleton(sp => new DispatcherDataSource(
@@ -32,6 +34,9 @@ public static class WaybillDispatcherServiceCollectionExtensions
         services.TryAddSingleton(sp => new OutboxStore(sp.GetRequiredService<DispatcherDataSource>().Value));
         services.TryAddSingleton<OutboxDispatcher>();
         services.AddHostedService<WaybillDispatcherService>();
+        services.TryAddSingleton(sp => new OutboxMetrics(sp.GetService<IMeterFactory>()));
+        services.TryAddSingleton<OldestPendingSampler>();
+        services.AddHostedService<WaybillMetricsService>();
         return services;
     }
 }

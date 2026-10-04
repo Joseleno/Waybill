@@ -43,3 +43,5 @@ Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.OutboxRetention.se
 Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.WaybillRetentionOptions() -> void
 Waybill.EntityFrameworkCore.Retention.WaybillRetentionServiceCollectionExtensions
 static Waybill.EntityFrameworkCore.Retention.WaybillRetentionServiceCollectionExtensions.AddWaybillRetention(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MetricsInterval.get -> System.TimeSpan
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MetricsInterval.set -> void
