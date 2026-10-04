@@ -22,6 +22,7 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
     private readonly SemaphoreSlim _gate = new(1, 1);
     private IConnection? _connection;
     private IChannel? _channel;
+    private bool _disposed;
 
     public async Task<IReadOnlyList<PublishResult>> PublishAsync(IReadOnlyList<OutgoingMessage> batch, CancellationToken cancellationToken)
     {
@@ -46,9 +47,21 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
 
     private async Task<PublishResult> PublishOneAsync(IChannel channel, string exchange, OutgoingMessage message, CancellationToken cancellationToken)
     {
+        // Building the properties touches no network: if the message cannot be expressed in AMQP, retrying will
+        // never help, so it is a defect of the message (DLQ), never a silent endless retry.
+        BasicProperties properties;
         try
         {
-            await channel.BasicPublishAsync(exchange, message.Name, mandatory: true, Properties(message), message.Payload, cancellationToken)
+            properties = Properties(message);
+        }
+        catch (Exception exception)
+        {
+            return PublishResult.Defect($"cannot be expressed as an AMQP message: {exception.Message}");
+        }
+
+        try
+        {
+            await channel.BasicPublishAsync(exchange, message.Name, mandatory: true, properties, message.Payload, cancellationToken)
                 .ConfigureAwait(false);
             return PublishResult.Confirmed;
         }
@@ -70,6 +83,13 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
 
     internal static BasicProperties Properties(OutgoingMessage message)
     {
+        // AMQP short strings: the core already rejects longer names and correlation ids at enqueue time; this guards
+        // rows written before that check, or by other means.
+        EnsureShortString(message.Name, "message name");
+        EnsureShortString(message.ContentType, "content type");
+        if (message.Headers.TryGetValue("correlation_id", out var correlation))
+            EnsureShortString(correlation, "correlation id");
+
         var headers = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var name in new[] { "traceparent", "tracestate", "tenant_id" })
         {
@@ -91,6 +111,12 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
         };
     }
 
+    private static void EnsureShortString(string value, string what)
+    {
+        if (System.Text.Encoding.UTF8.GetByteCount(value) > 255)
+            throw new InvalidOperationException($"The {what} is longer than 255 UTF-8 bytes (AMQP short string).");
+    }
+
     private async Task<IChannel> GetChannelAsync(CancellationToken cancellationToken)
     {
         if (_channel is { IsOpen: true } open)
@@ -99,44 +125,47 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_channel is { IsOpen: true } reopened)
                 return reopened;
 
             var settings = options.Value;
+            await DisposeQuietly(_channel).ConfigureAwait(false);
+            _channel = null;
+
             if (_connection is not { IsOpen: true })
             {
                 await DisposeQuietly(_connection).ConfigureAwait(false);
-                var factory = new ConnectionFactory
-                {
-                    Uri = settings.Uri!,
-                    ClientProvidedName = settings.ClientProvidedName,
-                    AutomaticRecoveryEnabled = false,
-                };
+                _connection = null;
+                var factory = new ConnectionFactory { Uri = settings.Uri!, ClientProvidedName = settings.ClientProvidedName };
                 settings.ConfigureConnectionFactory?.Invoke(factory);
+                // Last, so the callback cannot turn it back on: closed connections and channels are replaced here.
+                factory.AutomaticRecoveryEnabled = false;
                 _connection = await factory.CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            await DisposeQuietly(_channel).ConfigureAwait(false);
             var channel = await _connection.CreateChannelAsync(
                 new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true),
                 cancellationToken).ConfigureAwait(false);
-
-            // The exchange is the application's topology. A missing one would close the channel on every publish;
-            // say so plainly instead.
-            if (settings.Exchange!.Length > 0)
+            try
             {
-                try
-                {
+                // The exchange is the application's topology. A missing one would close the channel on every
+                // publish; say so plainly instead.
+                if (settings.Exchange!.Length > 0)
                     await channel.ExchangeDeclarePassiveAsync(settings.Exchange, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationInterruptedException missing)
-                {
-                    await DisposeQuietly(channel).ConfigureAwait(false);
-                    LogExchangeMissing(logger, settings.Exchange);
-                    throw new InvalidOperationException(
-                        $"Exchange '{settings.Exchange}' does not exist. Waybill does not create topology: declare it in the application or its infrastructure.",
-                        missing);
-                }
+            }
+            catch (OperationInterruptedException missing)
+            {
+                await DisposeQuietly(channel).ConfigureAwait(false);
+                LogExchangeMissing(logger, settings.Exchange!);
+                throw new InvalidOperationException(
+                    $"Exchange '{settings.Exchange}' does not exist. Waybill does not create topology: declare it in the application or its infrastructure.",
+                    missing);
+            }
+            catch
+            {
+                await DisposeQuietly(channel).ConfigureAwait(false); // timeout or I/O error: never leak the channel
+                throw;
             }
 
             _channel = channel;
@@ -150,9 +179,20 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
 
     public async ValueTask DisposeAsync()
     {
-        await DisposeQuietly(_channel).ConfigureAwait(false);
-        await DisposeQuietly(_connection).ConfigureAwait(false);
-        _gate.Dispose();
+        // Under the gate, so a channel being created right now is either finished first or never created.
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            _disposed = true;
+            await DisposeQuietly(_channel).ConfigureAwait(false);
+            await DisposeQuietly(_connection).ConfigureAwait(false);
+            _channel = null;
+            _connection = null;
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private static async Task DisposeQuietly(IAsyncDisposable? disposable)

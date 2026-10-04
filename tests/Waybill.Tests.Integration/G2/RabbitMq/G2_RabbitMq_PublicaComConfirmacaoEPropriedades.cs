@@ -38,7 +38,27 @@ public sealed class G2_RabbitMq_PublicaComConfirmacaoEPropriedades(PostgresFixtu
         Assert.Equal(DeliveryModes.Persistent, message.BasicProperties.DeliveryMode);
         Assert.Equal("corr-0", message.BasicProperties.CorrelationId);
         Assert.Equal("invoice-0", Encoding.UTF8.GetString((byte[])message.BasicProperties.Headers!["waybill-key"]!));
-        Assert.True(message.BasicProperties.Timestamp.UnixTime > 0);
+        var createdAt = await database.ScalarAsync($"SELECT extract(epoch FROM created_at)::bigint FROM waybill.outbox WHERE id = '{ids[0]}'");
+        Assert.Equal(createdAt, message.BasicProperties.Timestamp.UnixTime);
         Assert.Equal(0m, JsonSerializer.Deserialize(message.Body.Span, TestJson.Default.InvoicePaid)!.Amount);
+    }
+
+    // More messages in one batch than the client's default limit of outstanding publisher confirmations (128):
+    // publishes wait for permits instead of failing, and every message is confirmed once.
+    [Fact]
+    public async Task G2_RabbitMq_LoteAcimaDoLimiteDeConfirmacoesPendentes_TodasConfirmadas()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        var (exchange, queue) = await rabbit.DeclareTopologyAsync("billing.#");
+        await DispatcherHarness.EnqueueAsync(database, 300);
+        await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
+        await using var transport = Transport(rabbit, exchange);
+        var dispatcher = DispatcherHarness.Create(dataSource, transport, DispatcherHarness.Options(database, o => o.BatchSize = 300));
+
+        Assert.Equal(300, (await dispatcher.RunOnceAsync(ct)).Claimed);
+
+        Assert.Equal(300, await database.CountAsync("published"));
+        Assert.Equal(300, (await rabbit.DrainAsync(queue)).Select(m => m.BasicProperties.MessageId).Distinct().Count());
     }
 }

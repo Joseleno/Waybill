@@ -17,7 +17,7 @@ public static class WaybillRabbitMqServiceCollectionExtensions
 
         services.AddOptions<WaybillRabbitMqOptions>()
             .Configure(configure)
-            .Validate(o => o.Uri is not null, "WaybillRabbitMqOptions.Uri is required.")
+            .Validate(o => o.Uri is { Scheme: "amqp" or "amqps" }, "WaybillRabbitMqOptions.Uri is required, with scheme amqp or amqps.")
             .Validate(o => o.Exchange is not null, "WaybillRabbitMqOptions.Exchange is required (use \"\" for the default exchange).")
             .ValidateOnStart();
         services.Replace(ServiceDescriptor.Singleton<ITransport, RabbitMqTransport>());

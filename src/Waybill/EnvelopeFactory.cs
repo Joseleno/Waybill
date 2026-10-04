@@ -15,6 +15,7 @@ internal static class EnvelopeFactory
         ArgumentNullException.ThrowIfNull(message);
         if (options.MaxPayloadBytes <= 0)
             throw new InvalidOperationException("WaybillOptions.MaxPayloadBytes must be configured with a positive value.");
+        EnsureShortString(correlationId, "correlation id");
 
         var messageType = options.GetMessageType(message.GetType());
         var payload = JsonSerializer.SerializeToUtf8Bytes(message, messageType.TypeInfo);
@@ -27,6 +28,19 @@ internal static class EnvelopeFactory
         var keyHash = key is null ? KeyHash.Of(id) : KeyHash.Of(key);
         return new MessageEnvelope(id, messageType.Name, key, keyHash, payload, JsonContentType,
             Headers(Activity.Current, correlationId, tenantId));
+    }
+
+    /// <summary>
+    /// Envelope fields that travel as broker properties (message name, correlation id) are limited to 255 UTF-8
+    /// bytes, AMQP's short string. Rejected up front: past the outbox, a value the broker cannot carry could only
+    /// fail at every publish.
+    /// </summary>
+    internal const int MaxShortStringBytes = 255;
+
+    internal static void EnsureShortString(string? value, string what)
+    {
+        if (value is not null && Encoding.UTF8.GetByteCount(value) > MaxShortStringBytes)
+            throw new InvalidOperationException($"The {what} '{value[..Math.Min(value.Length, 40)]}…' is longer than {MaxShortStringBytes} UTF-8 bytes.");
     }
 
     // W3C trace context plus the optional ids, as a JSON object; null when there is nothing to carry.
