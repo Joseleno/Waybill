@@ -8,8 +8,9 @@
 | `G3_FalhaNoHandlerAposInsert_RollbackEReprocessa` | O handler lança depois do INSERT do inbox | Rollback completo; reentrega processa |
 | `G3_FalhaDoAckDepoisDoCommit_ReentregaEhDuplicata` | Commit feito, ack perdido | A reentrega cai na duplicata e só faz ack |
 | `G3_HandlerEnfileiraEFalha_SemInboxNemOutbox` | O handler enfileira um evento e lança | Nem linha de inbox nem de outbox; no sucesso, as duas no mesmo commit |
-| `G3_DbContextForaDaTransacao_FalhaExplicita` | O handler grava por outra instância do contexto | Falha explícita, com o que fazer; nada aplicado |
+| `G3_DbContextForaDaTransacao_FalhaExplicita` | O handler grava por outra instância do contexto | Falha explícita, com o que fazer; nada aplicado. Uma tarefa derivada pelo handler que grava depois que ele terminou não é recusada |
+| `G3_RetryDuranteCommit_AplicaUmaVez` | Commit feito no servidor, confirmação perdida, execution strategy refaz a unidade | O retry encontra a própria linha e volta `Duplicate`; efeito uma vez (achado da revisão) |
 | `G3_ConsumidorRabbitMqSemFramework` | RabbitMQ.Client puro + inbox, mensagem entregue duas vezes | Aplica uma vez; ack depois do commit |
-| `FakeInbox_EquivalenteAoReal_*` | Mesmo código contra o fake e o real | Mesmo resultado |
+| `FakeInbox_EquivalenteAoReal_*` | Mesmo código contra o fake e o real, em sequência e em paralelo | Mesmo resultado |
 
 **Pronto quando** os cenários passam contra PostgreSQL real, existe um consumidor de exemplo sem framework e o fake tem teste de equivalência.
