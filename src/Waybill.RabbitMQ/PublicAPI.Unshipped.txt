@@ -1,4 +1,5 @@
 #nullable enable
+Waybill.RabbitMQ.WaybillRabbitMqMessageExtensions
 Waybill.RabbitMQ.WaybillRabbitMqOptions
 Waybill.RabbitMQ.WaybillRabbitMqOptions.ClientProvidedName.get -> string!
 Waybill.RabbitMQ.WaybillRabbitMqOptions.ClientProvidedName.set -> void
@@ -10,4 +11,5 @@ Waybill.RabbitMQ.WaybillRabbitMqOptions.Uri.get -> System.Uri?
 Waybill.RabbitMQ.WaybillRabbitMqOptions.Uri.set -> void
 Waybill.RabbitMQ.WaybillRabbitMqOptions.WaybillRabbitMqOptions() -> void
 Waybill.RabbitMQ.WaybillRabbitMqServiceCollectionExtensions
+static Waybill.RabbitMQ.WaybillRabbitMqMessageExtensions.GetWaybillMessageId(this RabbitMQ.Client.IReadOnlyBasicProperties! properties) -> System.Guid
 static Waybill.RabbitMQ.WaybillRabbitMqServiceCollectionExtensions.AddWaybillRabbitMQ(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.RabbitMQ.WaybillRabbitMqOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!

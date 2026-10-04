@@ -18,4 +18,18 @@ public static class WaybillEntityFrameworkCoreExtensions
         services.TryAddScoped<IOutbox<TContext>, DbContextOutbox<TContext>>();
         return services;
     }
+
+    /// <summary>
+    /// Registers <see cref="IInbox{TContext}"/> as a scoped service bound to the scope's <typeparamref name="TContext"/>,
+    /// and guards every <typeparamref name="TContext"/> against saving outside the inbox transaction while a handler runs.
+    /// The tables come from <see cref="WaybillSchema.MigrateAsync"/>.
+    /// </summary>
+    public static IServiceCollection AddWaybillInbox<TContext>(this IServiceCollection services)
+        where TContext : DbContext
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.TryAddScoped<IInbox<TContext>, DbContextInbox<TContext>>();
+        services.ConfigureDbContext<TContext>(options => options.AddInterceptors(InboxGuardInterceptor.Instance));
+        return services;
+    }
 }
