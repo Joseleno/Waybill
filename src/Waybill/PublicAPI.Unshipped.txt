@@ -22,6 +22,8 @@ Waybill.OutgoingMessage.Payload.init -> void
 Waybill.PublishResult
 Waybill.PublishResult.Deconstruct(out Waybill.PublishStatus Status, out string? Reason) -> void
 Waybill.PublishResult.Equals(Waybill.PublishResult other) -> bool
+Waybill.PublishResult.Failure.get -> Waybill.TransportFailure
+Waybill.PublishResult.Failure.init -> void
 Waybill.PublishResult.PublishResult() -> void
 Waybill.PublishResult.PublishResult(Waybill.PublishStatus Status, string? Reason = null) -> void
 Waybill.PublishResult.Reason.get -> string?
@@ -33,6 +35,11 @@ Waybill.PublishStatus.Confirmed = 1 -> Waybill.PublishStatus
 Waybill.PublishStatus.Defect = 4 -> Waybill.PublishStatus
 Waybill.PublishStatus.Retry = 2 -> Waybill.PublishStatus
 Waybill.PublishStatus.Returned = 3 -> Waybill.PublishStatus
+Waybill.TransportFailure
+Waybill.TransportFailure.ConfirmTimeout = 2 -> Waybill.TransportFailure
+Waybill.TransportFailure.Connection = 1 -> Waybill.TransportFailure
+Waybill.TransportFailure.Nacked = 3 -> Waybill.TransportFailure
+Waybill.TransportFailure.Unspecified = 0 -> Waybill.TransportFailure
 Waybill.WaybillOptions
 Waybill.WaybillOptions.AddMessage<TMessage>(string! name, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage>! typeInfo) -> Waybill.WaybillOptions!
 Waybill.WaybillOptions.MaxPayloadBytes.get -> int
@@ -45,6 +52,7 @@ override Waybill.PublishResult.GetHashCode() -> int
 static Waybill.PublishResult.Confirmed.get -> Waybill.PublishResult
 static Waybill.PublishResult.Defect(string! reason) -> Waybill.PublishResult
 static Waybill.PublishResult.Retry.get -> Waybill.PublishResult
+static Waybill.PublishResult.RetryAfter(Waybill.TransportFailure failure, string? reason = null) -> Waybill.PublishResult
 static Waybill.PublishResult.Returned(string! reason) -> Waybill.PublishResult
 static Waybill.PublishResult.operator !=(Waybill.PublishResult left, Waybill.PublishResult right) -> bool
 static Waybill.PublishResult.operator ==(Waybill.PublishResult left, Waybill.PublishResult right) -> bool

@@ -16,6 +16,8 @@ internal static class EnvelopeFactory
         if (options.MaxPayloadBytes <= 0)
             throw new InvalidOperationException("WaybillOptions.MaxPayloadBytes must be configured with a positive value.");
         EnsureShortString(correlationId, "correlation id");
+        EnsureShortString(key, "aggregate key");
+        EnsureShortString(tenantId, "tenant id");
 
         var messageType = options.GetMessageType(message.GetType());
         var payload = JsonSerializer.SerializeToUtf8Bytes(message, messageType.TypeInfo);
@@ -31,9 +33,9 @@ internal static class EnvelopeFactory
     }
 
     /// <summary>
-    /// Envelope fields that travel as broker properties (message name, correlation id) are limited to 255 UTF-8
-    /// bytes, AMQP's short string. Rejected up front: past the outbox, a value the broker cannot carry could only
-    /// fail at every publish.
+    /// Envelope fields that travel as broker properties or headers (message name, correlation id, aggregate key,
+    /// tenant id) are limited to 255 UTF-8 bytes, AMQP's short string. Rejected up front: past the outbox, a value the
+    /// broker cannot carry could only fail at every publish.
     /// </summary>
     internal const int MaxShortStringBytes = 255;
 

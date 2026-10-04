@@ -35,17 +35,74 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
         {
             LogConnectFailed(logger, exception);
             var reason = $"connection failed: {exception.Message}";
-            return batch.Select(_ => new PublishResult(PublishStatus.Retry, reason)).ToList();
+            return batch.Select(_ => PublishResult.RetryAfter(TransportFailure.Connection, reason)).ToList();
         }
 
         // Publishes of one batch run concurrently on the channel; each completes when the broker confirms (or
         // returns, or nacks) that message.
         var exchange = options.Value.Exchange!;
-        var publishes = batch.Select(message => PublishOneAsync(channel, exchange, message, cancellationToken));
-        return await Task.WhenAll(publishes).ConfigureAwait(false);
+        var attempts = await Task.WhenAll(batch.Select(message => PublishOneAsync(channel, exchange, message, cancellationToken)))
+            .ConfigureAwait(false);
+        if (!attempts.Any(a => a.ChannelClosedByBroker))
+            return attempts.Select(a => a.Result).ToList();
+
+        // The broker closed the channel during the batch (for example a message above its max_message_size). The
+        // client cannot say which message did it, and every unconfirmed publish failed with it. Publish those again,
+        // one by one, each on a channel of its own: a 406 on that channel can only come from that message, so it is the
+        // defect; the others go through.
+        LogIsolating(logger, attempts.Count(a => a.ChannelClosedByBroker));
+        var results = new PublishResult[batch.Count];
+        for (var i = 0; i < batch.Count; i++)
+        {
+            if (!attempts[i].ChannelClosedByBroker)
+                results[i] = attempts[i].Result;
+            else if (cancellationToken.IsCancellationRequested)
+                results[i] = PublishResult.RetryAfter(TransportFailure.ConfirmTimeout, "the publish timeout ended the isolation");
+            else
+                results[i] = await PublishAloneAsync(exchange, batch[i], cancellationToken).ConfigureAwait(false);
+        }
+        return results;
     }
 
-    private async Task<PublishResult> PublishOneAsync(IChannel channel, string exchange, OutgoingMessage message, CancellationToken cancellationToken)
+    private async Task<PublishResult> PublishAloneAsync(string exchange, OutgoingMessage message, CancellationToken cancellationToken)
+    {
+        IChannel? channel = null;
+        try
+        {
+            channel = await OpenDedicatedChannelAsync(cancellationToken).ConfigureAwait(false);
+            var alone = await PublishOneAsync(channel, exchange, message, cancellationToken).ConfigureAwait(false);
+            return alone.ChannelClosedByBroker
+                ? PublishResult.Defect($"the broker closed the channel when this message was published alone: {alone.Result.Reason}")
+                : alone.Result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return PublishResult.RetryAfter(TransportFailure.ConfirmTimeout, "the publish timeout ended the isolation");
+        }
+        catch (Exception exception)
+        {
+            return PublishResult.RetryAfter(TransportFailure.Connection, exception.Message);
+        }
+        finally
+        {
+            await DisposeQuietly(channel).ConfigureAwait(false);
+        }
+    }
+
+    // A fresh confirm-tracking channel on the shared connection, never the shared channel: no stale close state from a
+    // previous message can be blamed on this one.
+    private async Task<IChannel> OpenDedicatedChannelAsync(CancellationToken cancellationToken)
+    {
+        await GetChannelAsync(cancellationToken).ConfigureAwait(false); // reopens the connection if it dropped
+        return await _connection!.CreateChannelAsync(
+            new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>One publish: its result, and whether the broker (not the network) closed the channel under it.</summary>
+    private readonly record struct Attempt(PublishResult Result, bool ChannelClosedByBroker);
+
+    private async Task<Attempt> PublishOneAsync(IChannel channel, string exchange, OutgoingMessage message, CancellationToken cancellationToken)
     {
         // Building the properties touches no network: if the message cannot be expressed in AMQP, retrying will
         // never help, so it is a defect of the message (DLQ), never a silent endless retry.
@@ -56,30 +113,50 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
         }
         catch (Exception exception)
         {
-            return PublishResult.Defect($"cannot be expressed as an AMQP message: {exception.Message}");
+            return new Attempt(PublishResult.Defect($"cannot be expressed as an AMQP message: {exception.Message}"), false);
         }
 
         try
         {
             await channel.BasicPublishAsync(exchange, message.Name, mandatory: true, properties, message.Payload, cancellationToken)
                 .ConfigureAwait(false);
-            return PublishResult.Confirmed;
+            return new Attempt(PublishResult.Confirmed, false);
         }
         catch (PublishReturnException returned)
         {
-            return PublishResult.Returned($"{returned.ReplyCode} {returned.ReplyText}");
+            return new Attempt(PublishResult.Returned($"{returned.ReplyCode} {returned.ReplyText}"), false);
         }
         catch (PublishException)
         {
-            return new PublishResult(PublishStatus.Retry, "nacked by the broker");
+            return new Attempt(PublishResult.RetryAfter(TransportFailure.Nacked, "nacked by the broker"), false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new Attempt(PublishResult.RetryAfter(TransportFailure.ConfirmTimeout, "no confirmation before the publish timeout"), false);
+        }
+        catch (OperationInterruptedException interrupted) when (ClosedByBrokerForTheMessage(interrupted))
+        {
+            var reason = $"{interrupted.ShutdownReason!.ReplyCode} {interrupted.ShutdownReason.ReplyText}";
+            return new Attempt(PublishResult.RetryAfter(TransportFailure.Connection, reason), true);
+        }
+        catch (Exception exception) when (channel.IsOpen && _connection is { IsOpen: true })
+        {
+            // The publish failed while the connection and the channel stayed up: not a network problem, so retrying
+            // would fail the same way forever and, as the oldest row, block every half-open probe behind it. A defect
+            // of this message.
+            return new Attempt(PublishResult.Defect($"publish failed with the connection and channel up: {exception.Message}"), false);
         }
         catch (Exception exception)
         {
-            // Closed channel or connection, cancellation at the publish timeout, or anything unexpected: the outcome
-            // is unknown, so publish again. Never a defect of the message.
-            return new PublishResult(PublishStatus.Retry, exception.Message);
+            // Closed channel or connection: the outcome is unknown, so publish again. Never a defect of the message.
+            return new Attempt(PublishResult.RetryAfter(TransportFailure.Connection, exception.Message), false);
         }
     }
+
+    // 406 PRECONDITION_FAILED from the broker on a channel whose connection is still up: the broker refused something
+    // about what was published (max_message_size, for one), not the network. Only then is isolation worth trying.
+    private bool ClosedByBrokerForTheMessage(OperationInterruptedException interrupted) =>
+        interrupted.ShutdownReason is { Initiator: ShutdownInitiator.Peer, ReplyCode: 406 } && _connection is { IsOpen: true };
 
     internal static BasicProperties Properties(OutgoingMessage message)
     {
@@ -208,6 +285,10 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
             // Already broken; nothing to release.
         }
     }
+
+    [LoggerMessage(EventId = 32, Level = LogLevel.Warning,
+        Message = "The broker closed the channel during a batch; publishing the {Count} unconfirmed message(s) again one by one to isolate the cause.")]
+    private static partial void LogIsolating(ILogger logger, int count);
 
     [LoggerMessage(EventId = 30, Level = LogLevel.Warning, Message = "Could not open a RabbitMQ channel; the batch is handed back.")]
     private static partial void LogConnectFailed(ILogger logger, Exception exception);

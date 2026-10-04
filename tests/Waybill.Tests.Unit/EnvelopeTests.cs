@@ -109,6 +109,15 @@ public sealed class EnvelopeTests
     }
 
     [Fact]
+    public void Envelope_ChaveOuTenantAcimaDe255Bytes_FalhaNoEnqueue()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => EnvelopeFactory.Create(Options(), new InvoicePaid(Guid.NewGuid(), 1m), new string('k', 256), null, null));
+        Assert.Throws<InvalidOperationException>(
+            () => EnvelopeFactory.Create(Options(), new InvoicePaid(Guid.NewGuid(), 1m), null, null, new string('t', 256)));
+    }
+
+    [Fact]
     public void Registro_NomeAcimaDe255Bytes_Falha()
     {
         Assert.Throws<InvalidOperationException>(() => new WaybillOptions().AddMessage(new string('n', 256), TestJson.Default.InvoicePaid));
