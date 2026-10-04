@@ -19,9 +19,11 @@ public sealed class G2_DispatcherPublicaEMarca(PostgresFixture postgres)
         Assert.Equal(5, await dispatcher.RunOnceAsync(ct));
         Assert.Equal(0, await dispatcher.RunOnceAsync(ct));
 
+        // Published in id order. UUIDv7 is not monotonic within one millisecond (random tie-break), so id order is
+        // only roughly enqueue order: look the first message up by its key.
         var received = transport.Received.ToList();
         Assert.Equal(ids.Order(), received.Select(m => m.MessageId));
-        var first = received[0];
+        var first = received.Single(m => m.MessageId == ids[0]);
         Assert.Equal("billing.invoice-paid.v1", first.Name);
         Assert.Equal("invoice-0", first.Key);
         Assert.Equal("application/json", first.ContentType);
