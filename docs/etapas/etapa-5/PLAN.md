@@ -49,7 +49,11 @@ Opções inválidas, como retenção zero ou negativa, falham na partida. Isso f
   - `docs/escopo-e-fronteiras.md` (linha da limpeza);
   - `docs/analise-de-negocio.md`;
   - comentários de `.github/workflows/scheduled.yml`.
-- `scheduled.yml`: input `long_duration` no `workflow_dispatch` e upload do CSV como artefato.
+- `scheduled.yml`:
+  - a carga longa ganha um job próprio, porque o limite de 6 h vale por job e os longos atuais já somam mais de 1 h;
+  - o job `long` passa a excluir a carga longa;
+  - input `long_duration` no `workflow_dispatch`;
+  - upload do CSV como artefato.
 - README e CHANGELOG: limpeza, métrica, health check e a fronteira da G3. Nenhuma frase sem o teste correspondente.
 
 **Pronto quando** os cenários de PR passam contra PostgreSQL 15 e 18, a carga longa tem uma execução verde no job agendado, e o ADR 0004 e o `OPERATIONS.md` existem.
