@@ -20,4 +20,19 @@ public static class WaybillTestingServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Scoped<IOutbox<TContext>>(sp => sp.GetRequiredService<FakeOutbox<TContext>>()));
         return services;
     }
+
+    /// <summary>
+    /// Registers <see cref="FakeInbox{TContext}"/> as the scoped <see cref="IInbox{TContext}"/>, replacing the real one.
+    /// One <see cref="FakeInboxMemory"/> (singleton) remembers processed messages across scopes, like the real inbox
+    /// table; resolve it to assert. The handler receives the scope's <typeparamref name="TContext"/>.
+    /// </summary>
+    public static IServiceCollection AddFakeWaybillInbox<TContext>(this IServiceCollection services)
+        where TContext : DbContext
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.TryAddSingleton<FakeInboxMemory>();
+        services.Replace(ServiceDescriptor.Scoped<IInbox<TContext>>(sp =>
+            new FakeInbox<TContext>(sp.GetRequiredService<TContext>(), sp.GetRequiredService<FakeInboxMemory>())));
+        return services;
+    }
 }
