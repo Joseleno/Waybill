@@ -8,7 +8,8 @@
 - [x] Cenários `G2_*` da 3a com transporte falso, um commit por cenário
 - [x] Caos curto: processo filho do dispatcher morto com `Process.Kill` (morte com o claim aberto: coberta pelo spike, Q2b; o claim é um só comando em autocommit)
 - [x] Oito dispatchers com oráculo por trigger (curto no PR, longo no agendado); verificado por mutação
-- [ ] CHANGELOG, API pública, CI verde
+- [x] CHANGELOG, API pública, CI verde na PR #4
+- [x] Revisão de código independente antes da PR: timeout imposto mesmo com transporte que ignora o token, backoff em falhas, `default(PublishResult)` nunca confirma
 
 ## 3b — transporte RabbitMQ
 
