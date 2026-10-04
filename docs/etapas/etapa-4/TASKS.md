@@ -5,4 +5,4 @@
 - [x] Helper `GetWaybillMessageId()` para as propriedades AMQP (Waybill.RabbitMQ)
 - [x] Cenários `G3_*`, um commit por cenário; consumidor RabbitMQ.Client sem framework
 - [x] `FakeInbox<TContext>` e teste de equivalência
-- [ ] Revisão de código independente; CHANGELOG, README, API pública; CI verde
+- [x] Revisão de código independente; CHANGELOG, README, API pública; CI verde
