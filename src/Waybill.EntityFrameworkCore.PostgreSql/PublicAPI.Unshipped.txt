@@ -29,3 +29,15 @@ static Waybill.EntityFrameworkCore.WaybillEntityFrameworkCoreExtensions.AddWaybi
 static Waybill.EntityFrameworkCore.WaybillEntityFrameworkCoreExtensions.AddWaybillOutbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static Waybill.EntityFrameworkCore.WaybillModelBuilderExtensions.AddWaybillOutbox(this Microsoft.EntityFrameworkCore.ModelBuilder! modelBuilder) -> Microsoft.EntityFrameworkCore.ModelBuilder!
 static Waybill.EntityFrameworkCore.WaybillSchema.MigrateAsync(string! connectionString, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.BatchSize.get -> int
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.BatchSize.set -> void
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.ConnectionString.get -> string?
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.ConnectionString.set -> void
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.InboxRetention.get -> System.TimeSpan
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.InboxRetention.set -> void
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.Interval.get -> System.TimeSpan
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.Interval.set -> void
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.OutboxRetention.get -> System.TimeSpan
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.OutboxRetention.set -> void
+Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.WaybillRetentionOptions() -> void
