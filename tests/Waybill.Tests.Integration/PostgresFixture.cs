@@ -1,3 +1,4 @@
+using Npgsql;
 using Testcontainers.PostgreSql;
 
 namespace Waybill.Tests.Integration;
@@ -17,6 +18,19 @@ public sealed class PostgresFixture : IAsyncLifetime
     public ValueTask InitializeAsync() => new(_container.StartAsync());
 
     public ValueTask DisposeAsync() => _container.DisposeAsync();
+
+    /// <summary>A fresh, empty database per test: isolation without truncating between tests.</summary>
+    public async Task<string> CreateDatabaseAsync()
+    {
+        var name = $"t_{Guid.NewGuid():N}";
+        await using (var connection = new NpgsqlConnection(ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand($"CREATE DATABASE \"{name}\"", connection);
+            await command.ExecuteNonQueryAsync();
+        }
+        return new NpgsqlConnectionStringBuilder(ConnectionString) { Database = name }.ConnectionString;
+    }
 }
 
 [CollectionDefinition(Name)]

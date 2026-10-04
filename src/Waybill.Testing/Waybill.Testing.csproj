@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Test doubles for Waybill: an in-memory outbox with assertions, so application code that enqueues messages can be tested without PostgreSQL. Reference it from test projects only.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Waybill.EntityFrameworkCore.PostgreSql\Waybill.EntityFrameworkCore.PostgreSql.csproj" />
+  </ItemGroup>
+
+</Project>

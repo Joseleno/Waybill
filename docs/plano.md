@@ -81,7 +81,7 @@ O repositório nasce cedo porque o histórico de commits faz parte do portfolio.
 | Projeto | Papel |
 | --- | --- |
 | `Waybill` | Núcleo: contratos, envelope, políticas; depende só de `Microsoft.Extensions.*` e `System.Diagnostics` |
-| `Waybill.EntityFrameworkCore.PostgreSql` | Interceptor, migrations, claim e consultas |
+| `Waybill.EntityFrameworkCore.PostgreSql` | Captura no `DbContext`, migrations, claim e consultas |
 | `Waybill.RabbitMQ` | Transporte |
 | `Waybill.Tests.Unit` | O que não precisa de infraestrutura |
 | `Waybill.Tests.Integration` | Testcontainers com Postgres e RabbitMQ reais |
@@ -115,13 +115,15 @@ Entrega G1: o evento existe se, e somente se, a transação fizer commit. É a e
 
 **Entregas**
 
-- API de enfileiramento, com `message_id` UUIDv7 fixado no cliente no momento do enfileiramento
-- Interceptor que materializa os eventos em linhas de outbox em `SavingChanges`, com deduplicação por referência, e os limpa só em `SavedChanges`
-- Evento enfileirado e nunca salvo: log de erro por padrão ao descartar o `DbContext`, com opção explícita de lançar. Lançar no `Dispose` não pode ser o default, porque o caso mais comum de evento pendente é o handler falhando antes do `SaveChanges`, e a exceção do Waybill substituiria a do bug. O sinal forte fica no fake de testes, que assere “nenhum evento pendente ao final”
-- Fake do outbox em memória, com asserções do tipo “contém o evento X” e “nenhum evento pendente”, para que o usuário teste o próprio código sem Postgres
-- Envelope completo: tipo registrado explicitamente, `traceparent`, `tracestate`, `correlation_id`, tenant opcional, content-type
+Desenho fechado no ADR 0002; SPEC, PLAN e TASKS em `docs/etapas/etapa-2/`.
+
+- API de enfileiramento explícita, `IOutbox<TContext>`, com `message_id` UUIDv7 fixado no cliente no momento do enfileiramento; tipo registrado, serialização e tamanho validados no `Enqueue`
+- A linha de outbox entra no change tracker do `DbContext` no próprio `Enqueue`; a unidade de trabalho do EF é a única fonte de verdade (ADR 0002)
+- Evento enfileirado e nunca salvo: log de erro por padrão no fim do escopo de DI, com opção explícita de lançar. Lançar no `Dispose` não pode ser o default, porque o caso mais comum de evento pendente é o handler falhando antes do `SaveChanges`, e a exceção do Waybill substituiria a do bug. O sinal forte fica no fake de testes, que assere “nenhum evento pendente ao final”
+- Fake do outbox em memória, no pacote novo `Waybill.Testing`, com asserções do tipo “contém o evento X” e “nenhum evento pendente”, para que o usuário teste o próprio código sem Postgres
+- Envelope completo: tipo registrado explicitamente com nome estável, `traceparent`, `tracestate`, `correlation_id`, tenant opcional, content-type
 - Serialização com System.Text.Json e source generation, com registro explícito de tipos
-- Migrations do EF Core com as tabelas `outbox` e `inbox`, mais os índices parciais. A `outbox` já nasce com `partition` (gravada, sem uso na v0.1), `sequence` (nula na v0.1), `fence` e `attempts`, para que o upgrade da v0.2 não reescreva linhas pendentes. As tabelas de chaves ficam para a v0.2: um `CREATE TABLE` já é aditivo, e o spike mostrou que a forma delas ainda pode mudar
+- Migrations do próprio pacote, no schema `waybill`, com as tabelas `outbox` e `inbox`, mais os índices parciais, aplicadas por `WaybillSchema.MigrateAsync`. A `outbox` já nasce com `key`, `key_hash`, `sequence` (nula na v0.1), `fence` e `attempts`, para que o upgrade da v0.2 não reescreva linhas pendentes. As tabelas de chaves ficam para a v0.2: um `CREATE TABLE` já é aditivo, e o spike mostrou que a forma delas ainda pode mudar
 
 **Testes que provam**
 
@@ -148,7 +150,7 @@ A maior etapa, e a que entrega G2. Aproveita o que o spike provou e acrescenta o
 **Entregas**
 
 - Dispatcher como `BackgroundService`, com claim em transação curta e publicação fora dela
-- Claim por linha, como o spike provou: condição de reivindicável no nível do `FOR UPDATE` e repetida no `UPDATE` externo, em `READ COMMITTED`; token `fence` separado de `attempts`; `owner` único por encarnação de processo. A coluna `partition` é gravada e não usada. O lease por partição entra na v0.2 como filtro sobre este mesmo claim, sem reescrever o coração do dispatcher, como o spike mostrou
+- Claim por linha, como o spike provou: condição de reivindicável no nível do `FOR UPDATE` e repetida no `UPDATE` externo, em `READ COMMITTED`; token `fence` separado de `attempts`; `owner` único por encarnação de processo. A coluna `key_hash` é gravada e não usada. O lease por partição (`key_hash % P`) entra na v0.2 como filtro sobre este mesmo claim, sem reescrever o coração do dispatcher, como o spike mostrou
 - Lease maior que o timeout de confirmação mais uma margem; a instância cancela a própria espera ao atingir a margem e trata a publicação como de resultado desconhecido
 - Transporte RabbitMQ com publisher confirms, mensagem persistente, filas quorum e `mandatory`
 - Classificação de falhas e circuit breaker, incluindo a republicação um a um em canal novo quando um canal fecha no meio de um lote
@@ -160,7 +162,7 @@ A maior etapa, e a que entrega G2. Aproveita o que o spike provou e acrescenta o
 
 | Falha | Trata como | Efeito |
 | --- | --- | --- |
-| Serialização, tipo não registrado, tamanho acima do limite | Defeito da mensagem | DLQ com motivo; o tamanho é validado antes de publicar |
+| Tamanho recusado na publicação (limite do broker menor que o configurado, ou linha gravada sob limite maior que o atual) | Defeito da mensagem | DLQ com motivo. Tipo não registrado e serialização não chegam aqui: são recusados no `Enqueue` (ADR 0002) |
 | Erro de conexão, fechamento de canal | Transporte | Reabre o claim sem gastar tentativa; abre o circuit breaker |
 | Timeout de confirmação | Transporte | Reabre o claim e reduz o lote; não abre o breaker |
 | `basic.return` por rota inexistente | Caso próprio | Orçamento próprio de tentativas; não abre o breaker |
@@ -171,7 +173,7 @@ A maior etapa, e a que entrega G2. Aproveita o que o spike provou e acrescenta o
 | --- | --- | --- |
 | Broker parado por uma hora | Zero mensagens na DLQ; a fila volta a drenar sozinha | Job agendado |
 | Broker com latência alta, mas no ar | Breaker fechado, lote reduzido, sem oscilação | PR, com Toxiproxy |
-| Uma mensagem acima do limite local num lote de cem | Só ela vai para a DLQ, sem tocar o broker; as outras noventa e nove publicam | PR |
+| Uma mensagem gravada sob um limite maior que o atual, num lote de cem | Só ela vai para a DLQ, sem tocar o broker; as outras noventa e nove publicam | PR |
 | Limite local configurado acima do `max_message_size` do broker; uma mensagem entre os dois | O canal fecha com o lote em voo; o lote é republicado um a um em canal novo; só ela vai para a DLQ | PR |
 | Toxiproxy derruba a conexão no meio da publicação | Nada se perde; no máximo duplica | PR |
 | `kill -9` do dispatcher com lote reivindicado | Morto durante a publicação: o lote volta após o lease, nunca antes; marcação atrasada é barrada pelo fencing. Morto com o claim aberto: as linhas voltam assim que o backend aborta | PR |

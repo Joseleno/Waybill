@@ -8,16 +8,23 @@
   <ItemGroup>
     <PackageVersion Include="MinVer" Version="8.0.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" />
+    <!-- Design-time only (migrations of the package schema); must match the EF Core version Npgsql resolves. -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4" />
   </ItemGroup>
 
-  <!-- Runtime dependencies (the core package Waybill takes none beyond Microsoft.Extensions.*) -->
+  <!-- Runtime dependencies. Library floors are kept low so consumers are not forced to upgrade. -->
   <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.0" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
   </ItemGroup>
 
   <!-- Tests -->
   <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.4" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />

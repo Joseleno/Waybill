@@ -41,7 +41,7 @@ jobs:
           dotnet new console --framework net10.0
           dotnet new nugetconfig
           dotnet nuget add source "$RUNNER_TEMP/feed" --name local --configfile nuget.config
-          for package in Waybill Waybill.EntityFrameworkCore.PostgreSql Waybill.RabbitMQ; do
+          for package in Waybill Waybill.EntityFrameworkCore.PostgreSql Waybill.RabbitMQ Waybill.Testing; do
             dotnet add package "$package" --version "$version" --source "$RUNNER_TEMP/feed"
           done
           dotnet build

@@ -1,1 +1,12 @@
 #nullable enable
+Waybill.IOutbox
+Waybill.IOutbox.Enqueue<TMessage>(TMessage message, string? key = null, string? correlationId = null, string? tenantId = null) -> System.Guid
+Waybill.WaybillOptions
+Waybill.WaybillOptions.AddMessage<TMessage>(string! name, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage>! typeInfo) -> Waybill.WaybillOptions!
+Waybill.WaybillOptions.MaxPayloadBytes.get -> int
+Waybill.WaybillOptions.MaxPayloadBytes.set -> void
+Waybill.WaybillOptions.ThrowOnPendingMessagesAtDispose.get -> bool
+Waybill.WaybillOptions.ThrowOnPendingMessagesAtDispose.set -> void
+Waybill.WaybillOptions.WaybillOptions() -> void
+Waybill.WaybillServiceCollectionExtensions
+static Waybill.WaybillServiceCollectionExtensions.AddWaybill(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.WaybillOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!

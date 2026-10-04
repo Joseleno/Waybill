@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/Waybill.EntityFrameworkCore.PostgreSql/Waybill.EntityFrameworkCore.PostgreSql.csproj" />
     <Project Path="src/Waybill.RabbitMQ/Waybill.RabbitMQ.csproj" />
+    <Project Path="src/Waybill.Testing/Waybill.Testing.csproj" />
     <Project Path="src/Waybill/Waybill.csproj" />
   </Folder>
   <Folder Name="/tests/">
