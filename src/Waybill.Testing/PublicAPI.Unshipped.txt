@@ -1,4 +1,14 @@
 #nullable enable
+Waybill.Testing.FakeInbox<TContext>
+Waybill.Testing.FakeInbox<TContext>.FakeInbox(TContext! context) -> void
+Waybill.Testing.FakeInbox<TContext>.FakeInbox(TContext! context, Waybill.Testing.FakeInboxMemory! memory) -> void
+Waybill.Testing.FakeInbox<TContext>.Memory.get -> Waybill.Testing.FakeInboxMemory!
+Waybill.Testing.FakeInbox<TContext>.ProcessAsync(string! handler, System.Guid messageId, System.Func<TContext!, System.Threading.CancellationToken, System.Threading.Tasks.Task!>! handle, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Waybill.EntityFrameworkCore.InboxResult>!
+Waybill.Testing.FakeInboxMemory
+Waybill.Testing.FakeInboxMemory.Duplicates.get -> int
+Waybill.Testing.FakeInboxMemory.FakeInboxMemory() -> void
+Waybill.Testing.FakeInboxMemory.Processed.get -> System.Collections.Generic.IReadOnlyList<(string! Handler, System.Guid MessageId)>!
+Waybill.Testing.FakeInboxMemory.ShouldHaveProcessed(string! handler, System.Guid messageId) -> void
 Waybill.Testing.FakeOutbox<TContext>
 Waybill.Testing.FakeOutbox<TContext>.Dispose() -> void
 Waybill.Testing.FakeOutbox<TContext>.Enqueue<TMessage>(TMessage message, string? key = null, string? correlationId = null, string? tenantId = null) -> System.Guid
@@ -30,4 +40,5 @@ override Waybill.Testing.FakeOutboxMessage.GetHashCode() -> int
 override Waybill.Testing.FakeOutboxMessage.ToString() -> string!
 static Waybill.Testing.FakeOutboxMessage.operator !=(Waybill.Testing.FakeOutboxMessage? left, Waybill.Testing.FakeOutboxMessage? right) -> bool
 static Waybill.Testing.FakeOutboxMessage.operator ==(Waybill.Testing.FakeOutboxMessage? left, Waybill.Testing.FakeOutboxMessage? right) -> bool
+static Waybill.Testing.WaybillTestingServiceCollectionExtensions.AddFakeWaybillInbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static Waybill.Testing.WaybillTestingServiceCollectionExtensions.AddFakeWaybillOutbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!

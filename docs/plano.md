@@ -16,7 +16,7 @@ Cada etapa termina num conjunto de testes, não numa data. A duração é estima
 | 1. Repositório, solution e CI | 2 dias | Concluído em Oct 4, 2026: esqueleto que empacota e roda testes, CI e release validados |
 | 2. Núcleo e gravação atômica | 1 semana | G1 provada; fake do outbox |
 | 3. Dispatcher e RabbitMQ | 2 semanas | Concluído em Oct 4, 2026 (PRs 3a, 3b, 3c): G2 provada, com o claim por linha provado no spike |
-| 4. Inbox | 1 semana | G3 provada, incluindo consumidor que também produz; fake do inbox |
+| 4. Inbox | 1 semana | Concluído em Oct 4, 2026: G3 provada, incluindo consumidor que também produz; fake do inbox. A limpeza do inbox foi para a etapa 5, junto da do outbox |
 | 5. Limpeza e observabilidade | 3 a 4 dias | Operação sustentável |
 | 6. Exemplo executável | 1 semana | A API vista de fora |
 | 7. Documentação e release | 3 a 4 dias | v0.1.0-alpha publicada |
@@ -229,7 +229,7 @@ Entrega G3. É a parte do pacote que o consumidor envolve em volta do próprio h
 - Consumidor que também produz: o handler pode enfileirar eventos no outbox dentro da mesma transação do inbox, que é o caso comum em coreografia
 - Fake do inbox em memória, para testar handlers sem Postgres nem broker, com asserção de “mensagem X foi aplicada uma vez”
 - Adaptadores de exemplo para RabbitMQ.Client, para mostrar que o inbox não exige um loop de consumo próprio
-- Limpeza do inbox por retenção, coordenada com a retenção do outbox
+- Limpeza do inbox por retenção: movida para a etapa 5, onde é feita junto da retenção do outbox
 
 **Testes que provam**
 

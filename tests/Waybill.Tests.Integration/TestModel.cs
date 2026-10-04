@@ -119,6 +119,7 @@ public sealed class TestDatabase
         services.AddDbContext<AuditDbContext>(Configure);
         services.AddWaybillOutbox<AppDbContext>();
         services.AddWaybillOutbox<AuditDbContext>();
+        services.AddWaybillInbox<AppDbContext>();
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
 
