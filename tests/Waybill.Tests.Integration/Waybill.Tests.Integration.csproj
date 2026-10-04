@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Waybill.EntityFrameworkCore.PostgreSql\Waybill.EntityFrameworkCore.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\Waybill.Testing\Waybill.Testing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

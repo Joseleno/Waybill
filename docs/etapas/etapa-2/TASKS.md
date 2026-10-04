@@ -4,6 +4,6 @@
 - [x] Núcleo: `IOutbox`, envelope, registro de tipos, `WaybillOptions`, murmur2, UUIDv7; testes `Envelope_*` e `KeyHash_*`
 - [x] EF: entidade e mapeamento da outbox e do inbox, `AddWaybillOutbox`, migrations do pacote, `WaybillSchema.MigrateAsync`; testes `Schema_*`
 - [x] EF: `IOutbox<TContext>`, buffer por `DbContext`, interceptor (`SavingChanges`/`SavedChanges`), log ou exceção no descarte
-- [ ] Os sete cenários `G1_*`, um commit por cenário
-- [ ] `Waybill.Testing`: `FakeOutbox<TContext>` e asserções; teste de equivalência
+- [x] Os sete cenários `G1_*`, um commit por cenário
+- [x] `Waybill.Testing`: `FakeOutbox<TContext>` e asserções; teste de equivalência
 - [ ] `CHANGELOG`, API pública declarada em `PublicAPI.Unshipped.txt`, CI verde
