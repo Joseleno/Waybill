@@ -13,7 +13,7 @@ Cada etapa termina num conjunto de testes, não numa data. A duração é estima
 | Etapa | Duração | Entrega central |
 | --- | --- | --- |
 | 0. Spike do claim | 3 a 5 dias | Concluído em Oct 4, 2026: certeza sobre o mecanismo de claim, lease e fencing; ADR 0001 escrito |
-| 1. Repositório, solution e CI | 2 dias | Esqueleto que empacota e roda testes |
+| 1. Repositório, solution e CI | 2 dias | Concluído em Oct 4, 2026: esqueleto que empacota e roda testes, CI e release validados |
 | 2. Núcleo e gravação atômica | 1 semana | G1 provada; fake do outbox |
 | 3. Dispatcher e RabbitMQ | 2 semanas | G2 provada, com o claim por linha provado no spike |
 | 4. Inbox | 1 semana | G3 provada, incluindo consumidor que também produz; fake do inbox |
