@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Inbox (`AddWaybillInbox<TContext>`, `IInbox<TContext>.ProcessAsync`): records `(handler, message_id)` with `INSERT … ON CONFLICT DO NOTHING` and runs the handler with the same context in one `READ COMMITTED` transaction, so the effect applies once per handler; a duplicate returns `InboxResult.Duplicate` without running it, and a handler failure rolls back everything (including events it enqueued) and clears the change tracker. A `SaveChanges` through another instance of the context while a handler runs throws instead of committing outside the inbox transaction.
+- `GetWaybillMessageId()` on RabbitMQ `IReadOnlyBasicProperties`, for consumers written with plain RabbitMQ.Client.
+- `FakeInbox<TContext>` and `AddFakeWaybillInbox<TContext>()` in `Waybill.Testing`, checked for equivalence against the real inbox.
+
 - Failure classification (ADR 0003): `PublishResult` carries a `TransportFailure` (`Connection`, `ConfirmTimeout`, `Nacked`). Connection or channel failures open a per-dispatcher circuit breaker (no claims while open, a one-message probe when half-open, open period doubling up to 30 s); confirmation timeouts and nacks halve the batch without opening it. When the broker closes the channel with 406 mid-batch, the RabbitMQ transport republishes the unconfirmed messages one by one on a fresh channel and only the one that closes it alone goes to the DLQ.
 
 - RabbitMQ transport (`AddWaybillRabbitMQ`): one configured exchange with the registered message name as routing key, publisher confirms tracked per message, `mandatory`, persistent delivery, AMQP properties (`message_id`, `type`, `content_type`, `timestamp`, `correlation_id`) and headers (`traceparent`, `tracestate`, `tenant_id`, `waybill-key`). `basic.return` maps to `Returned`; nacks and closed connections or channels to `Retry`; a missing exchange is reported as a configuration error.

@@ -32,6 +32,11 @@ public interface IInbox<TContext>
     /// <param name="handle">The effect. Write through the context it receives; messages enqueued on the context's outbox join the same commit.</param>
     /// <param name="cancellationToken">Cancels the processing; the transaction rolls back.</param>
     /// <exception cref="InvalidOperationException">The context already has a transaction (the inbox owns it), or the handler wrote through another context outside the inbox transaction.</exception>
+    /// <remarks>
+    /// A second delivery of a message still being processed waits on the first transaction's inbox row until it
+    /// commits or rolls back. Keep handlers well under the broker's delivery timeout (RabbitMQ <c>consumer_timeout</c>,
+    /// 30 minutes by default): a delivery held unacknowledged past it closes the channel.
+    /// </remarks>
     Task<InboxResult> ProcessAsync(
         string handler, Guid messageId, Func<TContext, CancellationToken, Task> handle, CancellationToken cancellationToken = default);
 }
