@@ -13,7 +13,7 @@ Manter o pacote utilizável depois do primeiro mês em produção: as tabelas n�
 | Cenário de carga longa | 5 h no runner do GitHub, com a duração como input do workflow (default 5 h). O que o cenário prova é que a latência do claim estabiliza depois que a transação longa fecha, não as 24 h. `docs/plano.md` passa a dizer "carga longa" |
 | Métrica | `ObservableGauge<double>` `waybill.outbox.oldest_pending.age`, unidade `s`, no Meter `Waybill`. Um laço em background consulta a idade da mais antiga ainda não publicada (`pending` ou `claimed`) num intervalo configurável e guarda o valor; o callback do gauge só lê o valor guardado e nunca toca o banco. Sem pendentes, o valor é 0 |
 | Retenção do inbox e G3 | `ProcessAsync` não recusa mensagem antiga. Recusar pelo timestamp do UUIDv7 transformaria em perda a primeira entrega de uma mensagem que esperou no outbox com o broker fora por mais tempo que a retenção. A recusa por retenção continua na API de operação da DLQ (v1.0), como no Escopo; replay de offset ou de fila fora da janela continua não coberto. A etapa documenta como dimensionar a retenção do inbox |
-| Health check | Em `Waybill.EntityFrameworkCore.PostgreSql`, onde já estão o dispatcher e o `CircuitBreaker`. O pacote passa a depender de `Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions`. O núcleo não muda |
+| Health check | Em `Waybill.EntityFrameworkCore.PostgreSql`, onde já estão o dispatcher e o `CircuitBreaker`. O pacote passa a depender de `Microsoft.Extensions.Diagnostics.HealthChecks` (onde está o `IHealthChecksBuilder`; ver ADR 0004). O núcleo não muda |
 
 As quatro decisões vão para o ADR 0004.
 

@@ -27,7 +27,7 @@ Sem limpeza, `waybill.outbox` e `waybill.inbox` crescem para sempre. Uma limpeza
 
 **Métrica.** `ObservableGauge<double>` `waybill.outbox.oldest_pending.age`, unidade `s`, no Meter `Waybill`, criado pelo `IMeterFactory` quando houver um. Um amostrador registrado por `AddWaybillDispatcher` consulta a cada `MetricsInterval` (15 s) a idade da linha `pending` ou `claimed` mais antiga na ordem do claim (`ORDER BY id LIMIT 1` no índice parcial `ix_outbox_claimable`), medida pelo relógio do banco. O callback do gauge só lê o valor guardado. Ele roda no ritmo do exportador e é síncrono; consultar o banco ali bloquearia a coleta. Sem pendentes, o valor é 0. Se a consulta falha, gera log e o gauge mantém o último valor. O menor `created_at` foi descartado porque, com o broker fora e um backlog grande, varreria todas as pendentes a cada amostra.
 
-**Health check.** Fica em `Waybill.EntityFrameworkCore.PostgreSql`, onde estão o dispatcher e o breaker. O pacote passa a depender de `Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions`; o núcleo não muda. Regras, na ordem:
+**Health check.** Fica em `Waybill.EntityFrameworkCore.PostgreSql`, onde estão o dispatcher e o breaker. O pacote passa a depender de `Microsoft.Extensions.Diagnostics.HealthChecks`, e não só do `.Abstractions`, porque é ali que está o `IHealthChecksBuilder` usado por `AddHealthChecks().AddWaybillDispatcher()`. O health check do próprio EF Core segue o mesmo caminho. O núcleo não muda. Regras, na ordem:
 
 | Estado | Quando |
 | --- | --- |
