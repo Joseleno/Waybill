@@ -45,3 +45,5 @@ Waybill.EntityFrameworkCore.Retention.WaybillRetentionServiceCollectionExtension
 static Waybill.EntityFrameworkCore.Retention.WaybillRetentionServiceCollectionExtensions.AddWaybillRetention(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MetricsInterval.get -> System.TimeSpan
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MetricsInterval.set -> void
+Waybill.EntityFrameworkCore.Dispatching.WaybillHealthChecksBuilderExtensions
+static Waybill.EntityFrameworkCore.Dispatching.WaybillHealthChecksBuilderExtensions.AddWaybillDispatcher(this Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder! builder, string! name = "waybill-dispatcher", System.Collections.Generic.IEnumerable<string!>? tags = null) -> Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder!
