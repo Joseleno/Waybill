@@ -21,8 +21,9 @@
 
 ## 3c — classificação de falhas, breaker e caos
 
-- [ ] Núcleo: `TransportFailure` (`Connection`, `ConfirmTimeout`, `Nacked`) no `PublishResult`, para o dispatcher distinguir as causas de `Retry`
-- [ ] Dispatcher: circuit breaker só para conexão e canal (aberto: não reivindica; meio aberto: sonda com lote de 1); redução do lote à metade no timeout de confirmação ou nack, sem abrir o breaker, e volta gradual ao `BatchSize`
-- [ ] RabbitMQ: classificação das falhas; canal fechado pelo broker no meio do lote → republicação um a um em canal novo, e só a mensagem que fecha o canal sozinha (406) vai para a DLQ
-- [ ] Testes de unidade do breaker e do lote (tempo falso); integração com `max_message_size`; caos com Toxiproxy (broker parado, latência alta, conexão derrubada no meio da publicação; broker parado por 1 h no agendado)
-- [ ] ADR 0003: classificação de falhas; CHANGELOG; CI verde
+- [x] Núcleo: `TransportFailure` (`Connection`, `ConfirmTimeout`, `Nacked`) no `PublishResult`, para o dispatcher distinguir as causas de `Retry`
+- [x] Dispatcher: circuit breaker só para conexão e canal (aberto: não reivindica; meio aberto: sonda com lote de 1); redução do lote à metade no timeout de confirmação ou nack, sem abrir o breaker, e volta gradual ao `BatchSize`
+- [x] RabbitMQ: classificação das falhas; canal fechado pelo broker no meio do lote → republicação um a um em canal novo, e só a mensagem que fecha o canal sozinha (406) vai para a DLQ
+- [x] Testes de unidade do breaker e do lote (tempo falso); integração com `max_message_size`; caos com Toxiproxy (broker parado, latência alta, conexão derrubada no meio da publicação; broker parado por 1 h no agendado)
+- [x] ADR 0003: classificação de falhas; CHANGELOG
+- [ ] Revisão de código independente; CI verde

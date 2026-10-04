@@ -15,7 +15,7 @@ Cada etapa termina num conjunto de testes, não numa data. A duração é estima
 | 0. Spike do claim | 3 a 5 dias | Concluído em Oct 4, 2026: certeza sobre o mecanismo de claim, lease e fencing; ADR 0001 escrito |
 | 1. Repositório, solution e CI | 2 dias | Concluído em Oct 4, 2026: esqueleto que empacota e roda testes, CI e release validados |
 | 2. Núcleo e gravação atômica | 1 semana | G1 provada; fake do outbox |
-| 3. Dispatcher e RabbitMQ | 2 semanas | G2 provada, com o claim por linha provado no spike |
+| 3. Dispatcher e RabbitMQ | 2 semanas | Concluído em Oct 4, 2026 (PRs 3a, 3b, 3c): G2 provada, com o claim por linha provado no spike |
 | 4. Inbox | 1 semana | G3 provada, incluindo consumidor que também produz; fake do inbox |
 | 5. Limpeza e observabilidade | 3 a 4 dias | Operação sustentável |
 | 6. Exemplo executável | 1 semana | A API vista de fora |
@@ -156,7 +156,7 @@ A maior etapa, e a que entrega G2. Aproveita o que o spike provou e acrescenta o
 - Classificação de falhas e circuit breaker, incluindo a republicação um a um em canal novo quando um canal fecha no meio de um lote
 - DLQ do outbox como status na própria tabela, com motivo registrado
 - Graceful shutdown: para de reivindicar, espera as confirmações em voo até a margem e libera os leases
-- ADR da classificação de falhas: por que cada erro cai onde cai
+- ADR da classificação de falhas: por que cada erro cai onde cai (ADR 0003)
 
 **A tabela de classificação**
 
