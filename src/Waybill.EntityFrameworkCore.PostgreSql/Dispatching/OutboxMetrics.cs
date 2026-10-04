@@ -27,6 +27,9 @@ internal sealed class OutboxMetrics : IDisposable
             description: "Age of the oldest outbox message not yet published (pending or claimed); 0 when there is none.");
     }
 
+    /// <summary>The last sampled age, in seconds.</summary>
+    public double OldestPendingAge => Volatile.Read(ref _oldestPendingAge);
+
     public void Record(double oldestPendingAgeSeconds) => Volatile.Write(ref _oldestPendingAge, oldestPendingAgeSeconds);
 
     public void Dispose()
