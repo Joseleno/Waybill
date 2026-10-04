@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <Description>EF Core and PostgreSQL persistence for Waybill: outbox capture in the same transaction, migrations, and the dispatcher claim.</Description>
+    <RootNamespace>Waybill.EntityFrameworkCore</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
@@ -10,6 +11,14 @@
 
   <ItemGroup>
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <!-- Design-time only: lets `dotnet ef migrations add` generate the package's own migrations. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Waybill.Testing" />
+    <InternalsVisibleTo Include="Waybill.Tests.Unit" />
+    <InternalsVisibleTo Include="Waybill.Tests.Integration" />
   </ItemGroup>
 
 </Project>
