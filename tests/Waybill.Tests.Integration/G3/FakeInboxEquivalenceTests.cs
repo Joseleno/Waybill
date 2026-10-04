@@ -33,6 +33,39 @@ public sealed class FakeInboxEquivalenceTests(PostgresFixture postgres)
         Assert.NotEmpty(script);
     }
 
+    // A second delivery while the first is still in the handler: the real one waits on the inbox row; so must the fake.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FakeInbox_EntregaParalela_UmaProcessadaUmaDuplicata(bool fake)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        await using var services = fake ? FakeServices(database) : database.Services();
+        var firstInsideHandler = new TaskCompletionSource();
+        var releaseFirst = new TaskCompletionSource();
+        try
+        {
+            var first = Task.Run(() => InboxHarness.DeliverAsync(services, "h1", MessageA, async (db, token) =>
+            {
+                firstInsideHandler.TrySetResult();
+                await releaseFirst.Task;
+                await InboxHarness.ApplyEffect(db, token);
+            }), ct);
+            await firstInsideHandler.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            var second = Task.Run(() => InboxHarness.DeliverAsync(services, "h1", MessageA), ct);
+            await Task.Delay(300, ct);
+
+            releaseFirst.SetResult();
+            Assert.Equal([InboxResult.Processed, InboxResult.Duplicate], [await first, await second]);
+            Assert.Equal(1, await database.EffectsAsync());
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+        }
+    }
+
     [Fact]
     public async Task FakeInbox_ShouldHaveProcessed()
     {

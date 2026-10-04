@@ -8,6 +8,7 @@ public sealed class FakeInboxMemory
 {
     private readonly Lock _gate = new();
     private readonly List<(string Handler, Guid MessageId)> _processed = [];
+    private readonly Dictionary<(string Handler, Guid MessageId), TaskCompletionSource> _inProgress = [];
     private int _duplicates;
 
     /// <summary>Pairs processed, in order.</summary>
@@ -32,28 +33,48 @@ public sealed class FakeInboxMemory
                 $"Expected handler '{handler}' to have processed message {messageId}. Processed: [{string.Join(", ", Processed.Select(p => $"{p.Handler}:{p.MessageId}"))}].");
     }
 
-    internal bool IsProcessed(string handler, Guid messageId)
+    // True when the caller now holds the pair and must Release it; false for a duplicate. Like the real inbox row, a
+    // pair in progress makes a second delivery wait for the first to end.
+    internal async Task<bool> TryReserveAsync(string handler, Guid messageId, CancellationToken cancellationToken)
     {
-        lock (_gate)
+        while (true)
         {
-            if (!_processed.Contains((handler, messageId)))
-                return false;
-            _duplicates++;
-            return true;
+            Task inProgress;
+            lock (_gate)
+            {
+                if (_processed.Contains((handler, messageId)))
+                {
+                    _duplicates++;
+                    return false;
+                }
+                if (!_inProgress.TryGetValue((handler, messageId), out var pending))
+                {
+                    _inProgress.Add((handler, messageId), new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                    return true;
+                }
+                inProgress = pending.Task;
+            }
+            await inProgress.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
-    internal void Record(string handler, Guid messageId)
+    internal void Release(string handler, Guid messageId, bool processed)
     {
+        TaskCompletionSource? pending;
         lock (_gate)
-            _processed.Add((handler, messageId));
+        {
+            if (processed)
+                _processed.Add((handler, messageId));
+            _inProgress.Remove((handler, messageId), out pending);
+        }
+        pending?.SetResult();
     }
 }
 
 /// <summary>
 /// In-memory <see cref="IInbox{TContext}"/> for testing consumer handlers without PostgreSQL. It runs the handler with
 /// the given context and saves it, and treats a pair already in its <see cref="FakeInboxMemory"/> as a duplicate,
-/// like the real inbox.
+/// like the real inbox; a delivery of a pair still in progress waits for the first to end.
 /// </summary>
 /// <remarks>
 /// Limits: no database transaction (a handler failure clears the context's tracker but cannot undo a
@@ -80,21 +101,26 @@ public sealed class FakeInbox<TContext>(TContext context, FakeInboxMemory memory
         ArgumentNullException.ThrowIfNull(handle);
         EnvelopeFactory.EnsureShortString(handler, "inbox handler name");
 
-        if (memory.IsProcessed(handler, messageId))
+        if (!await memory.TryReserveAsync(handler, messageId, cancellationToken).ConfigureAwait(false))
             return InboxResult.Duplicate;
 
+        var processed = false;
         try
         {
             await handle(context, cancellationToken).ConfigureAwait(false);
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            processed = true;
         }
         catch
         {
             context.ChangeTracker.Clear();
             throw;
         }
+        finally
+        {
+            memory.Release(handler, messageId, processed);
+        }
 
-        memory.Record(handler, messageId);
         return InboxResult.Processed;
     }
 }
