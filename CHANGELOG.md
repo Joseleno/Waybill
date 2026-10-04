@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Outbox dispatcher (`AddWaybillDispatcher`): hosted service that claims rows (`FOR UPDATE SKIP LOCKED`, lease = `PublishTimeout` + `LeaseMargin`, fencing by owner and fence), publishes through `ITransport` outside any transaction, hands batches back on transport failure without spending attempts, sends size defects and exhausted `basic.return` budgets to the outbox DLQ with a reason, and hands back what it holds on graceful shutdown.
+- `ITransport` contract with per-message results (`Confirmed`, `Retry`, `Returned`, `Defect`).
+
 - `IOutbox<TContext>.Enqueue(...)`: writes messages to the outbox in the same `SaveChanges` and transaction as the application's data. The message id (UUIDv7), type registration, serialization and size are fixed and checked at enqueue time.
 - Message registry with stable names and source-generated `JsonTypeInfo` (`AddMessage("billing.invoice-paid.v1", ...)`); mandatory `MaxPayloadBytes`.
 - Package-owned `waybill` schema (`outbox`, `inbox`) shipped as EF Core migrations and applied by `WaybillSchema.MigrateAsync`; the application maps the outbox with `AddWaybillOutbox()`. Outbox records join the `DbContext` change tracker at enqueue time, so the EF unit of work is the single source of truth.

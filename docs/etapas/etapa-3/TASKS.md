@@ -2,12 +2,12 @@
 
 ## 3a — dispatcher e claim
 
-- [ ] Núcleo: `ITransport`, `OutgoingMessage`, `PublishResult`
-- [ ] EF/PostgreSQL: store do dispatcher (claim, marcar, devolver, retorno, DLQ) em SQL cru, conforme ADR 0001
-- [ ] `OutboxDispatcher` (um ciclo) e `WaybillDispatcherService` (`BackgroundService`), `AddWaybillDispatcher`, opções validadas
-- [ ] Cenários `G2_*` da 3a com transporte falso, um commit por cenário
-- [ ] Caos curto: processo filho do dispatcher morto com `Process.Kill`
-- [ ] Oito dispatchers com oráculo por trigger (curto no PR, longo no agendado)
+- [x] Núcleo: `ITransport`, `OutgoingMessage`, `PublishResult`
+- [x] EF/PostgreSQL: store do dispatcher (claim, marcar, devolver, retorno, DLQ) em SQL cru, conforme ADR 0001
+- [x] `OutboxDispatcher` (um ciclo) e `WaybillDispatcherService` (`BackgroundService`), `AddWaybillDispatcher`, opções validadas
+- [x] Cenários `G2_*` da 3a com transporte falso, um commit por cenário
+- [x] Caos curto: processo filho do dispatcher morto com `Process.Kill` (morte com o claim aberto: coberta pelo spike, Q2b; o claim é um só comando em autocommit)
+- [x] Oito dispatchers com oráculo por trigger (curto no PR, longo no agendado); verificado por mutação
 - [ ] CHANGELOG, API pública, CI verde
 
 ## 3b — transporte RabbitMQ

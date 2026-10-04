@@ -8,8 +8,8 @@ whatever broker client you already use.
 
 ## Status
 
-**Experimental, not usable end to end yet.** Messages can be written to the outbox, but there is no dispatcher, so
-nothing reaches a broker. Packages built from this repository before `v0.1.0-alpha` are pipeline tests, not releases.
+**Experimental, not usable end to end yet.** Messages are written to the outbox and a dispatcher claims and hands them to
+an `ITransport`, but no broker transport ships yet. Packages built from this repository before `v0.1.0-alpha` are pipeline tests, not releases.
 
 This README describes only what exists. Each guarantee will be written down only after a concurrency test proves it;
 until then, nothing here is a promise.
@@ -19,7 +19,7 @@ until then, nothing here is a promise.
 - Design documents (in Portuguese) in [`docs/`](docs): business analysis, scope and boundaries, development plan, and review notes.
 - [ADR 0001](docs/adr/0001-claim-por-linha-skip-locked-e-fencing.md): how the dispatcher claims rows (`FOR UPDATE SKIP LOCKED`, per-row lease, fencing token), with the [stage 0 spike](spike/RESULTADOS.md) behind it (archived code and raw numbers, outside the solution and CI).
 - [ADR 0002](docs/adr/0002-enfileiramento-schema-e-registro-de-tipos.md): the enqueue API, the package-owned `waybill` schema and the message type registry.
-- `Waybill` and `Waybill.EntityFrameworkCore.PostgreSql`: `IOutbox<TContext>.Enqueue(...)` writes messages to `waybill.outbox` in the same `SaveChanges` and transaction as your data, and `WaybillSchema.MigrateAsync` creates the tables. No dispatcher yet.
+- `Waybill` and `Waybill.EntityFrameworkCore.PostgreSql`: `IOutbox<TContext>.Enqueue(...)` writes messages to `waybill.outbox` in the same `SaveChanges` and transaction as your data, and `WaybillSchema.MigrateAsync` creates the tables. `AddWaybillDispatcher(...)` runs the dispatcher as a hosted service: per-row claim with lease and fencing token, publish outside the transaction, hand-back on transport failure, DLQ as a status.
 - `Waybill.Testing`: an in-memory `FakeOutbox<TContext>` with assertions, to test code that enqueues messages without PostgreSQL.
 - `Waybill.RabbitMQ`: empty for now.
 
