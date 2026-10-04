@@ -22,6 +22,7 @@
 | `Retencao_Inbox_ApagaSoExpiradas` | Linhas do inbox de idades diferentes | Só as além da retenção somem | PR |
 | `Retencao_MaisLinhasQueOLote_DrenaNaMesmaPassada` | 3× o lote em linhas elegíveis | Uma passada apaga todas, em lotes | PR |
 | `Retencao_DuasInstanciasAoMesmoTempo_SemErroNemSobra` | Dois serviços de limpeza no mesmo banco | Nenhuma exceção, nada elegível sobra, nada inelegível some | PR |
+| `Retencao_LinhasTravadasPorOutraTransacao_PulaSemEsperar` | Outra transação segura parte das linhas elegíveis | A passada apaga as outras sem esperar; as travadas saem na passada seguinte. É o que prova o `SKIP LOCKED`: sem ele, duas instâncias ainda terminam, só que em série | PR |
 | `Retencao_BancoFora_LogaESegue` | Banco inacessível durante a passada | Log de erro e backoff; volta a limpar quando o banco volta | PR |
 | `Inbox_ReentregaDepoisDaLimpeza_ProcessaDeNovo` | Mensagem processada, linha do inbox limpa, mensagem reentregue | Handler roda de novo. Caracteriza a fronteira da G3 que o `OPERATIONS.md` documenta; não é garantia | PR |
 | `Metrica_SemPendentes_Zero` | Outbox vazio ou só `published` | Gauge em 0 | PR |
