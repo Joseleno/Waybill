@@ -16,8 +16,8 @@ public sealed class G2_DispatcherPublicaEMarca(PostgresFixture postgres)
         var transport = new FakeTransport();
         var dispatcher = DispatcherHarness.Create(dataSource, transport, DispatcherHarness.Options(database));
 
-        Assert.Equal(5, await dispatcher.RunOnceAsync(ct));
-        Assert.Equal(0, await dispatcher.RunOnceAsync(ct));
+        Assert.Equal(5, (await dispatcher.RunOnceAsync(ct)).Claimed);
+        Assert.Equal(0, (await dispatcher.RunOnceAsync(ct)).Claimed);
 
         // Published in id order. UUIDv7 is not monotonic within one millisecond (random tie-break), so id order is
         // only roughly enqueue order: look the first message up by its key.

@@ -41,7 +41,7 @@ public sealed class G2_KillDuranteAPublicacao_VoltaAposLease(PostgresFixture pos
         TimeSpan? retakenAfter = null;
         while (claimedAt.Elapsed < lease + TimeSpan.FromSeconds(10) && await database.CountAsync("published") < 30)
         {
-            if (await survivor.RunOnceAsync(ct) > 0)
+            if ((await survivor.RunOnceAsync(ct)).Claimed > 0)
                 retakenAfter ??= claimedAt.Elapsed;
             else
                 await Task.Delay(100, ct);

@@ -57,7 +57,7 @@ public sealed class G2_OitoDispatchers_NenhumaLinhaComDoisLeasesValidos(Postgres
         {
             while (!stop.IsCancellationRequested)
             {
-                if (await d.RunOnceAsync(CancellationToken.None) == 0)
+                if ((await d.RunOnceAsync(CancellationToken.None)).Claimed == 0)
                     await Task.Delay(20, CancellationToken.None);
             }
         }, CancellationToken.None)).ToList();

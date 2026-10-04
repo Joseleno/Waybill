@@ -5,10 +5,17 @@ namespace Waybill;
 /// the dispatcher calls it with batches of claimed messages.
 /// </summary>
 /// <remarks>
+/// <para>
 /// A message counts as published only when the broker confirmed it (<see cref="PublishStatus.Confirmed"/>). An
-/// exception, or cancellation of <c>cancellationToken</c> (the dispatcher's publish timeout), is treated as a
-/// transport failure for the whole batch: every message is handed back to be published again, without spending an
-/// attempt. Publishing is at-least-once, so the same message may reach the broker more than once.
+/// exception, a result outside <see cref="PublishStatus"/>, or a call that has not returned by the dispatcher's
+/// publish timeout is a transport failure for the whole batch: every message is handed back to be published again,
+/// without spending an attempt. Publishing is at-least-once, so the same message may reach the broker more than once.
+/// </para>
+/// <para>
+/// The dispatcher stops waiting at the timeout even if the call ignores <c>cancellationToken</c>, and starts its
+/// next cycle. An implementation must therefore tolerate a previous, abandoned call still running when the next one
+/// starts.
+/// </para>
 /// </remarks>
 public interface ITransport
 {
@@ -17,41 +24,50 @@ public interface ITransport
 }
 
 /// <summary>A message taken from the outbox, ready to be published.</summary>
-/// <param name="MessageId">Id fixed at enqueue time; it repeats on every redelivery, so consumers deduplicate on it.</param>
-/// <param name="Name">Registered message name, for example <c>billing.invoice-paid.v1</c>.</param>
-/// <param name="Key">Aggregate key, if any.</param>
-/// <param name="Payload">Serialized message body.</param>
-/// <param name="ContentType">Payload content type, for example <c>application/json</c>.</param>
-/// <param name="Headers">Envelope headers: <c>traceparent</c>, <c>tracestate</c>, <c>correlation_id</c>, <c>tenant_id</c> when present.</param>
-/// <param name="CreatedAt">When the message was written, by the database clock.</param>
-public sealed record OutgoingMessage(
-    Guid MessageId,
-    string Name,
-    string? Key,
-    ReadOnlyMemory<byte> Payload,
-    string ContentType,
-    IReadOnlyDictionary<string, string> Headers,
-    DateTimeOffset CreatedAt);
+public sealed class OutgoingMessage
+{
+    /// <summary>Id fixed at enqueue time; it repeats on every redelivery, so consumers deduplicate on it.</summary>
+    public required Guid MessageId { get; init; }
+
+    /// <summary>Registered message name, for example <c>billing.invoice-paid.v1</c>.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>Aggregate key, if any.</summary>
+    public string? Key { get; init; }
+
+    /// <summary>Serialized message body.</summary>
+    public required ReadOnlyMemory<byte> Payload { get; init; }
+
+    /// <summary>Payload content type, for example <c>application/json</c>.</summary>
+    public required string ContentType { get; init; }
+
+    /// <summary>Envelope headers: <c>traceparent</c>, <c>tracestate</c>, <c>correlation_id</c>, <c>tenant_id</c> when present.</summary>
+    public required IReadOnlyDictionary<string, string> Headers { get; init; }
+
+    /// <summary>When the message was written, by the database clock.</summary>
+    public required DateTimeOffset CreatedAt { get; init; }
+}
 
 /// <summary>What happened to one message of a published batch.</summary>
+/// <remarks>There is deliberately no member with value 0: a <c>default</c> result is invalid and treated as <see cref="Retry"/>, never as confirmed.</remarks>
 public enum PublishStatus
 {
     /// <summary>The broker confirmed the message. It is marked as published.</summary>
-    Confirmed,
+    Confirmed = 1,
 
     /// <summary>Transport failure (connection, channel, missing confirmation). The message is handed back without spending an attempt.</summary>
-    Retry,
+    Retry = 2,
 
     /// <summary>The broker returned the message as unroutable. Spends one of <c>MaxReturns</c> attempts, then goes to the DLQ.</summary>
-    Returned,
+    Returned = 3,
 
     /// <summary>A defect of the message itself (for example, rejected for size). It goes to the outbox DLQ with the reason.</summary>
-    Defect,
+    Defect = 4,
 }
 
 /// <summary>The result of publishing one message.</summary>
 /// <param name="Status">The outcome.</param>
-/// <param name="Reason">Why, for <see cref="PublishStatus.Returned"/> and <see cref="PublishStatus.Defect"/>; recorded in the DLQ.</param>
+/// <param name="Reason">Why: logged for <see cref="PublishStatus.Retry"/>, recorded in the DLQ for <see cref="PublishStatus.Returned"/> and <see cref="PublishStatus.Defect"/>.</param>
 public readonly record struct PublishResult(PublishStatus Status, string? Reason = null)
 {
     /// <summary>The broker confirmed the message.</summary>
@@ -59,4 +75,10 @@ public readonly record struct PublishResult(PublishStatus Status, string? Reason
 
     /// <summary>Transport failure; publish again without spending an attempt.</summary>
     public static PublishResult Retry { get; } = new(PublishStatus.Retry);
+
+    /// <summary>Unroutable; spends one of the return attempts.</summary>
+    public static PublishResult Returned(string reason) => new(PublishStatus.Returned, reason);
+
+    /// <summary>Defect of the message; goes to the DLQ with <paramref name="reason"/>.</summary>
+    public static PublishResult Defect(string reason) => new(PublishStatus.Defect, reason);
 }

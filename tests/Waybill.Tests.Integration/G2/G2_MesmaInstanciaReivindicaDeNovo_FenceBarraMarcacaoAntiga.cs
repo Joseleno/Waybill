@@ -25,11 +25,11 @@ public sealed class G2_MesmaInstanciaReivindicaDeNovo_FenceBarraMarcacaoAntiga(P
         Assert.All(oldCycle, c => Assert.Equal(1, c.Fence));
         Assert.All(newCycle, c => Assert.Equal(2, c.Fence));
 
-        Assert.Equal(4, await store.FinishAsync(owner, oldCycle.Select(c => (c, PublishResult.Confirmed)).ToList(), 5, ct));
-        Assert.Equal(4, await store.FinishAsync(owner, oldCycle.Select(c => (c, PublishResult.Retry)).ToList(), 5, ct));
+        Assert.Equal(4, (await store.FinishAsync(owner, oldCycle.Select(c => (c, PublishResult.Confirmed)).ToList(), 5, ct)).Fenced);
+        Assert.Equal(4, (await store.FinishAsync(owner, oldCycle.Select(c => (c, PublishResult.Retry)).ToList(), 5, ct)).Fenced);
         Assert.Equal(4, await database.CountAsync("claimed")); // the new cycle still holds them
 
-        Assert.Equal(0, await store.FinishAsync(owner, newCycle.Select(c => (c, PublishResult.Confirmed)).ToList(), 5, ct));
+        Assert.Equal(0, (await store.FinishAsync(owner, newCycle.Select(c => (c, PublishResult.Confirmed)).ToList(), 5, ct)).Fenced);
         Assert.Equal(4, await database.CountAsync("published"));
     }
 }

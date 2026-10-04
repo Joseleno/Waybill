@@ -3,6 +3,11 @@ using Microsoft.Extensions.Options;
 
 namespace Waybill.EntityFrameworkCore.Dispatching;
 
+/// <summary>What one dispatcher cycle did.</summary>
+/// <param name="Claimed">Rows claimed.</param>
+/// <param name="TransportFailed">The transport failed for the whole batch (exception, timeout or invalid result).</param>
+internal readonly record struct DispatchCycle(int Claimed, bool TransportFailed);
+
 /// <summary>One dispatcher instance: claims a batch, publishes it outside any transaction, and records the outcome.</summary>
 internal sealed partial class OutboxDispatcher(
     OutboxStore store,
@@ -14,13 +19,13 @@ internal sealed partial class OutboxDispatcher(
     /// <summary>Unique per process incarnation: a restarted or zombie process never shares it.</summary>
     public string Owner { get; } = $"{Environment.MachineName}/{Environment.ProcessId}/{Guid.NewGuid().ToString("N")[..8]}";
 
-    /// <summary>Runs one cycle and returns how many messages were claimed.</summary>
-    public async Task<int> RunOnceAsync(CancellationToken cancellationToken)
+    /// <summary>Runs one cycle.</summary>
+    public async Task<DispatchCycle> RunOnceAsync(CancellationToken cancellationToken)
     {
         var options = dispatcherOptions.Value;
         var claimed = await store.ClaimAsync(Owner, options.BatchSize, options.Lease, cancellationToken).ConfigureAwait(false);
         if (claimed.Count == 0)
-            return 0;
+            return new DispatchCycle(0, TransportFailed: false);
 
         // A row written under a larger limit than the current one goes to the DLQ without touching the broker.
         var maxPayloadBytes = waybillOptions.Value.MaxPayloadBytes;
@@ -29,45 +34,64 @@ internal sealed partial class OutboxDispatcher(
         for (var i = 0; i < claimed.Count; i++)
         {
             if (claimed[i].Message.Payload.Length > maxPayloadBytes)
-                outcomes[i] = (claimed[i], new PublishResult(PublishStatus.Defect,
+                outcomes[i] = (claimed[i], PublishResult.Defect(
                     $"payload of {claimed[i].Message.Payload.Length} bytes is above MaxPayloadBytes ({maxPayloadBytes})"));
             else
                 toPublish.Add(i);
         }
 
+        var transportFailed = false;
         if (toPublish.Count > 0)
         {
             var results = await PublishAsync(toPublish.Select(i => claimed[i].Message).ToList(), options.PublishTimeout).ConfigureAwait(false);
+            transportFailed = results is null;
             for (var j = 0; j < toPublish.Count; j++)
-                outcomes[toPublish[j]] = (claimed[toPublish[j]], results[j]);
+                outcomes[toPublish[j]] = (claimed[toPublish[j]], results?[j] ?? PublishResult.Retry);
         }
 
         // Recording the outcome is not cancelled by shutdown: the batch was published, its rows must say so.
-        var fenced = await store.FinishAsync(Owner, outcomes, options.MaxReturns, CancellationToken.None).ConfigureAwait(false);
-        if (fenced > 0)
-            LogFenced(logger, fenced);
-        foreach (var (claim, result) in outcomes.Where(o => o.Result.Status == PublishStatus.Defect))
-            LogDeadLettered(logger, claim.Message.MessageId, claim.Message.Name, result.Reason);
+        var finish = await store.FinishAsync(Owner, outcomes, options.MaxReturns, CancellationToken.None).ConfigureAwait(false);
+        if (finish.Fenced > 0)
+            LogFenced(logger, finish.Fenced);
+        foreach (var (id, reason) in finish.DeadLettered)
+            LogDeadLettered(logger, id, reason);
 
-        return claimed.Count;
+        return new DispatchCycle(claimed.Count, transportFailed);
     }
 
-    // Not linked to shutdown: the batch in flight finishes, bounded by the publish timeout. An exception or the timeout
-    // means the outcome is unknown, so every message is handed back (a duplicate is possible, a loss is not).
-    private async Task<IReadOnlyList<PublishResult>> PublishAsync(List<OutgoingMessage> batch, TimeSpan timeout)
+    // The publish wait ends at the timeout even if the transport ignores the token (a hung socket): the batch is then
+    // handed back, and the abandoned call is left to finish or fail on its own. Not linked to shutdown: the batch in
+    // flight finishes, bounded by the timeout. Returns null when the outcome is unknown for the whole batch.
+    private async Task<IReadOnlyList<PublishResult>?> PublishAsync(List<OutgoingMessage> batch, TimeSpan timeout)
     {
         using var timeoutSource = new CancellationTokenSource(timeout);
+        Task<IReadOnlyList<PublishResult>>? call = null;
         try
         {
-            var results = await transport.PublishAsync(batch, timeoutSource.Token).ConfigureAwait(false);
+            call = transport.PublishAsync(batch, timeoutSource.Token);
+            var results = await call.WaitAsync(timeout).ConfigureAwait(false);
             if (results.Count != batch.Count)
                 throw new InvalidOperationException($"The transport returned {results.Count} results for a batch of {batch.Count}.");
+
+            // A result outside the enum (default(PublishResult) included) must never count as confirmed.
+            var invalid = results.Count(r => !Enum.IsDefined(r.Status));
+            if (invalid > 0)
+            {
+                LogInvalidResults(logger, invalid);
+                return results.Select(r => Enum.IsDefined(r.Status) ? r : PublishResult.Retry).ToList();
+            }
+
+            foreach (var retry in results.Where(r => r.Status == PublishStatus.Retry && r.Reason is not null).Take(1))
+                LogRetry(logger, retry.Reason!);
             return results;
         }
         catch (Exception exception)
         {
-            LogPublishFailed(logger, exception, batch.Count, timeoutSource.IsCancellationRequested);
-            return Enumerable.Repeat(PublishResult.Retry, batch.Count).ToList();
+            var timedOut = exception is TimeoutException || timeoutSource.IsCancellationRequested;
+            LogPublishFailed(logger, exception, batch.Count, timedOut);
+            if (call is { IsCompleted: false })
+                _ = call.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default); // observe the abandoned call
+            return null;
         }
     }
 
@@ -81,7 +105,13 @@ internal sealed partial class OutboxDispatcher(
         Message = "{Count} outbox row(s) were fenced off: their lease expired and another claim took them. The newer claim decides their outcome.")]
     private static partial void LogFenced(ILogger logger, int count);
 
-    [LoggerMessage(EventId = 12, Level = LogLevel.Error,
-        Message = "Message {MessageId} ({Name}) went to the outbox DLQ: {Reason}")]
-    private static partial void LogDeadLettered(ILogger logger, Guid messageId, string name, string? reason);
+    [LoggerMessage(EventId = 12, Level = LogLevel.Error, Message = "Message {MessageId} went to the outbox DLQ: {Reason}")]
+    private static partial void LogDeadLettered(ILogger logger, Guid messageId, string reason);
+
+    [LoggerMessage(EventId = 13, Level = LogLevel.Error,
+        Message = "The transport returned {Count} result(s) with an undefined status; they are treated as Retry, never as confirmed.")]
+    private static partial void LogInvalidResults(ILogger logger, int count);
+
+    [LoggerMessage(EventId = 14, Level = LogLevel.Information, Message = "The transport asked to publish again: {Reason}")]
+    private static partial void LogRetry(ILogger logger, string reason);
 }

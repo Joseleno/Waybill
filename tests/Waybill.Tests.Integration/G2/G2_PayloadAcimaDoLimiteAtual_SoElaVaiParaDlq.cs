@@ -24,7 +24,7 @@ public sealed class G2_PayloadAcimaDoLimiteAtual_SoElaVaiParaDlq(PostgresFixture
         // The limit was lowered since: only message 42 is now above it.
         var dispatcher = DispatcherHarness.Create(dataSource, transport, DispatcherHarness.Options(database, o => o.BatchSize = 100),
             maxPayloadBytes: largest - 1);
-        Assert.Equal(100, await dispatcher.RunOnceAsync(ct));
+        Assert.Equal(100, (await dispatcher.RunOnceAsync(ct)).Claimed);
 
         Assert.Equal(99, transport.Received.Count);
         Assert.DoesNotContain(transport.Received, m => m.MessageId == ids[42]);

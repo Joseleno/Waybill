@@ -27,7 +27,7 @@ public sealed class G2_Returned_OrcamentoProprioDepoisDlq(PostgresFixture postgr
 
         await dispatcher.RunOnceAsync(ct);
         Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE status = 'dlq' AND attempts = 3 AND dlq_reason = '312 NO_ROUTE'"));
-        Assert.Equal(0, await dispatcher.RunOnceAsync(ct)); // the DLQ is not claimed again
+        Assert.Equal(0, (await dispatcher.RunOnceAsync(ct)).Claimed); // the DLQ is not claimed again
         Assert.Equal(3, transport.Calls);
     }
 }

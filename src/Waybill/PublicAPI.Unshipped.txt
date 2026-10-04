@@ -4,13 +4,10 @@ Waybill.IOutbox.Enqueue<TMessage>(TMessage message, string? key = null, string? 
 Waybill.ITransport
 Waybill.ITransport.PublishAsync(System.Collections.Generic.IReadOnlyList<Waybill.OutgoingMessage!>! batch, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Waybill.PublishResult>!>!
 Waybill.OutgoingMessage
-Waybill.OutgoingMessage.<Clone>$() -> Waybill.OutgoingMessage!
 Waybill.OutgoingMessage.ContentType.get -> string!
 Waybill.OutgoingMessage.ContentType.init -> void
 Waybill.OutgoingMessage.CreatedAt.get -> System.DateTimeOffset
 Waybill.OutgoingMessage.CreatedAt.init -> void
-Waybill.OutgoingMessage.Deconstruct(out System.Guid MessageId, out string! Name, out string? Key, out System.ReadOnlyMemory<byte> Payload, out string! ContentType, out System.Collections.Generic.IReadOnlyDictionary<string!, string!>! Headers, out System.DateTimeOffset CreatedAt) -> void
-Waybill.OutgoingMessage.Equals(Waybill.OutgoingMessage? other) -> bool
 Waybill.OutgoingMessage.Headers.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>!
 Waybill.OutgoingMessage.Headers.init -> void
 Waybill.OutgoingMessage.Key.get -> string?
@@ -19,7 +16,7 @@ Waybill.OutgoingMessage.MessageId.get -> System.Guid
 Waybill.OutgoingMessage.MessageId.init -> void
 Waybill.OutgoingMessage.Name.get -> string!
 Waybill.OutgoingMessage.Name.init -> void
-Waybill.OutgoingMessage.OutgoingMessage(System.Guid MessageId, string! Name, string? Key, System.ReadOnlyMemory<byte> Payload, string! ContentType, System.Collections.Generic.IReadOnlyDictionary<string!, string!>! Headers, System.DateTimeOffset CreatedAt) -> void
+Waybill.OutgoingMessage.OutgoingMessage() -> void
 Waybill.OutgoingMessage.Payload.get -> System.ReadOnlyMemory<byte>
 Waybill.OutgoingMessage.Payload.init -> void
 Waybill.PublishResult
@@ -32,10 +29,10 @@ Waybill.PublishResult.Reason.init -> void
 Waybill.PublishResult.Status.get -> Waybill.PublishStatus
 Waybill.PublishResult.Status.init -> void
 Waybill.PublishStatus
-Waybill.PublishStatus.Confirmed = 0 -> Waybill.PublishStatus
-Waybill.PublishStatus.Defect = 3 -> Waybill.PublishStatus
-Waybill.PublishStatus.Retry = 1 -> Waybill.PublishStatus
-Waybill.PublishStatus.Returned = 2 -> Waybill.PublishStatus
+Waybill.PublishStatus.Confirmed = 1 -> Waybill.PublishStatus
+Waybill.PublishStatus.Defect = 4 -> Waybill.PublishStatus
+Waybill.PublishStatus.Retry = 2 -> Waybill.PublishStatus
+Waybill.PublishStatus.Returned = 3 -> Waybill.PublishStatus
 Waybill.WaybillOptions
 Waybill.WaybillOptions.AddMessage<TMessage>(string! name, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage>! typeInfo) -> Waybill.WaybillOptions!
 Waybill.WaybillOptions.MaxPayloadBytes.get -> int
@@ -44,14 +41,11 @@ Waybill.WaybillOptions.ThrowOnPendingMessagesAtDispose.get -> bool
 Waybill.WaybillOptions.ThrowOnPendingMessagesAtDispose.set -> void
 Waybill.WaybillOptions.WaybillOptions() -> void
 Waybill.WaybillServiceCollectionExtensions
-override Waybill.OutgoingMessage.Equals(object? obj) -> bool
-override Waybill.OutgoingMessage.GetHashCode() -> int
-override Waybill.OutgoingMessage.ToString() -> string!
 override Waybill.PublishResult.GetHashCode() -> int
-static Waybill.OutgoingMessage.operator !=(Waybill.OutgoingMessage? left, Waybill.OutgoingMessage? right) -> bool
-static Waybill.OutgoingMessage.operator ==(Waybill.OutgoingMessage? left, Waybill.OutgoingMessage? right) -> bool
 static Waybill.PublishResult.Confirmed.get -> Waybill.PublishResult
+static Waybill.PublishResult.Defect(string! reason) -> Waybill.PublishResult
 static Waybill.PublishResult.Retry.get -> Waybill.PublishResult
+static Waybill.PublishResult.Returned(string! reason) -> Waybill.PublishResult
 static Waybill.PublishResult.operator !=(Waybill.PublishResult left, Waybill.PublishResult right) -> bool
 static Waybill.PublishResult.operator ==(Waybill.PublishResult left, Waybill.PublishResult right) -> bool
 static Waybill.WaybillServiceCollectionExtensions.AddWaybill(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.WaybillOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
