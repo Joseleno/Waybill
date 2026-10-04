@@ -14,20 +14,21 @@ Cada mensagem de um lote termina num de quatro resultados (`PublishStatus`), e c
 
 | Falha | Exemplos | Trata como | Efeito |
 | --- | --- | --- | --- |
-| Tipo não registrado, serialização, payload acima do `MaxPayloadBytes`, nome ou `correlation_id` acima de 255 bytes | Erro de programação ou de configuração | Recusada no `Enqueue` | Nunca chega à tabela (ADR 0002) |
+| Tipo não registrado, serialização, payload acima do `MaxPayloadBytes`, nome, `correlation_id`, chave de agregado ou `tenant_id` acima de 255 bytes | Erro de programação ou de configuração | Recusada no `Enqueue` | Nunca chega à tabela (ADR 0002) |
 | Linha gravada sob um limite maior que o atual | Limite reduzido depois | Defeito (`Defect`) | DLQ com motivo, sem tocar o broker |
-| Mensagem que o broker não consegue carregar | Propriedade AMQP impossível; mensagem que, sozinha, faz o broker fechar o canal com 406 (`max_message_size`) | Defeito (`Defect`) | DLQ com motivo |
+| Mensagem que o broker não consegue carregar | Propriedade AMQP impossível; mensagem que, sozinha e num canal só dela, faz o broker fechar o canal com 406 (`max_message_size`); publicação que falha com a conexão e o canal ainda de pé | Defeito (`Defect`) | DLQ com motivo |
 | `basic.return` (sem rota, com `mandatory`) | Binding ausente | `Returned` | Gasta uma de `MaxReturns`; na última, DLQ com o `ReplyText` |
 | Conexão ou canal | Broker fora, rede, canal fechado | `Retry` / `Connection` | Devolve sem gastar tentativa; **abre o circuit breaker** |
 | Confirmação que não chega no `PublishTimeout` | Broker lento | `Retry` / `ConfirmTimeout` | Devolve sem gastar tentativa; **lote cai à metade**; breaker fechado |
-| Nack | Back-pressure do broker | `Retry` / `Nacked` | Igual ao timeout |
+| Nack, ou `Retry` sem causa (`Unspecified`) | Back-pressure do broker; transporte que não diz a causa | `Retry` / `Nacked` ou `Unspecified` | Igual ao timeout |
+| Timeouts seguidos com o lote já em 1 (`SilentOutageThreshold` = 3) | Rede que descarta pacotes em silêncio, sem erro de conexão | Queda | **Abre o circuit breaker** |
 | Resultado inválido do transporte (`default`, status desconhecido) | Bug no transporte | `Retry` | Nunca conta como confirmado |
 
-**Circuit breaker.** Só falha de conexão ou de canal abre (também `Unspecified`, por segurança). Aberto, o dispatcher não reivindica nada: o backlog fica intacto na tabela, em vez de ciclar por claims e devoluções. Passado o período, fica meio aberto e sonda com uma mensagem; se ela passa, fecha; se falha, reabre pelo dobro do tempo, de `PollingInterval` até 30 s.
+**Circuit breaker.** Só falha de conexão ou de canal abre, e também a queda silenciosa (três timeouts seguidos com lote 1). Aberto, o dispatcher não reivindica nada: o backlog fica intacto na tabela, em vez de ciclar por claims e devoluções. Passado o período, fica meio aberto e sonda com uma mensagem; se ela passa, fecha; se falha, reabre pelo dobro do tempo, de `PollingInterval` até 30 s. Um ciclo que não chegou ao broker (só defeitos locais) não fecha nem abre o breaker, nem mexe no lote.
 
-**Redução de lote.** Timeout de confirmação e nack são pressão, não queda: o lote cai à metade (até 1) sem abrir o breaker, e dobra de volta a cada lote saudável até o `BatchSize`. Assim um broker lento nunca faz o breaker oscilar.
+**Redução de lote.** Timeout de confirmação, nack e `Retry` sem causa são pressão, não queda: o lote cai à metade (até 1) sem abrir o breaker, e dobra de volta a cada lote saudável até o `BatchSize`. Assim um broker lento nunca faz o breaker oscilar.
 
-**Isolamento da mensagem que fecha o canal.** Quando o broker fecha o canal com 406 no meio de um lote, com a conexão ainda de pé, todas as publicações não confirmadas falham juntas e o cliente não diz qual mensagem causou. O transporte republica essas mensagens uma a uma, em canal novo; só a que fecha o canal sozinha vira `Defect`. Outros códigos de fechamento e quedas de conexão continuam `Retry`, porque uma falha transitória confundida com defeito mandaria à DLQ uma mensagem boa.
+**Isolamento da mensagem que fecha o canal.** Quando o broker fecha o canal com 406 no meio de um lote, com a conexão ainda de pé, todas as publicações não confirmadas falham juntas e o cliente não diz qual mensagem causou. O transporte republica essas mensagens uma a uma, cada uma num canal novo só dela (nunca o canal compartilhado, que pode carregar o fechamento de outra mensagem); só a que fecha o canal sozinha vira `Defect`. O isolamento respeita o `PublishTimeout`: o que não couber volta como `ConfirmTimeout`. Outros códigos de fechamento e quedas de conexão continuam `Retry`, porque uma falha transitória confundida com defeito mandaria à DLQ uma mensagem boa.
 
 ## Consequências
 
@@ -39,4 +40,13 @@ Cada mensagem de um lote termina num de quatro resultados (`PublishStatus`), e c
 
 ## Testes que provam
 
-`Breaker_*`, `Lote_*` (unidade, relógio falso); `G2_FalhaDeTransporte_ReabreSemGastarTentativa`, `G2_TimeoutDeConfirmacaoOuNack_ReduzLoteSemAbrirBreaker`, `G2_ResultadoInvalidoDoTransporte_NuncaContaComoConfirmado`, `G2_PayloadAcimaDoLimiteAtual_SoElaVaiParaDlq`, `G2_Returned_OrcamentoProprioDepoisDlq`, `G2_RabbitMq_SemRota_ReturnedAteDlq`, `G2_RabbitMq_MensagemInexprimivelEmAmqp_VaiParaDlq`, `G2_MensagemAcimaDoMaxMessageSizeDoBroker_IsoladaUmAUm` (integração); `G2_BrokerParado_NadaNaDlqEDrenaSozinho`, `G2_LatenciaAlta_BreakerFechadoLoteReduzido`, `G2_ConexaoDerrubadaNoMeioDaPublicacao_NadaSePerde` (caos).
+`Breaker_*`, `Lote_*` (unidade, relógio falso); `G2_FalhaDeTransporte_ReabreSemGastarTentativa`, `G2_TimeoutDeConfirmacaoOuNack_ReduzLoteSemAbrirBreaker`, `G2_ResultadoInvalidoDoTransporte_NuncaContaComoConfirmado`, `G2_PayloadAcimaDoLimiteAtual_SoElaVaiParaDlq`, `G2_Returned_OrcamentoProprioDepoisDlq`, `G2_RabbitMq_SemRota_ReturnedAteDlq`, `G2_RabbitMq_MensagemInexprimivelEmAmqp_VaiParaDlq`, `G2_MensagemAcimaDoMaxMessageSizeDoBroker_IsoladaUmAUm`, `G2_SondaSoComDefeitoLocal_NaoFechaOBreaker`, `G2_QuedaSilenciosa_TimeoutsComLoteDe1AbremOBreaker` (integração); `G2_BrokerParado_NadaNaDlqEDrenaSozinho`, `G2_LatenciaAlta_BreakerFechadoLoteReduzido`, `G2_ConexaoDerrubadaNoMeioDaPublicacao_NadaSePerde`, `G2_BuracoNegro_TimeoutsAbremOBreakerSemDlq` (caos).
+
+## Revisão (2026-10-04)
+
+A revisão de código independente desta etapa encontrou e motivou:
+
+- **Bloqueio pela cabeça da fila.** A sonda do breaker meio aberto é sempre a linha mais antiga. Uma linha que falhasse de forma determinística classificada como `Connection` manteria o breaker reabrindo para sempre e nada sairia. Por isso uma falha de publicação com a conexão e o canal de pé é `Defect`, e chave de agregado e `tenant_id` têm o limite de 255 bytes no `Enqueue`.
+- **Breaker fechado sem falar com o broker** num ciclo só de defeitos locais: corrigido (o ciclo não mexe no breaker).
+- **Queda silenciosa** nunca abria o breaker: regra dos três timeouts com lote 1, provada com o toxic de buraco negro do Toxiproxy.
+- **`Retry` sem causa** abria o breaker sem aviso: passou a ser pressão; só `Connection` explícito abre.

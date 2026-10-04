@@ -26,4 +26,4 @@
 - [x] RabbitMQ: classificação das falhas; canal fechado pelo broker no meio do lote → republicação um a um em canal novo, e só a mensagem que fecha o canal sozinha (406) vai para a DLQ
 - [x] Testes de unidade do breaker e do lote (tempo falso); integração com `max_message_size`; caos com Toxiproxy (broker parado, latência alta, conexão derrubada no meio da publicação; broker parado por 1 h no agendado)
 - [x] ADR 0003: classificação de falhas; CHANGELOG
-- [ ] Revisão de código independente; CI verde
+- [x] Revisão de código independente: bloqueio pela cabeça da fila, breaker fechado sem contato com o broker, queda silenciosa, isolamento em canal dedicado, `Retry` sem causa como pressão
