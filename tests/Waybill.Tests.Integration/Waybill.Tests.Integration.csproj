@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Waybill.EntityFrameworkCore.PostgreSql\Waybill.EntityFrameworkCore.PostgreSql.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Testcontainers.PostgreSql" />
+  </ItemGroup>
+
+</Project>

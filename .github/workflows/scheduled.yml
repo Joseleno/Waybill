@@ -1,0 +1,34 @@
+name: scheduled
+
+# Long scenarios that do not fit a pull request: 1 h broker outage, 24 h load, 8 dispatchers for 10 min.
+# Tests opt in with [Trait("Category", "Long")].
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  long:
+    runs-on: ubuntu-latest
+    # GitHub-hosted runners cap a job at 6 h. The 24 h load scenario (stage 5) needs a self-hosted runner
+    # or a shorter run; decide before stage 5.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - run: dotnet build -c Release
+      # Exit code 8 = zero tests ran; tolerated until the first long scenarios exist.
+      - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build --filter-trait "Category=Long" --ignore-exit-code 8
+      - run: dotnet test --project tests/Waybill.Tests.Chaos -c Release --no-build --filter-trait "Category=Long" --ignore-exit-code 8

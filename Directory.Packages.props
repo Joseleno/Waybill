@@ -1,0 +1,27 @@
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <!-- Build tooling -->
+  <ItemGroup>
+    <PackageVersion Include="MinVer" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" />
+  </ItemGroup>
+
+  <!-- Runtime dependencies (the core package Waybill takes none beyond Microsoft.Extensions.*) -->
+  <ItemGroup>
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
+  </ItemGroup>
+
+  <!-- Tests -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageVersion Include="xunit.v3" Version="4.0.1" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
+  </ItemGroup>
+
+</Project>

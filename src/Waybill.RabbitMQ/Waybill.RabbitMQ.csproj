@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>RabbitMQ transport for Waybill: publisher confirms, persistent messages and mandatory routing.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Waybill\Waybill.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="RabbitMQ.Client" />
+  </ItemGroup>
+
+</Project>

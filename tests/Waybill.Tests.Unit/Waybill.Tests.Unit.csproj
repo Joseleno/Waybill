@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Waybill\Waybill.csproj" />
+    <ProjectReference Include="..\..\src\Waybill.EntityFrameworkCore.PostgreSql\Waybill.EntityFrameworkCore.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\Waybill.RabbitMQ\Waybill.RabbitMQ.csproj" />
+  </ItemGroup>
+
+</Project>

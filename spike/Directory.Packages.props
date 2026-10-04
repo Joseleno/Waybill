@@ -1,0 +1,6 @@
+<Project>
+  <!-- Archived stage 0 spike: pinned versions in each project, outside the repository's central package management. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

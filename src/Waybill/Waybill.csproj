@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Transactional outbox and inbox for .NET: the event written with your data reaches the broker, and the consumer's database effect is applied once. Core contracts; depends only on Microsoft.Extensions.*.</Description>
+  </PropertyGroup>
+
+</Project>
