@@ -33,6 +33,7 @@ public sealed class WaybillOptions
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(typeInfo);
+        EnvelopeFactory.EnsureShortString(name, "message name"); // it becomes the routing key and the AMQP type
 
         if (_byName.TryGetValue(name, out var existingName))
             throw new InvalidOperationException($"Message name '{name}' is already registered for {existingName.ClrType}.");

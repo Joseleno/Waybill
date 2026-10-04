@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- RabbitMQ transport (`AddWaybillRabbitMQ`): one configured exchange with the registered message name as routing key, publisher confirms tracked per message, `mandatory`, persistent delivery, AMQP properties (`message_id`, `type`, `content_type`, `timestamp`, `correlation_id`) and headers (`traceparent`, `tracestate`, `tenant_id`, `waybill-key`). `basic.return` maps to `Returned`; nacks and closed connections or channels to `Retry`; a missing exchange is reported as a configuration error.
+
 - Outbox dispatcher (`AddWaybillDispatcher`): hosted service that claims rows (`FOR UPDATE SKIP LOCKED`, lease = `PublishTimeout` + `LeaseMargin`, fencing by owner and fence), publishes through `ITransport` outside any transaction, hands batches back on transport failure without spending attempts, sends size defects and exhausted `basic.return` budgets to the outbox DLQ with a reason, and hands back what it holds on graceful shutdown.
 - `ITransport` contract with per-message results (`Confirmed`, `Retry`, `Returned`, `Defect`).
 

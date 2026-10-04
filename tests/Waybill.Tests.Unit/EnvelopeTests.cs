@@ -96,6 +96,24 @@ public sealed class EnvelopeTests
         Assert.Null(envelope.Headers);
     }
 
+    // Name and correlation id travel as broker properties limited to 255 UTF-8 bytes (AMQP short strings): rejected
+    // at registration and enqueue, never left to fail at every publish.
+    [Fact]
+    public void Envelope_CorrelacaoAcimaDe255Bytes_FalhaNoEnqueue()
+    {
+        var error = Assert.Throws<InvalidOperationException>(
+            () => EnvelopeFactory.Create(Options(), new InvoicePaid(Guid.NewGuid(), 1m), null, new string('é', 128), null)); // 256 bytes
+
+        Assert.Contains("255 UTF-8 bytes", error.Message);
+        EnvelopeFactory.Create(Options(), new InvoicePaid(Guid.NewGuid(), 1m), null, new string('c', 255), null); // the limit itself is fine
+    }
+
+    [Fact]
+    public void Registro_NomeAcimaDe255Bytes_Falha()
+    {
+        Assert.Throws<InvalidOperationException>(() => new WaybillOptions().AddMessage(new string('n', 256), TestJson.Default.InvoicePaid));
+    }
+
     [Fact]
     public void Registro_NomeOuTipoDuplicado_Falha()
     {

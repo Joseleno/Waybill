@@ -24,3 +24,12 @@ Detalhados no início de cada PR, a partir de `docs/plano.md`, Etapa 3.
 - Os cenários acima passam contra PostgreSQL real (15 e 18 no CI).
 - O dispatcher roda como `BackgroundService` com o transporte falso.
 - API pública declarada; CHANGELOG atualizado.
+
+## 3b — transporte RabbitMQ (RabbitMQ e PostgreSQL reais)
+
+| Teste | Cenário | Resultado esperado |
+| --- | --- | --- |
+| `G2_RabbitMq_PublicaComConfirmacaoEPropriedades` | Mensagens da outbox publicadas na exchange `events` (topic), fila quorum com bind `billing.#` | Chegam com routing key = nome, `message_id`, `type`, `content_type`, entrega persistente e headers de trace e correlação; linhas `published` |
+| `G2_RabbitMq_SemRota_ReturnedAteDlq` | Nenhum bind casa com o nome (`mandatory`) | `basic.return` a cada ciclo; na `MaxReturns`ª, DLQ com o `ReplyText` (`NO_ROUTE`) |
+| `G2_RabbitMq_ExchangeInexistente_RetrySemGastarTentativa` | A exchange configurada não existe | `Retry` sem gastar tentativa, log de erro; criada a exchange, publica |
+| `G2_RabbitMq_PontaAPonta_ComOHost` | Só API pública: `AddWaybill`, `AddWaybillOutbox`, `AddWaybillDispatcher`, `AddWaybillRabbitMQ`, host rodando | O evento gravado com o dado chega à fila |

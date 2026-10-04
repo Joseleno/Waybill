@@ -2,12 +2,15 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Waybill.EntityFrameworkCore.PostgreSql\Waybill.EntityFrameworkCore.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\Waybill.RabbitMQ\Waybill.RabbitMQ.csproj" />
     <ProjectReference Include="..\..\src\Waybill.Testing\Waybill.Testing.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.RabbitMq" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Logging" />
   </ItemGroup>
 

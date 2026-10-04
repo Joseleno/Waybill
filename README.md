@@ -8,8 +8,8 @@ whatever broker client you already use.
 
 ## Status
 
-**Experimental, not usable end to end yet.** Messages are written to the outbox and a dispatcher claims and hands them to
-an `ITransport`, but no broker transport ships yet. Packages built from this repository before `v0.1.0-alpha` are pipeline tests, not releases.
+**Experimental.** The write side (outbox), the dispatcher and the RabbitMQ transport work end to end, but failure handling is still
+incomplete (no circuit breaker, no isolation of a message that closes the channel) and the inbox does not exist yet. Packages built from this repository before `v0.1.0-alpha` are pipeline tests, not releases.
 
 This README describes only what exists. Each guarantee will be written down only after a concurrency test proves it;
 until then, nothing here is a promise.
@@ -21,7 +21,7 @@ until then, nothing here is a promise.
 - [ADR 0002](docs/adr/0002-enfileiramento-schema-e-registro-de-tipos.md): the enqueue API, the package-owned `waybill` schema and the message type registry.
 - `Waybill` and `Waybill.EntityFrameworkCore.PostgreSql`: `IOutbox<TContext>.Enqueue(...)` writes messages to `waybill.outbox` in the same `SaveChanges` and transaction as your data, and `WaybillSchema.MigrateAsync` creates the tables. `AddWaybillDispatcher(...)` runs the dispatcher as a hosted service: per-row claim with lease and fencing token, publish outside the transaction, hand-back on transport failure, DLQ as a status.
 - `Waybill.Testing`: an in-memory `FakeOutbox<TContext>` with assertions, to test code that enqueues messages without PostgreSQL.
-- `Waybill.RabbitMQ`: empty for now.
+- `Waybill.RabbitMQ`: `AddWaybillRabbitMQ(...)` publishes to one exchange you declare, with the registered message name as routing key, publisher confirms, `mandatory` and persistent delivery. Waybill does not create topology.
 
 ## Building
 

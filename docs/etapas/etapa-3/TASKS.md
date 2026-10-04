@@ -13,7 +13,11 @@
 
 ## 3b — transporte RabbitMQ
 
-- [ ] (detalhar no início da 3b)
+- [x] `AddWaybillRabbitMQ`: opções (`Uri`, `Exchange`, `ClientProvidedName`), conexão e canal com publisher confirms rastreados, recriados quando fecham
+- [x] Publicação: exchange configurada, routing key = nome registrado, `mandatory`, mensagem persistente, propriedades AMQP (`message_id`, `type`, `content_type`, `timestamp`, `correlation_id`) e headers (`traceparent`, `tracestate`, `tenant_id`, `waybill-key`)
+- [x] Resultados: confirmação → `Confirmed`; `basic.return` → `Returned` com `ReplyText`; nack e falha de conexão ou canal → `Retry`; exchange inexistente → `Retry` com log de erro (configuração)
+- [x] Testes com RabbitMQ real (Testcontainers): publicação com propriedades, sem rota até a DLQ, exchange inexistente e recuperação, ponta a ponta com o host
+- [x] Revisão de código independente antes da PR: short string AMQP acima de 255 bytes ia para retry infinito (agora recusada no registro/`Enqueue` e `Defect` no transporte); vazamento de canal; dispose coordenado. CI verde na PR #5
 
 ## 3c — classificação de falhas, breaker e caos
 
