@@ -30,6 +30,35 @@ public sealed class G3_DbContextForaDaTransacao_FalhaExplicita(PostgresFixture p
         Assert.Equal(0, await database.InboxRowsAsync());
     }
 
+    // The guard lasts as long as the handler: work the handler forks and that saves after ProcessAsync returned is not
+    // inside any inbox transaction and must not be refused.
+    [Fact]
+    public async Task G3_TarefaDerivadaDoHandler_GravaDepoisSemSerRecusada()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        await using var services = database.Services();
+        var inboxDone = new TaskCompletionSource();
+        Task? forked = null;
+
+        await InboxHarness.DeliverAsync(services, "billing.mark-paid", Guid.CreateVersion7(), (_, _) =>
+        {
+            forked = Task.Run(async () =>
+            {
+                await inboxDone.Task;
+                await using var scope = services.CreateAsyncScope();
+                var later = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                await InboxHarness.ApplyEffect(later, ct);
+                await later.SaveChangesAsync(ct);
+            }, ct);
+            return Task.CompletedTask;
+        });
+        inboxDone.SetResult();
+
+        await forked!.WaitAsync(TimeSpan.FromSeconds(30), ct);
+        Assert.Equal(1, await database.EffectsAsync());
+    }
+
     [Fact]
     public async Task G3_ContextoComTransacaoAberta_Recusado()
     {

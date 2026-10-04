@@ -65,6 +65,7 @@ internal sealed class InboxScope : IDisposable
     private static readonly AsyncLocal<InboxScope?> CurrentScope = new();
 
     private readonly InboxScope? _previous;
+    private volatile bool _ended;
 
     private InboxScope(DbContext context, DbTransaction transaction, string handler)
     {
@@ -74,7 +75,18 @@ internal sealed class InboxScope : IDisposable
         _previous = CurrentScope.Value;
     }
 
-    public static InboxScope? Current => CurrentScope.Value;
+    // A flow the handler forked keeps its copy of the AsyncLocal after the handler returns; an ended scope no longer
+    // counts there.
+    public static InboxScope? Current
+    {
+        get
+        {
+            var scope = CurrentScope.Value;
+            while (scope is { _ended: true })
+                scope = scope._previous;
+            return scope;
+        }
+    }
 
     public DbContext Context { get; }
     public DbTransaction Transaction { get; }
@@ -83,7 +95,11 @@ internal sealed class InboxScope : IDisposable
     public static InboxScope Enter(DbContext context, DbTransaction transaction, string handler) =>
         CurrentScope.Value = new InboxScope(context, transaction, handler);
 
-    public void Dispose() => CurrentScope.Value = _previous;
+    public void Dispose()
+    {
+        _ended = true;
+        CurrentScope.Value = _previous;
+    }
 }
 
 /// <summary>
