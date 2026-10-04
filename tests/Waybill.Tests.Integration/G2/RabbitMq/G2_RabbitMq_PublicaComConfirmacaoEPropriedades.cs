@@ -38,7 +38,7 @@ public sealed class G2_RabbitMq_PublicaComConfirmacaoEPropriedades(PostgresFixtu
         Assert.Equal(DeliveryModes.Persistent, message.BasicProperties.DeliveryMode);
         Assert.Equal("corr-0", message.BasicProperties.CorrelationId);
         Assert.Equal("invoice-0", Encoding.UTF8.GetString((byte[])message.BasicProperties.Headers!["waybill-key"]!));
-        var createdAt = await database.ScalarAsync($"SELECT extract(epoch FROM created_at)::bigint FROM waybill.outbox WHERE id = '{ids[0]}'");
+        var createdAt = await database.ScalarAsync($"SELECT floor(extract(epoch FROM created_at))::bigint FROM waybill.outbox WHERE id = '{ids[0]}'");
         Assert.Equal(createdAt, message.BasicProperties.Timestamp.UnixTime);
         Assert.Equal(0m, JsonSerializer.Deserialize(message.Body.Span, TestJson.Default.InvoicePaid)!.Amount);
     }
