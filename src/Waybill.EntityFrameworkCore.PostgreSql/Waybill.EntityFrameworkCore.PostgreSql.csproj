@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <!-- Design-time only: lets `dotnet ef migrations add` generate the package's own migrations. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
   </ItemGroup>
@@ -19,6 +20,7 @@
     <InternalsVisibleTo Include="Waybill.Testing" />
     <InternalsVisibleTo Include="Waybill.Tests.Unit" />
     <InternalsVisibleTo Include="Waybill.Tests.Integration" />
+    <InternalsVisibleTo Include="Waybill.Tests.Chaos" />
   </ItemGroup>
 
 </Project>

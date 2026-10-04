@@ -2,10 +2,21 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Waybill.EntityFrameworkCore.PostgreSql\Waybill.EntityFrameworkCore.PostgreSql.csproj" />
+    <!-- Built next to the tests so they can start it as a child process; not referenced as an assembly. -->
+    <ProjectReference Include="..\Waybill.Tests.ChaosHost\Waybill.Tests.ChaosHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+
+  <!-- Shared test infrastructure (container, test model, dispatcher harness). -->
+  <ItemGroup>
+    <Compile Include="..\Waybill.Tests.Integration\PostgresFixture.cs" Link="Shared\PostgresFixture.cs" />
+    <Compile Include="..\Waybill.Tests.Integration\TestModel.cs" Link="Shared\TestModel.cs" />
+    <Compile Include="..\Waybill.Tests.Integration\G2\DispatcherHarness.cs" Link="Shared\DispatcherHarness.cs" />
   </ItemGroup>
 
 </Project>
