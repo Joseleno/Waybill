@@ -24,15 +24,22 @@ public sealed class G3_EntregaParalela_AplicaUmaVez(PostgresFixture postgres)
             await InboxHarness.ApplyEffect(db, ct);
         }
 
-        var first = Task.Run(() => InboxHarness.DeliverAsync(services, "billing.mark-paid", messageId, SlowHandle));
-        await firstInsideHandler.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
-        var second = Task.Run(() => InboxHarness.DeliverAsync(services, "billing.mark-paid", messageId));
-        await Task.Delay(500, TestContext.Current.CancellationToken); // the second is now blocked on the first one's uncommitted inbox row
-        Assert.False(second.IsCompleted, "the second delivery did not wait for the first transaction");
+        try
+        {
+            var first = Task.Run(() => InboxHarness.DeliverAsync(services, "billing.mark-paid", messageId, SlowHandle));
+            await firstInsideHandler.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            var second = Task.Run(() => InboxHarness.DeliverAsync(services, "billing.mark-paid", messageId));
+            await Task.Delay(500, TestContext.Current.CancellationToken); // the second is now blocked on the first one's uncommitted inbox row
+            Assert.False(second.IsCompleted, "the second delivery did not wait for the first transaction");
 
-        releaseFirst.SetResult();
-        Assert.Equal(InboxResult.Processed, await first);
-        Assert.Equal(InboxResult.Duplicate, await second);
+            releaseFirst.SetResult();
+            Assert.Equal(InboxResult.Processed, await first);
+            Assert.Equal(InboxResult.Duplicate, await second);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult(); // never leave the first delivery hanging when an assertion fails
+        }
 
         Assert.Equal(1, await database.EffectsAsync());
         Assert.Equal(1, await database.InboxRowsAsync());
