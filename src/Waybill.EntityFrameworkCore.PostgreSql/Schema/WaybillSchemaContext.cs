@@ -55,6 +55,9 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
             inbox.Property(m => m.Handler).HasColumnName("handler");
             inbox.Property(m => m.MessageId).HasColumnName("message_id");
             inbox.Property(m => m.ProcessedAt).HasColumnName("processed_at").HasDefaultValueSql("clock_timestamp()");
+
+            // Retention deletes by age; the message_id may come from another system and not be a UUIDv7 (ADR 0004).
+            inbox.HasIndex(m => m.ProcessedAt).HasDatabaseName("ix_inbox_processed_at");
         });
     }
 

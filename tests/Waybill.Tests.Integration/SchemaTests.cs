@@ -22,7 +22,9 @@ public sealed class SchemaTests(PostgresFixture postgres)
         Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'waybill' AND table_name = 'outbox'"));
         Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'waybill' AND table_name = 'inbox'"));
         Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM pg_indexes WHERE schemaname = 'waybill' AND indexname = 'ix_outbox_claimable' AND indexdef LIKE '%WHERE%'"));
-        Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM waybill.__waybill_migrations"));
+        // Retention deletes inbox rows by age; the message_id may not be a UUIDv7, so it needs its own index (ADR 0004).
+        Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM pg_indexes WHERE schemaname = 'waybill' AND indexname = 'ix_inbox_processed_at' AND indexdef LIKE '%(processed_at)%'"));
+        Assert.Equal(MigrationCount, await database.ScalarAsync("SELECT count(*) FROM waybill.__waybill_migrations"));
         Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"));
     }
 
@@ -43,7 +45,7 @@ public sealed class SchemaTests(PostgresFixture postgres)
 
         Assert.Equal(2, await database.ScalarAsync("SELECT count(*) FROM invoices"));
         Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM \"__EFMigrationsHistory\""));
-        Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM waybill.__waybill_migrations"));
+        Assert.Equal(MigrationCount, await database.ScalarAsync("SELECT count(*) FROM waybill.__waybill_migrations"));
         Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox"));
     }
 
@@ -116,6 +118,10 @@ public sealed class SchemaTests(PostgresFixture postgres)
         var error = Assert.Throws<InvalidOperationException>(() => outbox.Enqueue(new InvoicePaid(Guid.NewGuid(), 1m)));
         Assert.Contains("TransactionScope", error.Message);
     }
+
+    // Every migration shipped in the package is applied, once.
+    private static readonly long MigrationCount = typeof(WaybillSchema).Assembly.GetTypes()
+        .Count(t => t.IsSubclassOf(typeof(Migration)) && !t.IsAbstract);
 
     public sealed class UnmappedDbContext(DbContextOptions<UnmappedDbContext> options) : DbContext(options);
 
