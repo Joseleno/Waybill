@@ -68,10 +68,16 @@ public enum PublishStatus
 /// <summary>Why a <see cref="PublishStatus.Retry"/> happened. The dispatcher reacts differently to each cause.</summary>
 public enum TransportFailure
 {
-    /// <summary>Not stated by the transport. Treated like <see cref="Connection"/>.</summary>
+    /// <summary>
+    /// Not stated by the transport (for example <see cref="PublishResult.Retry"/>). Treated as back-pressure, like
+    /// <see cref="ConfirmTimeout"/>: it halves the batch but does not open the breaker by itself.
+    /// </summary>
     Unspecified = 0,
 
-    /// <summary>The connection or the channel failed or closed. Opens the dispatcher's circuit breaker.</summary>
+    /// <summary>
+    /// The connection or the channel failed or closed. Opens the dispatcher's circuit breaker. An exception thrown by
+    /// <see cref="ITransport.PublishAsync"/> is treated as this.
+    /// </summary>
     Connection = 1,
 
     /// <summary>The broker did not confirm in time. Halves the batch; does not open the breaker.</summary>

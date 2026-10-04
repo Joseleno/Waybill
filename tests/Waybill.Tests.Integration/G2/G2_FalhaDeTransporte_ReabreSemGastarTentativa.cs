@@ -22,7 +22,7 @@ public sealed class G2_FalhaDeTransporte_ReabreSemGastarTentativa(PostgresFixtur
         var transport = new FakeTransport((call, batch, _) => call switch
         {
             <= 2 when failure == "exception" => throw new IOException("connection reset by broker"),
-            <= 2 => Task.FromResult<IReadOnlyList<PublishResult>>(batch.Select(_ => PublishResult.Retry).ToList()),
+            <= 2 => Task.FromResult<IReadOnlyList<PublishResult>>(batch.Select(_ => PublishResult.RetryAfter(TransportFailure.Connection)).ToList()),
             _ => FakeTransport.ConfirmAll(batch),
         });
         var time = new FakeTimeProvider();
@@ -78,6 +78,7 @@ public sealed class G2_FalhaDeTransporte_ReabreSemGastarTentativa(PostgresFixtur
     [Theory]
     [InlineData(TransportFailure.ConfirmTimeout)]
     [InlineData(TransportFailure.Nacked)]
+    [InlineData(TransportFailure.Unspecified)] // PublishResult.Retry without a cause: back-pressure, never the breaker
     public async Task G2_TimeoutDeConfirmacaoOuNack_ReduzLoteSemAbrirBreaker(TransportFailure failure)
     {
         var ct = TestContext.Current.CancellationToken;

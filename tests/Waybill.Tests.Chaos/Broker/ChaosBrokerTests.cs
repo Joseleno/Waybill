@@ -48,8 +48,13 @@ public sealed class ChaosBrokerTests(PostgresFixture postgres, ChaosBrokerFixtur
             Assert.Equal(0, await database.CountAsync("published"));
             Assert.Equal(0, await database.CountAsync("dlq"));
             Assert.Equal(0, await database.ScalarAsync("SELECT coalesce(max(attempts), 0) FROM waybill.outbox"));
+            // Expected: the first batch (50), then one-message probes as the open period doubles from 100 ms to its
+            // 30 s cap — about 10 on the way up, then one per 30 s. Without the breaker it would be ~50 rows every
+            // 100 ms. The bound is derived from that, with room for slow reconnects.
             var claimsDuringOutage = await database.ScalarAsync("SELECT coalesce(sum(fence), 0) FROM waybill.outbox");
-            Assert.True(claimsDuringOutage < 200, $"{claimsDuringOutage} row claims during the outage: the breaker did not hold back");
+            var expectedClaims = 50 + 10 + (int)(outage.TotalSeconds / 30);
+            Assert.True(claimsDuringOutage <= 2 * expectedClaims,
+                $"{claimsDuringOutage} row claims during the outage (expected about {expectedClaims}): the breaker did not hold back");
         }
         finally
         {
@@ -134,7 +139,9 @@ public sealed class ChaosBrokerTests(PostgresFixture postgres, ChaosBrokerFixtur
         try
         {
             await service.StartAsync(ct);
-            await WaitUntilAsync(async () => await database.CountAsync("published") > 0, TimeSpan.FromSeconds(60), ct);
+            // Cut only with a batch in flight (rows claimed) after the first ones went through.
+            await WaitUntilAsync(async () => await database.CountAsync("published") > 0 && await database.CountAsync("claimed") > 0,
+                TimeSpan.FromSeconds(60), ct);
             await broker.SetBrokerReachableAsync(false); // drops the connection mid-batch
             await Task.Delay(TimeSpan.FromSeconds(3), ct);
             await broker.SetBrokerReachableAsync(true);
@@ -152,6 +159,55 @@ public sealed class ChaosBrokerTests(PostgresFixture postgres, ChaosBrokerFixtur
         Assert.Equal(ids.Select(id => id.ToString()).Order(), delivered.Distinct().Order());
         Assert.Equal(0, await database.CountAsync("dlq"));
         Assert.Equal(0, await database.ScalarAsync("SELECT coalesce(max(attempts), 0) FROM waybill.outbox"));
+    }
+
+    // A black hole (connection open, nothing gets through) raises no connection error: publishes only time out. The
+    // batch shrinks to one, then the breaker opens (ADR 0003, silent outage); nothing goes to the DLQ; when the path
+    // clears, the backlog drains.
+    [Fact]
+    public async Task G2_BuracoNegro_TimeoutsAbremOBreakerSemDlq()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        var (exchange, queue) = await broker.DeclareTopologyAsync();
+        var ids = await DispatcherHarness.EnqueueAsync(database, 9);
+        await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
+        await using var transport = Transport(exchange);
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var dispatcher = DispatcherHarness.Create(dataSource, transport, DispatcherHarness.Options(database, o =>
+        {
+            o.BatchSize = 4;
+            o.PublishTimeout = TimeSpan.FromSeconds(1);
+        }), time: time);
+
+        Assert.Equal(DispatchOutcome.Progress, (await dispatcher.RunOnceAsync(ct)).Outcome); // warm connection, 4 published
+        await broker.AddBlackholeAsync();
+        var outcomes = new List<DispatchOutcome>();
+        try
+        {
+            for (var cycle = 0; cycle < 6 && !outcomes.Contains(DispatchOutcome.ConnectionFailure); cycle++)
+                outcomes.Add((await dispatcher.RunOnceAsync(ct)).Outcome);
+        }
+        finally
+        {
+            await broker.RemoveBlackholeAsync();
+        }
+
+        Assert.Contains(DispatchOutcome.Pressure, outcomes);
+        Assert.Equal(DispatchOutcome.ConnectionFailure, outcomes[^1]);
+        Assert.Equal(0, await database.CountAsync("dlq"));
+
+        // The stuck connection may need to be dropped and reopened; the breaker paces the retries.
+        await WaitUntilAsync(async () =>
+        {
+            time.Advance(TimeSpan.FromSeconds(30));
+            await dispatcher.RunOnceAsync(ct);
+            return await database.CountAsync("published") == 9;
+        }, TimeSpan.FromMinutes(3), ct);
+
+        Assert.Equal(0, await database.CountAsync("dlq"));
+        Assert.Equal(0, await database.ScalarAsync("SELECT coalesce(max(attempts), 0) FROM waybill.outbox"));
+        Assert.Equal(ids.Select(id => id.ToString()).Order(), (await broker.DrainMessageIdsAsync(queue)).Distinct().Order());
     }
 
     private RabbitMqTransport Transport(string exchange) =>

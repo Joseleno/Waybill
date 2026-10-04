@@ -109,28 +109,49 @@ internal sealed partial class OutboxDispatcher
         return new DispatchCycle(claimed.Count, React(results), batchSize);
     }
 
-    // ADR 0003: only a connection or channel failure opens the breaker; a confirmation timeout or a nack halves the
-    // batch instead, so a slow broker never makes the breaker oscillate.
+    /// <summary>Confirmation timeouts in a row, already at a batch of one, after which the broker counts as unreachable.</summary>
+    internal const int SilentOutageThreshold = 3;
+
+    private int _pressureAtOne;
+
+    // ADR 0003: only a connection or channel failure opens the breaker; a confirmation timeout, a nack or an
+    // unstated cause halves the batch instead, so a slow broker never makes the breaker oscillate. A cycle that never
+    // reached the broker (only local defects) says nothing about it and changes neither.
     private DispatchOutcome React(IReadOnlyList<PublishResult> results)
     {
-        var retries = results.Where(r => r.Status == PublishStatus.Retry).ToList();
-        if (retries.Any(r => r.Failure is TransportFailure.Connection or TransportFailure.Unspecified))
-        {
-            _breaker.RecordConnectionFailure();
-            LogBreakerOpened(_logger, _breaker.Remaining);
-            return DispatchOutcome.ConnectionFailure;
-        }
+        if (results.Count == 0)
+            return DispatchOutcome.Progress;
 
-        _breaker.RecordSuccess();
+        var retries = results.Where(r => r.Status == PublishStatus.Retry).ToList();
+        if (retries.Any(r => r.Failure == TransportFailure.Connection))
+            return OpenBreaker();
+
         if (retries.Count > 0)
         {
+            // A network that silently drops packets never raises a connection error: every publish just times out.
+            // Once the batch is down to one and keeps timing out, treat it as the outage it is.
+            _pressureAtOne = _batchSizer.Current == 1 ? _pressureAtOne + 1 : 0;
+            if (_pressureAtOne >= SilentOutageThreshold)
+                return OpenBreaker();
+
+            _breaker.RecordSuccess();
             _batchSizer.OnPressure();
             LogBatchReduced(_logger, _batchSizer.Current);
             return DispatchOutcome.Pressure;
         }
 
+        _pressureAtOne = 0;
+        _breaker.RecordSuccess();
         _batchSizer.OnHealthy();
         return DispatchOutcome.Progress;
+    }
+
+    private DispatchOutcome OpenBreaker()
+    {
+        _pressureAtOne = 0;
+        _breaker.RecordConnectionFailure();
+        LogBreakerOpened(_logger, _breaker.Remaining);
+        return DispatchOutcome.ConnectionFailure;
     }
 
     // The publish wait ends at the timeout even if the transport ignores the token (a hung socket): the batch is then

@@ -48,32 +48,55 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
 
         // The broker closed the channel during the batch (for example a message above its max_message_size). The
         // client cannot say which message did it, and every unconfirmed publish failed with it. Publish those again,
-        // one by one: the one that closes the channel on its own is the defect; the others go through.
+        // one by one, each on a channel of its own: a 406 on that channel can only come from that message, so it is the
+        // defect; the others go through.
         LogIsolating(logger, attempts.Count(a => a.ChannelClosedByBroker));
         var results = new PublishResult[batch.Count];
         for (var i = 0; i < batch.Count; i++)
         {
             if (!attempts[i].ChannelClosedByBroker)
-            {
                 results[i] = attempts[i].Result;
-                continue;
-            }
+            else if (cancellationToken.IsCancellationRequested)
+                results[i] = PublishResult.RetryAfter(TransportFailure.ConfirmTimeout, "the publish timeout ended the isolation");
+            else
+                results[i] = await PublishAloneAsync(exchange, batch[i], cancellationToken).ConfigureAwait(false);
+        }
+        return results;
+    }
 
-            Attempt alone;
-            try
-            {
-                alone = await PublishOneAsync(await GetChannelAsync(cancellationToken).ConfigureAwait(false), exchange, batch[i], cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                alone = new Attempt(PublishResult.RetryAfter(TransportFailure.Connection, exception.Message), false);
-            }
-            results[i] = alone.ChannelClosedByBroker
+    private async Task<PublishResult> PublishAloneAsync(string exchange, OutgoingMessage message, CancellationToken cancellationToken)
+    {
+        IChannel? channel = null;
+        try
+        {
+            channel = await OpenDedicatedChannelAsync(cancellationToken).ConfigureAwait(false);
+            var alone = await PublishOneAsync(channel, exchange, message, cancellationToken).ConfigureAwait(false);
+            return alone.ChannelClosedByBroker
                 ? PublishResult.Defect($"the broker closed the channel when this message was published alone: {alone.Result.Reason}")
                 : alone.Result;
         }
-        return results;
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return PublishResult.RetryAfter(TransportFailure.ConfirmTimeout, "the publish timeout ended the isolation");
+        }
+        catch (Exception exception)
+        {
+            return PublishResult.RetryAfter(TransportFailure.Connection, exception.Message);
+        }
+        finally
+        {
+            await DisposeQuietly(channel).ConfigureAwait(false);
+        }
+    }
+
+    // A fresh confirm-tracking channel on the shared connection, never the shared channel: no stale close state from a
+    // previous message can be blamed on this one.
+    private async Task<IChannel> OpenDedicatedChannelAsync(CancellationToken cancellationToken)
+    {
+        await GetChannelAsync(cancellationToken).ConfigureAwait(false); // reopens the connection if it dropped
+        return await _connection!.CreateChannelAsync(
+            new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true),
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>One publish: its result, and whether the broker (not the network) closed the channel under it.</summary>
@@ -116,10 +139,16 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
             var reason = $"{interrupted.ShutdownReason!.ReplyCode} {interrupted.ShutdownReason.ReplyText}";
             return new Attempt(PublishResult.RetryAfter(TransportFailure.Connection, reason), true);
         }
+        catch (Exception exception) when (channel.IsOpen && _connection is { IsOpen: true })
+        {
+            // The publish failed while the connection and the channel stayed up: not a network problem, so retrying
+            // would fail the same way forever and, as the oldest row, block every half-open probe behind it. A defect
+            // of this message.
+            return new Attempt(PublishResult.Defect($"publish failed with the connection and channel up: {exception.Message}"), false);
+        }
         catch (Exception exception)
         {
-            // Closed channel or connection, or anything unexpected: the outcome is unknown, so publish again. Never
-            // a defect of the message.
+            // Closed channel or connection: the outcome is unknown, so publish again. Never a defect of the message.
             return new Attempt(PublishResult.RetryAfter(TransportFailure.Connection, exception.Message), false);
         }
     }

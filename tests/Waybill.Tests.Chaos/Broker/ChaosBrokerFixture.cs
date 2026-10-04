@@ -69,6 +69,14 @@ public sealed class ChaosBrokerFixture : IAsyncLifetime
 
     public async Task RemoveLatencyAsync() => (await _api.DeleteAsync($"/proxies/{Proxy}/toxics/latency")).EnsureSuccessStatusCode();
 
+    /// <summary>A black hole: the connection stays open but nothing gets through in either direction (Toxiproxy "timeout" toxic with 0).</summary>
+    public async Task AddBlackholeAsync() =>
+        (await _api.PostAsJsonAsync($"/proxies/{Proxy}/toxics",
+            new { name = "blackhole", type = "timeout", stream = "downstream", toxicity = 1.0, attributes = new { timeout = 0 } }))
+        .EnsureSuccessStatusCode();
+
+    public async Task RemoveBlackholeAsync() => (await _api.DeleteAsync($"/proxies/{Proxy}/toxics/blackhole")).EnsureSuccessStatusCode();
+
     /// <summary>The application's topology: a topic exchange and a quorum queue bound with <c>billing.#</c>, unique to the test.</summary>
     public async Task<(string Exchange, string Queue)> DeclareTopologyAsync()
     {
