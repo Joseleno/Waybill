@@ -6,4 +6,5 @@
 - [x] EF: `IOutbox<TContext>`, buffer por `DbContext`, interceptor (`SavingChanges`/`SavedChanges`), log ou exceção no descarte
 - [x] Os sete cenários `G1_*`, um commit por cenário
 - [x] `Waybill.Testing`: `FakeOutbox<TContext>` e asserções; teste de equivalência
-- [ ] `CHANGELOG`, API pública declarada em `PublicAPI.Unshipped.txt`, CI verde
+- [x] `CHANGELOG`, README e API pública declarada em `PublicAPI.Unshipped.txt`; build, testes (PostgreSQL 15 e 18) e pack verdes localmente
+- [ ] CI verde na PR

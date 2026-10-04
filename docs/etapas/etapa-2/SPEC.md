@@ -24,7 +24,7 @@ services.AddWaybill(o =>
     o.AddMessage("billing.invoice-paid.v1", AppJson.Default.InvoicePaid);
     o.MaxPayloadBytes = 256 * 1024;
 });
-services.AddDbContext<AppDbContext>((sp, db) => db.UseNpgsql(cs).UseWaybill(sp));
+services.AddDbContext<AppDbContext>(db => db.UseNpgsql(cs).UseWaybill());
 services.AddWaybillOutbox<AppDbContext>();
 
 // modelo do usuário
@@ -43,7 +43,7 @@ await WaybillSchema.MigrateAsync(connectionString, ct);
 1. `Enqueue` gera o `message_id` (UUIDv7) **no momento do enfileiramento**, valida que o tipo está registrado, serializa com o `JsonTypeInfo` registrado, valida o tamanho e captura `traceparent`/`tracestate` do `Activity.Current`. O erro de tipo não registrado ou payload grande demais aparece **para quem enfileira**, antes de qualquer gravação.
 2. A mensagem materializada (linha de outbox) fica pendente no buffer daquele `DbContext`.
 3. O interceptor, em `SavingChanges`, adiciona ao `DbContext` as linhas pendentes que ainda não estão rastreadas. A deduplicação é por referência, então um `SaveChanges` repetido na mesma transação não duplica.
-4. Em `SavedChanges`, limpa o buffer e desanexa as linhas. Em `SaveChangesFailed`, mantém tudo.
+4. Em `SavedChanges`, limpa só o buffer de pendentes; as linhas continuam rastreadas (viram Unchanged quando as mudanças são aceitas). Em falha, mantém tudo. Desanexar as linhas, como previa a primeira versão deste SPEC, perderia o evento no padrão `SaveChanges(acceptAllChangesOnSuccess: false)` com retry da estratégia de execução; o teste `G1_SaveChangesSemAceitarRepetidoPelaEstrategia_ReinsereOEvento` protege isso.
 5. Ao fim do escopo, mensagem enfileirada e nunca salva gera **log de erro**; lançar exceção só com `o.ThrowOnPendingMessagesAtDispose = true`.
 
 ## Schema `waybill` (v0.1)
