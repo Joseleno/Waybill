@@ -108,7 +108,7 @@ public sealed class TestDatabase
             if (sharedConnection is null)
                 builder.UseNpgsql(ConnectionString, o => npgsql?.Invoke(o));
             else
-                builder.UseNpgsql(sharedConnection(sp), o => npgsql?.Invoke(o));
+                builder.UseNpgsql(sp.GetRequiredService<NpgsqlConnection>(), o => npgsql?.Invoke(o)); // the scope's shared connection
             builder.UseWaybill();
             if (interceptors.Length > 0)
                 builder.AddInterceptors(interceptors);
