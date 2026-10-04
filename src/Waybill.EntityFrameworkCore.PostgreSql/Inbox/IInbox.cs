@@ -8,7 +8,10 @@ public enum InboxResult
     /// <summary>First delivery for this handler: the handler ran and its effect committed with the inbox row.</summary>
     Processed = 1,
 
-    /// <summary>Already processed by this handler: nothing ran, nothing changed.</summary>
+    /// <summary>
+    /// Already processed by this handler: nothing ran, nothing changed. Also the result when this very call committed
+    /// but the commit's acknowledgement was lost and the execution strategy retried: the effect is applied, once.
+    /// </summary>
     Duplicate = 2,
 }
 

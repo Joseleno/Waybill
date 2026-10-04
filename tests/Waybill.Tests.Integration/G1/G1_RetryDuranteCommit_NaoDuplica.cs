@@ -1,6 +1,4 @@
-using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Waybill.EntityFrameworkCore;
@@ -50,28 +48,5 @@ public sealed class G1_RetryDuranteCommit_NaoDuplica(PostgresFixture postgres)
             Assert.Equal("pk_outbox", duplicate.ConstraintName);
         Assert.Equal(1, await database.OutboxCountAsync());
         Assert.Equal(withData ? 1 : 0, await database.ScalarAsync("SELECT count(*) FROM invoices"));
-    }
-
-    // The COMMIT reaches the server; the acknowledgement is "lost" on the way back, once.
-    private sealed class LoseFirstCommitAcknowledgement : DbTransactionInterceptor
-    {
-        public bool Fired { get; private set; }
-
-        public override void TransactionCommitted(DbTransaction transaction, TransactionEndEventData eventData) => LoseOnce();
-
-        public override Task TransactionCommittedAsync(
-            DbTransaction transaction, TransactionEndEventData eventData, CancellationToken cancellationToken = default)
-        {
-            LoseOnce();
-            return Task.CompletedTask;
-        }
-
-        private void LoseOnce()
-        {
-            if (Fired)
-                return;
-            Fired = true;
-            throw new NpgsqlException("Simulated connection loss after COMMIT.", new IOException("connection reset"));
-        }
     }
 }
