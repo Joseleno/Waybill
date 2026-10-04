@@ -27,11 +27,25 @@ internal sealed class RetentionStore(NpgsqlDataSource dataSource)
         WHERE o.id = e.id AND o.status = 'published'
         """;
 
+    // Inbox rows past the retention, counted from processed_at (ix_inbox_processed_at). A delivery racing the delete
+    // waits on the row lock and, once it is gone, is processed again: the boundary of G3 that OPERATIONS.md documents.
+    private const string InboxSql = """
+        WITH expired AS MATERIALIZED (
+            SELECT handler, message_id FROM waybill.inbox
+            WHERE processed_at < clock_timestamp() - $1
+            ORDER BY processed_at
+            LIMIT $2
+            FOR UPDATE SKIP LOCKED)
+        DELETE FROM waybill.inbox i
+        USING expired e
+        WHERE i.handler = e.handler AND i.message_id = e.message_id
+        """;
+
     public Task<int> DeleteOutboxBatchAsync(TimeSpan retention, int batchSize, CancellationToken cancellationToken) =>
         ExecuteAsync(OutboxSql, retention, batchSize, cancellationToken);
 
     public Task<int> DeleteInboxBatchAsync(TimeSpan retention, int batchSize, CancellationToken cancellationToken) =>
-        Task.FromResult(0);
+        ExecuteAsync(InboxSql, retention, batchSize, cancellationToken);
 
     private async Task<int> ExecuteAsync(string sql, TimeSpan retention, int batchSize, CancellationToken cancellationToken)
     {

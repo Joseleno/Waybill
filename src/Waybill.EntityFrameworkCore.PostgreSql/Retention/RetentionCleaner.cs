@@ -13,9 +13,10 @@ internal sealed partial class RetentionCleaner(RetentionStore store, IOptions<Wa
     {
         var settings = options.Value;
         var outbox = await DrainAsync(store.DeleteOutboxBatchAsync, settings.OutboxRetention, settings.BatchSize, cancellationToken).ConfigureAwait(false);
-        if (outbox > 0)
-            LogDeleted(logger, outbox, 0);
-        return new RetentionPass(outbox, 0);
+        var inbox = await DrainAsync(store.DeleteInboxBatchAsync, settings.InboxRetention, settings.BatchSize, cancellationToken).ConfigureAwait(false);
+        if (outbox > 0 || inbox > 0)
+            LogDeleted(logger, outbox, inbox);
+        return new RetentionPass(outbox, inbox);
     }
 
     /// <summary>Deletes batch after batch until one comes back short: nothing eligible was left when it ran.</summary>
