@@ -85,7 +85,7 @@ public sealed class TestDatabase
         return database;
     }
 
-    /// <summary>The application's container: Waybill configured, both contexts with UseWaybill, logs captured.</summary>
+    /// <summary>The application's container: Waybill configured, both contexts with an outbox, logs captured.</summary>
     public ServiceProvider Services(
         Action<WaybillOptions>? configure = null,
         LogSink? logs = null,
@@ -109,7 +109,6 @@ public sealed class TestDatabase
                 builder.UseNpgsql(ConnectionString, o => npgsql?.Invoke(o));
             else
                 builder.UseNpgsql(sp.GetRequiredService<NpgsqlConnection>(), o => npgsql?.Invoke(o)); // the scope's shared connection
-            builder.UseWaybill();
             if (interceptors.Length > 0)
                 builder.AddInterceptors(interceptors);
         }

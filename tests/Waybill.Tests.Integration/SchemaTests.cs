@@ -75,7 +75,7 @@ public sealed class SchemaTests(PostgresFixture postgres)
                 o.MaxPayloadBytes = 1024;
                 o.AddMessage("billing.invoice-paid.v1", TestJson.Default.InvoicePaid);
             })
-            .AddDbContext<UnmappedDbContext>(o => o.UseNpgsql(connectionString).UseWaybill())
+            .AddDbContext<UnmappedDbContext>(o => o.UseNpgsql(connectionString))
             .AddWaybillOutbox<UnmappedDbContext>()
             .BuildServiceProvider();
         await using var scope = services.CreateAsyncScope();
@@ -85,25 +85,36 @@ public sealed class SchemaTests(PostgresFixture postgres)
         Assert.Contains("AddWaybillOutbox()", error.Message);
     }
 
+    // Unsupported by the contract, and dangerous: the outbox row could commit apart from the data.
     [Fact]
-    public async Task Configuracao_ContextoSemUseWaybill_FalhaNoEnqueue()
+    public async Task Configuracao_AutoTransactionNeverSemTransacao_FalhaNoEnqueue()
     {
-        var connectionString = await postgres.CreateDatabaseAsync();
-        var services = new ServiceCollection()
-            .AddLogging()
-            .AddWaybill(o =>
-            {
-                o.MaxPayloadBytes = 1024;
-                o.AddMessage("billing.invoice-paid.v1", TestJson.Default.InvoicePaid);
-            })
-            .AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString))
-            .AddWaybillOutbox<AppDbContext>()
-            .BuildServiceProvider();
+        var database = await TestDatabase.CreateAsync(postgres);
+        await using var services = database.Services();
+        await using var scope = services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var outbox = scope.ServiceProvider.GetRequiredService<IOutbox<AppDbContext>>();
+        context.Database.AutoTransactionBehavior = AutoTransactionBehavior.Never;
+
+        var error = Assert.Throws<InvalidOperationException>(() => outbox.Enqueue(new InvoicePaid(Guid.NewGuid(), 1m)));
+        Assert.Contains("AutoTransactionBehavior.Never", error.Message);
+
+        await using var transaction = await context.Database.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        outbox.Enqueue(new InvoicePaid(Guid.NewGuid(), 1m)); // fine inside an explicit transaction
+        await context.SaveChangesAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Configuracao_TransactionScope_FalhaNoEnqueue()
+    {
+        var database = await TestDatabase.CreateAsync(postgres);
+        await using var services = database.Services();
         await using var scope = services.CreateAsyncScope();
         var outbox = scope.ServiceProvider.GetRequiredService<IOutbox<AppDbContext>>();
 
+        using var ambient = new System.Transactions.TransactionScope(System.Transactions.TransactionScopeAsyncFlowOption.Enabled);
         var error = Assert.Throws<InvalidOperationException>(() => outbox.Enqueue(new InvoicePaid(Guid.NewGuid(), 1m)));
-        Assert.Contains("UseWaybill()", error.Message);
+        Assert.Contains("TransactionScope", error.Message);
     }
 
     public sealed class UnmappedDbContext(DbContextOptions<UnmappedDbContext> options) : DbContext(options);

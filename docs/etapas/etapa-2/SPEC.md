@@ -24,7 +24,7 @@ services.AddWaybill(o =>
     o.AddMessage("billing.invoice-paid.v1", AppJson.Default.InvoicePaid);
     o.MaxPayloadBytes = 256 * 1024;
 });
-services.AddDbContext<AppDbContext>(db => db.UseNpgsql(cs).UseWaybill());
+services.AddDbContext<AppDbContext>(db => db.UseNpgsql(cs));
 services.AddWaybillOutbox<AppDbContext>();
 
 // modelo do usuário
@@ -41,10 +41,12 @@ await WaybillSchema.MigrateAsync(connectionString, ct);
 ## Mecanismo
 
 1. `Enqueue` gera o `message_id` (UUIDv7) **no momento do enfileiramento**, valida que o tipo está registrado, serializa com o `JsonTypeInfo` registrado, valida o tamanho e captura `traceparent`/`tracestate` do `Activity.Current`. O erro de tipo não registrado ou payload grande demais aparece **para quem enfileira**, antes de qualquer gravação.
-2. A mensagem materializada (linha de outbox) fica pendente no buffer daquele `DbContext`.
-3. O interceptor, em `SavingChanges`, adiciona ao `DbContext` as linhas pendentes que ainda não estão rastreadas. A deduplicação é por referência, então um `SaveChanges` repetido na mesma transação não duplica.
-4. Em `SavedChanges`, limpa só o buffer de pendentes; as linhas continuam rastreadas (viram Unchanged quando as mudanças são aceitas). Em falha, mantém tudo. Desanexar as linhas, como previa a primeira versão deste SPEC, perderia o evento no padrão `SaveChanges(acceptAllChangesOnSuccess: false)` com retry da estratégia de execução; o teste `G1_SaveChangesSemAceitarRepetidoPelaEstrategia_ReinsereOEvento` protege isso.
-5. Ao fim do escopo, mensagem enfileirada e nunca salva gera **log de erro**; lançar exceção só com `o.ThrowOnPendingMessagesAtDispose = true`.
+2. No mesmo `Enqueue`, a linha de outbox é adicionada ao change tracker do `DbContext` (`context.Add`). A unidade de trabalho do EF é a única fonte de verdade: o próximo `SaveChanges` bem-sucedido insere a linha, um que falha a mantém Added, um repetido na mesma transação não duplica, e `ChangeTracker.Clear()` ou o reset de um contexto de pool a descartam junto com os dados.
+3. Depois do save, a linha continua rastreada (vira Unchanged quando as mudanças são aceitas). Isso mantém correto o padrão `SaveChanges(acceptAllChangesOnSuccess: false)` com retry da estratégia de execução (teste `G1_SaveChangesSemAceitarRepetidoPelaEstrategia_ReinsereOEvento`).
+4. O `Enqueue` recusa o que deixaria a linha commitar separada dos dados: `TransactionScope` e `AutoTransactionBehavior.Never` sem transação aberta.
+5. Ao fim do escopo, linha de outbox ainda Added gera **log de erro**; lançar exceção só com `o.ThrowOnPendingMessagesAtDispose = true`, e então o `DbContext` é descartado antes, para não vazar conexão e transação.
+
+Histórico: a primeira versão usava um buffer próprio e um interceptor que anexava as linhas em `SavingChanges`. A revisão de código mostrou dois furos na G1 (`Clear()` depois de uma falha reinseria o evento sem os dados; um `Enqueue` durante o `SavingChanges` se perdia), cobertos agora por `G1_UnidadeDeTrabalhoDoEf_FonteDeVerdade`.
 
 ## Schema `waybill` (v0.1)
 

@@ -1,57 +1,78 @@
+using System.Transactions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Waybill.EntityFrameworkCore;
 
+/// <summary>
+/// Adds each enqueued message to the <see cref="DbContext"/>'s change tracker as an outbox record, so the context's
+/// own unit of work is the single source of truth: the record is inserted by the next successful <c>SaveChanges</c>,
+/// stays Added after a failed one, and is discarded together with the application's data by
+/// <c>ChangeTracker.Clear()</c>, a rollback to a fresh context, or a pooled context being reset.
+/// </summary>
 internal sealed partial class DbContextOutbox<TContext>(
     TContext context, IOptions<WaybillOptions> options, ILogger<DbContextOutbox<TContext>> logger)
     : IOutbox<TContext>, IDisposable
     where TContext : DbContext
 {
-    private bool _contextVerified;
+    private bool _mappingVerified;
 
     public Guid Enqueue<TMessage>(TMessage message, string? key = null, string? correlationId = null, string? tenantId = null)
         where TMessage : notnull
     {
-        VerifyContext();
+        Verify(context, ref _mappingVerified);
         var envelope = EnvelopeFactory.Create(options.Value, message, key, correlationId, tenantId);
-        OutboxBuffer.For(context).Add(OutboxRecord.From(envelope));
+        context.Add(OutboxRecord.From(envelope));
         return envelope.Id;
     }
 
-    // A missing mapping or interceptor would make enqueued messages silently never reach the table; fail at the
-    // first Enqueue instead, with what to do.
-    private void VerifyContext()
+    // Fail at Enqueue, with what to do, instead of letting messages silently miss the table or commit apart from
+    // the data.
+    internal static void Verify(DbContext context, ref bool mappingVerified)
     {
-        if (_contextVerified)
-            return;
+        if (!mappingVerified)
+        {
+            if (context.Model.FindEntityType(typeof(OutboxRecord)) is null)
+                throw new InvalidOperationException(
+                    $"{context.GetType().Name} does not map the Waybill outbox. Call modelBuilder.AddWaybillOutbox() in OnModelCreating.");
+            mappingVerified = true;
+        }
 
-        if (context.Model.FindEntityType(typeof(OutboxRecord)) is null)
+        if (Transaction.Current is not null)
             throw new InvalidOperationException(
-                $"{typeof(TContext).Name} does not map the Waybill outbox. Call modelBuilder.AddWaybillOutbox() in OnModelCreating.");
+                "Waybill does not support TransactionScope. Use DbContext.Database.BeginTransaction, or let SaveChanges create the transaction.");
 
-        var interceptors = context.GetService<IDbContextOptions>().FindExtension<CoreOptionsExtension>()?.Interceptors;
-        if (interceptors?.Contains(WaybillSaveChangesInterceptor.Instance) != true)
+        if (context.Database.AutoTransactionBehavior == AutoTransactionBehavior.Never && context.Database.CurrentTransaction is null)
             throw new InvalidOperationException(
-                $"{typeof(TContext).Name} is not configured with Waybill. Call UseWaybill() on its DbContextOptionsBuilder.");
-
-        _contextVerified = true;
+                "AutoTransactionBehavior.Never would let the outbox row commit apart from the data. Begin a transaction before enqueuing.");
     }
 
     public void Dispose()
     {
-        if (OutboxBuffer.Find(context) is not { Pending.Count: > 0 } buffer)
+        int pending;
+        try
+        {
+            pending = context.ChangeTracker.Entries<OutboxRecord>().Count(e => e.State == EntityState.Added);
+        }
+        catch (ObjectDisposedException)
+        {
+            return; // the context went first; its pending records went with it
+        }
+
+        if (pending == 0)
             return;
 
-        var count = buffer.Pending.Count;
-        buffer.Clear();
         if (options.Value.ThrowOnPendingMessagesAtDispose)
+        {
+            // The scope stops disposing at the first exception; release the context (idempotent, pool-aware) so
+            // its connection and transaction are not left behind.
+            context.Dispose();
             throw new InvalidOperationException(
-                $"{count} message(s) were enqueued on {typeof(TContext).Name} but never saved: SaveChanges was not called, or it failed.");
+                $"{pending} message(s) were enqueued on {typeof(TContext).Name} but never saved: SaveChanges was not called, or it failed.");
+        }
 
-        LogPendingMessages(logger, count, typeof(TContext).Name);
+        LogPendingMessages(logger, pending, typeof(TContext).Name);
     }
 
     [LoggerMessage(EventId = 1, Level = LogLevel.Error,

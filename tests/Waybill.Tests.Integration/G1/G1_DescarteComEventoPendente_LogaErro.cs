@@ -34,10 +34,17 @@ public sealed class G1_DescarteComEventoPendente_LogaErro(PostgresFixture postgr
         await using var services = database.Services(o => o.ThrowOnPendingMessagesAtDispose = true);
 
         var scope = services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await context.Database.BeginTransactionAsync(TestContext.Current.CancellationToken);
         scope.ServiceProvider.GetRequiredService<IOutbox<AppDbContext>>().Enqueue(new InvoicePaid(Guid.NewGuid(), 10m));
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(async () => await scope.DisposeAsync());
         Assert.Contains("never saved", error.Message);
+
+        // The scope stops disposing at the first exception; the context (and its open transaction) must not leak.
+        Assert.Throws<ObjectDisposedException>(() => context.Model);
+        Assert.Equal(0, await database.ScalarAsync(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state LIKE 'idle in transaction%'"));
     }
 
     [Fact]

@@ -27,6 +27,7 @@ public sealed class FakeOutbox<TContext> : IOutbox<TContext>, IDisposable
     private readonly WaybillOptions _options;
     private readonly List<FakeOutboxMessage> _pending = [];
     private readonly List<FakeOutboxMessage> _saved = [];
+    private bool _mappingVerified;
 
     /// <summary>Creates a fake bound to <paramref name="context"/>, validating with the application's options.</summary>
     public FakeOutbox(TContext context, IOptions<WaybillOptions> options)
@@ -54,6 +55,9 @@ public sealed class FakeOutbox<TContext> : IOutbox<TContext>, IDisposable
     public Guid Enqueue<TMessage>(TMessage message, string? key = null, string? correlationId = null, string? tenantId = null)
         where TMessage : notnull
     {
+        // Same configuration checks as the real outbox (outbox mapped, no TransactionScope, no AutoTransactionBehavior.Never
+        // without a transaction), so a suite that passes with the fake does not fail in production at the first Enqueue.
+        DbContextOutbox<TContext>.Verify(_context, ref _mappingVerified);
         var envelope = EnvelopeFactory.Create(_options, message, key, correlationId, tenantId);
         _pending.Add(new FakeOutboxMessage(envelope.Id, envelope.Name, envelope.Key, message));
         return envelope.Id;

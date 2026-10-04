@@ -81,7 +81,7 @@ O repositório nasce cedo porque o histórico de commits faz parte do portfolio.
 | Projeto | Papel |
 | --- | --- |
 | `Waybill` | Núcleo: contratos, envelope, políticas; depende só de `Microsoft.Extensions.*` e `System.Diagnostics` |
-| `Waybill.EntityFrameworkCore.PostgreSql` | Interceptor, migrations, claim e consultas |
+| `Waybill.EntityFrameworkCore.PostgreSql` | Captura no `DbContext`, migrations, claim e consultas |
 | `Waybill.RabbitMQ` | Transporte |
 | `Waybill.Tests.Unit` | O que não precisa de infraestrutura |
 | `Waybill.Tests.Integration` | Testcontainers com Postgres e RabbitMQ reais |
@@ -118,7 +118,7 @@ Entrega G1: o evento existe se, e somente se, a transação fizer commit. É a e
 Desenho fechado no ADR 0002; SPEC, PLAN e TASKS em `docs/etapas/etapa-2/`.
 
 - API de enfileiramento explícita, `IOutbox<TContext>`, com `message_id` UUIDv7 fixado no cliente no momento do enfileiramento; tipo registrado, serialização e tamanho validados no `Enqueue`
-- Interceptor que anexa as linhas pendentes ao `DbContext` em `SavingChanges`, com deduplicação por referência, e as libera só em `SavedChanges`
+- A linha de outbox entra no change tracker do `DbContext` no próprio `Enqueue`; a unidade de trabalho do EF é a única fonte de verdade (ADR 0002)
 - Evento enfileirado e nunca salvo: log de erro por padrão no fim do escopo de DI, com opção explícita de lançar. Lançar no `Dispose` não pode ser o default, porque o caso mais comum de evento pendente é o handler falhando antes do `SaveChanges`, e a exceção do Waybill substituiria a do bug. O sinal forte fica no fake de testes, que assere “nenhum evento pendente ao final”
 - Fake do outbox em memória, no pacote novo `Waybill.Testing`, com asserções do tipo “contém o evento X” e “nenhum evento pendente”, para que o usuário teste o próprio código sem Postgres
 - Envelope completo: tipo registrado explicitamente com nome estável, `traceparent`, `tracestate`, `correlation_id`, tenant opcional, content-type

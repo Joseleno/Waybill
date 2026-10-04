@@ -76,16 +76,18 @@ public sealed class FakeOutboxEquivalenceTests(PostgresFixture postgres)
         var logs = new LogSink();
         await using var services = database.Services(logs: logs);
 
+        int pending;
         await using (var scope = services.CreateAsyncScope())
         {
-            await Swallow(() => PayInvoice(
-                scope.ServiceProvider.GetRequiredService<AppDbContext>(),
-                scope.ServiceProvider.GetRequiredService<IOutbox<AppDbContext>>(), number, save));
+            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await Swallow(() => PayInvoice(context, scope.ServiceProvider.GetRequiredService<IOutbox<AppDbContext>>(), number, save));
+            // Measured, not inferred: outbox records the real context still has to insert.
+            pending = context.ChangeTracker.Entries<OutboxRecord>().Count(e => e.State == EntityState.Added);
         }
 
         var reported = logs.Entries.Any(e => e.Level == LogLevel.Error);
         var saved = (int)await database.OutboxCountAsync();
-        return new Outcome(saved, reported ? 1 : 0, reported);
+        return new Outcome(saved, pending, reported);
     }
 
     private async Task<Outcome> RunFake(string number, bool save)
@@ -131,7 +133,7 @@ public sealed class FakeOutboxEquivalenceTests(PostgresFixture postgres)
                 o.AddMessage("billing.invoice-paid.v1", TestJson.Default.InvoicePaid);
                 configure?.Invoke(o);
             })
-            .AddDbContext<AppDbContext>(o => o.UseNpgsql(database.ConnectionString)) // no UseWaybill: the fake needs none
+            .AddDbContext<AppDbContext>(o => o.UseNpgsql(database.ConnectionString))
             .AddFakeWaybillOutbox<AppDbContext>();
         return services.BuildServiceProvider();
     }

@@ -12,8 +12,11 @@ namespace Waybill.Tests.Integration.G1;
 [Collection(PostgresCollection.Name)]
 public sealed class G1_RetryDuranteCommit_NaoDuplica(PostgresFixture postgres)
 {
-    [Fact]
-    public async Task G1_RetryDuranteCommit_NaoDuplica_UmEventoESegundaTentativaFalhaPorChave()
+    // With an invoice the duplicate may hit either primary key first; the event-only case pins it on the outbox.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task G1_RetryDuranteCommit_NaoDuplica_UmEventoESegundaTentativaFalhaPorChave(bool withData)
     {
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);
@@ -28,8 +31,11 @@ public sealed class G1_RetryDuranteCommit_NaoDuplica(PostgresFixture postgres)
             var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var outbox = scope.ServiceProvider.GetRequiredService<IOutbox<AppDbContext>>();
 
+            // EF skips the transaction for a single-statement save; force it so the event-only case also commits.
+            context.Database.AutoTransactionBehavior = AutoTransactionBehavior.Always;
             var invoice = new Invoice { Number = "INV-1", Amount = 10m };
-            context.Invoices.Add(invoice);
+            if (withData)
+                context.Invoices.Add(invoice);
             outbox.Enqueue(new InvoicePaid(invoice.Id, invoice.Amount), key: invoice.Id.ToString());
 
             // The commit succeeds on the server but the client sees a transient connection error, so the
@@ -38,9 +44,12 @@ public sealed class G1_RetryDuranteCommit_NaoDuplica(PostgresFixture postgres)
         }
 
         Assert.True(lostCommitAck.Fired, "the simulated lost acknowledgement never happened");
-        Assert.Equal(PostgresErrorCodes.UniqueViolation, Assert.IsType<PostgresException>(error.InnerException).SqlState);
+        var duplicate = Assert.IsType<PostgresException>(error.InnerException);
+        Assert.Equal(PostgresErrorCodes.UniqueViolation, duplicate.SqlState);
+        if (!withData)
+            Assert.Equal("pk_outbox", duplicate.ConstraintName);
         Assert.Equal(1, await database.OutboxCountAsync());
-        Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM invoices"));
+        Assert.Equal(withData ? 1 : 0, await database.ScalarAsync("SELECT count(*) FROM invoices"));
     }
 
     // The COMMIT reaches the server; the acknowledgement is "lost" on the way back, once.
