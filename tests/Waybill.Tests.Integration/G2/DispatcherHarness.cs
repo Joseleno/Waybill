@@ -44,11 +44,12 @@ public static class DispatcherHarness
 
     /// <summary>A dispatcher instance over the test database, driven cycle by cycle by the test.</summary>
     internal static OutboxDispatcher Create(
-        NpgsqlDataSource dataSource, ITransport transport, WaybillDispatcherOptions options, int maxPayloadBytes = 64 * 1024) =>
+        NpgsqlDataSource dataSource, ITransport transport, WaybillDispatcherOptions options, int maxPayloadBytes = 64 * 1024,
+        TimeProvider? time = null) =>
         new(new OutboxStore(dataSource), transport,
             Microsoft.Extensions.Options.Options.Create(new WaybillOptions { MaxPayloadBytes = maxPayloadBytes }),
             Microsoft.Extensions.Options.Options.Create(options),
-            NullLogger<OutboxDispatcher>.Instance);
+            NullLogger<OutboxDispatcher>.Instance, time);
 
     /// <summary>Writes <paramref name="count"/> messages through the real outbox, one transaction.</summary>
     public static async Task<List<Guid>> EnqueueAsync(TestDatabase database, int count, Func<int, InvoicePaid>? message = null, int maxPayloadBytes = 64 * 1024)

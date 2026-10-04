@@ -17,13 +17,22 @@ internal sealed partial class WaybillDispatcherService(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         LogStarted(logger, dispatcher.Owner);
-        var failures = 0;
+        var databaseFailures = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
-            DispatchCycle cycle;
+            TimeSpan wait;
             try
             {
-                cycle = await dispatcher.RunOnceAsync(stoppingToken).ConfigureAwait(false);
+                var cycle = await dispatcher.RunOnceAsync(stoppingToken).ConfigureAwait(false);
+                databaseFailures = 0;
+
+                // A full batch that made progress: go straight to the next one. Breaker open (connection or channel
+                // failure): wait it out, nothing is claimed meanwhile. Otherwise: the polling interval.
+                if (cycle.Outcome == DispatchOutcome.Progress && cycle.Claimed >= cycle.BatchSize)
+                    continue;
+                wait = cycle.Outcome is DispatchOutcome.ConnectionFailure or DispatchOutcome.BreakerOpen
+                    ? Max(dispatcher.BreakerRemaining, TimeSpan.FromMilliseconds(1))
+                    : options.Value.PollingInterval;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -32,20 +41,14 @@ internal sealed partial class WaybillDispatcherService(
             catch (Exception exception)
             {
                 // The database is unreachable or a statement failed: nothing was lost (claimed rows come back with
-                // their lease or at shutdown), so back off and try again.
+                // their lease or at shutdown), so back off (doubling up to MaxBackoff) and try again.
                 LogCycleFailed(logger, exception);
-                cycle = new DispatchCycle(0, TransportFailed: true);
+                wait = Wait(options.Value.PollingInterval, ++databaseFailures);
             }
-
-            // A full batch that made progress: go straight to the next one. A failing transport or database: back off
-            // (doubling up to MaxBackoff), so a broker outage with a large backlog does not turn into a claim storm.
-            failures = cycle.TransportFailed ? failures + 1 : 0;
-            if (failures == 0 && cycle.Claimed >= options.Value.BatchSize)
-                continue;
 
             try
             {
-                await Task.Delay(Wait(options.Value.PollingInterval, failures), stoppingToken).ConfigureAwait(false);
+                await Task.Delay(wait, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -54,13 +57,10 @@ internal sealed partial class WaybillDispatcherService(
         }
     }
 
-    internal static TimeSpan Wait(TimeSpan pollingInterval, int consecutiveFailures)
-    {
-        if (consecutiveFailures == 0)
-            return pollingInterval;
-        var factor = Math.Pow(2, Math.Min(consecutiveFailures - 1, 16));
-        return TimeSpan.FromTicks((long)Math.Min(pollingInterval.Ticks * factor, Math.Max(MaxBackoff.Ticks, pollingInterval.Ticks)));
-    }
+    internal static TimeSpan Wait(TimeSpan pollingInterval, int consecutiveFailures) =>
+        CircuitBreaker.Delay(pollingInterval, MaxBackoff, consecutiveFailures);
+
+    private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
 
     /// <summary>
     /// Stops claiming, lets the batch in flight finish, then hands back every row this instance still holds — with its
