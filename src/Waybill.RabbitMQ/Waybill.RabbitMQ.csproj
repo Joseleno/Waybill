@@ -10,6 +10,13 @@
 
   <ItemGroup>
     <PackageReference Include="RabbitMQ.Client" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Waybill.Tests.Unit" />
+    <InternalsVisibleTo Include="Waybill.Tests.Integration" />
+    <InternalsVisibleTo Include="Waybill.Tests.Chaos" />
   </ItemGroup>
 
 </Project>

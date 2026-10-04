@@ -1,1 +1,13 @@
 #nullable enable
+Waybill.RabbitMQ.WaybillRabbitMqOptions
+Waybill.RabbitMQ.WaybillRabbitMqOptions.ClientProvidedName.get -> string!
+Waybill.RabbitMQ.WaybillRabbitMqOptions.ClientProvidedName.set -> void
+Waybill.RabbitMQ.WaybillRabbitMqOptions.ConfigureConnectionFactory.get -> System.Action<RabbitMQ.Client.ConnectionFactory!>?
+Waybill.RabbitMQ.WaybillRabbitMqOptions.ConfigureConnectionFactory.set -> void
+Waybill.RabbitMQ.WaybillRabbitMqOptions.Exchange.get -> string?
+Waybill.RabbitMQ.WaybillRabbitMqOptions.Exchange.set -> void
+Waybill.RabbitMQ.WaybillRabbitMqOptions.Uri.get -> System.Uri?
+Waybill.RabbitMQ.WaybillRabbitMqOptions.Uri.set -> void
+Waybill.RabbitMQ.WaybillRabbitMqOptions.WaybillRabbitMqOptions() -> void
+Waybill.RabbitMQ.WaybillRabbitMqServiceCollectionExtensions
+static Waybill.RabbitMQ.WaybillRabbitMqServiceCollectionExtensions.AddWaybillRabbitMQ(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.RabbitMQ.WaybillRabbitMqOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
