@@ -7,4 +7,5 @@
 - [x] Os sete cenários `G1_*`, um commit por cenário
 - [x] `Waybill.Testing`: `FakeOutbox<TContext>` e asserções; teste de equivalência
 - [x] `CHANGELOG`, README e API pública declarada em `PublicAPI.Unshipped.txt`; build, testes (PostgreSQL 15 e 18) e pack verdes localmente
-- [ ] CI verde na PR
+- [x] CI verde na PR #3 (PostgreSQL 15 e 18, caos curto, pack)
+- [x] Revisão de código independente antes da PR: dois furos na G1 corrigidos (ver SPEC, Histórico)
