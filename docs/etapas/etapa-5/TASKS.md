@@ -8,5 +8,5 @@
 - [x] `DispatcherStatus` e health check; cenários `HealthCheck_*`
 - [x] Caos curto `BrokerParadoEReligado_MetricaEHealthCheckAcompanham` (Toxiproxy)
 - [x] `CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza`; input de duração e artefato CSV no `scheduled.yml`; uma execução local curta antes do commit
-- [ ] `docs/OPERATIONS.md`; README, CHANGELOG, API pública; ressalva da G3 no HANDOFF
+- [x] `docs/OPERATIONS.md`; README, CHANGELOG, API pública; ressalva da G3 no HANDOFF
 - [ ] Revisão de código independente; CI verde; execução verde da carga longa no job agendado
