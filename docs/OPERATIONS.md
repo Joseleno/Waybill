@@ -63,7 +63,19 @@ never deletes them. Watch their count:
 SELECT count(*) FROM waybill.outbox WHERE status = 'dlq';
 ```
 
-Reprocessing them is a manual operation until the operations API (planned for v1.0).
+Reprocessing them is a manual operation until the operations API (planned for v1.0). Fix the cause first (for
+`312 NO_ROUTE`, the missing binding), then hand the messages back to the dispatcher, which publishes them with the
+same message id:
+
+<!-- dlq-requeue -->
+```sql
+UPDATE waybill.outbox
+SET status = 'pending', attempts = 0, dlq_reason = NULL
+WHERE status = 'dlq' AND dlq_reason = '312 NO_ROUTE';
+```
+
+Do not reprocess a message older than the consumers' inbox retention: a consumer that already applied it no longer
+remembers it, and would apply it again.
 
 ## Sizing the inbox retention
 

@@ -53,12 +53,16 @@ internal sealed partial class AppJson : JsonSerializerContext;
 ```
 
 `services` is your host's `IServiceCollection` (`builder.Services`), and `outbox` is the `IOutbox<AppDbContext>` from
-DI. A test runs these exact lines against PostgreSQL on every pull request.
+DI. The dispatcher reads the connection string from the registered `AppDbContext`; if the context is configured with
+`UseNpgsql(NpgsqlDataSource)`, set `ConnectionString` in `AddWaybillDispatcher`'s options, because Npgsql leaves the
+password out of that context's connection string. A test runs these exact lines against PostgreSQL on every pull
+request.
 
 `WaybillSchema.MigrateAsync` creates only the `waybill` schema, and `MapWaybillOutbox()` keeps the outbox out of your
-own migrations, so the two never collide. Create your own tables with EF Core migrations. If you use
-`Database.EnsureCreated()` instead, call it before `MigrateAsync`: `EnsureCreated` does nothing when the database
-already has any table.
+own migrations, so the two never collide. Run it as a deployment step, before the application starts, not from every
+instance at startup; the sample runs it as a `migrate` command of the same executable. Create your own tables with EF
+Core migrations. If you use `Database.EnsureCreated()` instead, call it before `MigrateAsync`: `EnsureCreated` does
+nothing when the database already has any table.
 
 - **Messages are registered by a stable name** (`billing.invoice-paid.v1`), not by class name, with a `JsonTypeInfo`
   (source generation recommended). `Enqueue` refuses unregistered types, payloads that fail to serialize and payloads above
@@ -66,8 +70,12 @@ already has any table.
 - **The dispatcher** runs as a hosted service in your API or in a worker. It claims rows with
   `FOR UPDATE SKIP LOCKED`, publishes outside the transaction with publisher confirms, and hands messages back without
   spending attempts when the broker or the network fails (G2).
-- **Waybill does not create topology.** Declare the exchange and queues yourself; every message is published to the
-  configured exchange with its registered name as routing key.
+- **Waybill does not create topology.** Declare the exchange (a topic exchange fits, since the routing key is the
+  registered name) and bind your queues yourself, before you publish. Until the exchange exists, messages wait in the
+  outbox without spending attempts. Once it exists, a message no queue is bound to comes back unroutable
+  (`basic.return`); after `MaxReturns` returns (5 by default, about one per polling interval) it goes to the outbox DLQ
+  with the reason `312 NO_ROUTE`. [OPERATIONS.md](https://github.com/Joseleno/Waybill/blob/main/docs/OPERATIONS.md)
+  shows how to send it back once the binding exists.
 
 The [sample](https://github.com/Joseleno/Waybill/tree/main/samples) runs the whole flow with
 `docker compose up --wait`: a billing API that publishes, a receipts consumer that uses the inbox and publishes in
@@ -78,7 +86,8 @@ turn, and a script that stops the broker to show the backlog drain when it comes
 Wrap your handler, inside whatever consumer you already have, in
 `IInbox<TContext>.ProcessAsync(handlerName, messageId, (db, ct) => ...)` (registered by
 `AddWaybillInbox<TContext>()`). Waybill records `(handler, message_id)` and runs your handler in the same
-`READ COMMITTED` transaction, on the same context. A repeated delivery returns `InboxResult.Duplicate` without running
+`READ COMMITTED` transaction, on the same context, then saves and commits: the handler only changes the context it
+receives, and needs no `SaveChanges` of its own. A repeated delivery returns `InboxResult.Duplicate` without running
 the handler, and you acknowledge the message after `ProcessAsync` returns. Events the handler enqueues commit together
 with its effect.
 
