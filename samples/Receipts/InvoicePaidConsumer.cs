@@ -1,7 +1,7 @@
 using System.Text.Json;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
-using RabbitMQ.Client.Exceptions;
+using Waybill.EntityFrameworkCore;
 using Waybill.RabbitMQ;
 
 namespace Receipts;
@@ -48,31 +48,46 @@ internal sealed partial class InvoicePaidConsumer(
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException)
         {
-            // Unreadable: retrying will not help. Reject without requeue (to a dead-letter exchange, if one is set).
+            // Unreadable: retrying will not help. Reject without requeue: it goes to the dead-letter queue.
             LogUnreadable(logger, exception);
             await channel.BasicRejectAsync(delivery.DeliveryTag, requeue: false, stoppingToken);
             return;
         }
 
+        InboxResult result;
         try
         {
             await using var scope = scopes.CreateAsyncScope();
-            var handler = scope.ServiceProvider.GetRequiredService<InvoicePaidHandler>();
-            var result = await handler.HandleAsync(messageId, paid, stoppingToken);
+            result = await scope.ServiceProvider.GetRequiredService<InvoicePaidHandler>().HandleAsync(messageId, paid, stoppingToken);
+        }
+        catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
+        {
+            // Nothing was committed (the inbox rolled back). Wait longer at each redelivery (1, 2, 4 … up to 30 s), so a
+            // database restart is ridden out; past the queue's x-delivery-limit (definitions.json) the broker
+            // dead-letters the message, and someone has to look at receipts.invoice-paid.dead.
+            var delay = TimeSpan.FromSeconds(Math.Min(Math.Pow(2, DeliveryCount(delivery)), 30));
+            LogFailed(logger, messageId, delay, exception);
+            await Task.Delay(delay, stoppingToken);
+            await channel.BasicNackAsync(delivery.DeliveryTag, multiple: false, requeue: true, stoppingToken);
+            return;
+        }
 
+        try
+        {
             // Ack only after the inbox committed, whether this delivery was processed or a duplicate.
             await channel.BasicAckAsync(delivery.DeliveryTag, multiple: false, stoppingToken);
             LogHandled(logger, messageId, result);
         }
         catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
         {
-            // Nothing was committed (the inbox rolled back): the broker delivers it again. The queue's x-delivery-limit
-            // (rabbitmq/definitions.json) bounds the retries and then dead-letters the message.
-            LogFailed(logger, messageId, exception);
-            await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
-            await channel.BasicNackAsync(delivery.DeliveryTag, multiple: false, requeue: true, stoppingToken);
+            // Committed but not acked (the channel closed): the broker redelivers it and the inbox returns Duplicate.
+            LogAckFailed(logger, messageId, exception);
         }
     }
+
+    // Quorum queues count redeliveries in x-delivery-count; absent on the first delivery.
+    private static long DeliveryCount(BasicDeliverEventArgs delivery) =>
+        delivery.BasicProperties.Headers?.TryGetValue("x-delivery-count", out var count) == true && count is long n ? n : 0;
 
     private async Task<IConnection> ConnectAsync(ConnectionFactory factory, CancellationToken stoppingToken)
     {
@@ -82,7 +97,7 @@ internal sealed partial class InvoicePaidConsumer(
             {
                 return await factory.CreateConnectionAsync("receipts", stoppingToken);
             }
-            catch (BrokerUnreachableException exception)
+            catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
             {
                 LogBrokerUnreachable(logger, exception);
                 await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
@@ -94,15 +109,18 @@ internal sealed partial class InvoicePaidConsumer(
     private static partial void LogConsuming(ILogger logger, string queue);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Message {MessageId}: {Result}.")]
-    private static partial void LogHandled(ILogger logger, Guid messageId, Waybill.EntityFrameworkCore.InboxResult result);
+    private static partial void LogHandled(ILogger logger, Guid messageId, InboxResult result);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "Message {MessageId} failed; it will be delivered again.")]
-    private static partial void LogFailed(ILogger logger, Guid messageId, Exception exception);
+    [LoggerMessage(Level = LogLevel.Error, Message = "Message {MessageId} failed; it will be delivered again in {Delay}.")]
+    private static partial void LogFailed(ILogger logger, Guid messageId, TimeSpan delay, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Message {MessageId} committed but the ack failed; the redelivery will be a duplicate.")]
+    private static partial void LogAckFailed(ILogger logger, Guid messageId, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Unreadable message rejected.")]
     private static partial void LogUnreadable(ILogger logger, Exception exception);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "RabbitMQ is unreachable; retrying in 5 s.")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Cannot connect to RabbitMQ; retrying in 5 s.")]
     private static partial void LogBrokerUnreachable(ILogger logger, Exception exception);
 }
 

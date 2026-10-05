@@ -41,12 +41,19 @@ if (args is ["migrate"])
 
 app.MapPost("/invoices", async (NewInvoice request, BillingDbContext db, CancellationToken ct) =>
 {
-    if (await db.Invoices.AnyAsync(i => i.Number == request.Number, ct))
-        return Results.Conflict($"Invoice {request.Number} already exists.");
+    if (string.IsNullOrWhiteSpace(request.Number) || request.Amount <= 0)
+        return Results.BadRequest("A number and a positive amount are required.");
 
     var invoice = new Invoice { Number = request.Number, Amount = request.Amount };
     db.Invoices.Add(invoice);
-    await db.SaveChangesAsync(ct);
+    try
+    {
+        await db.SaveChangesAsync(ct);
+    }
+    catch (DbUpdateException exception) when (exception.InnerException is Npgsql.PostgresException { SqlState: Npgsql.PostgresErrorCodes.UniqueViolation })
+    {
+        return Results.Conflict($"Invoice {request.Number} already exists.");
+    }
     return Results.Created($"/invoices/{invoice.Id}", invoice);
 });
 
@@ -65,4 +72,4 @@ app.MapHealthChecks("/health");
 
 await app.RunAsync();
 
-internal sealed record NewInvoice(string Number, decimal Amount);
+internal sealed record NewInvoice(string? Number, decimal Amount);

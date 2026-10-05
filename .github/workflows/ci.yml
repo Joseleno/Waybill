@@ -57,12 +57,13 @@ jobs:
   sample:
     name: sample (compose)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: samples
     steps:
       - uses: actions/checkout@v5
-      - run: docker compose up --build --wait
+      - run: docker compose up --build --wait --wait-timeout 300
       - run: ./scripts/smoke.sh
       - run: ./scripts/broker-outage.sh
       - if: failure()

@@ -39,7 +39,7 @@ if (args is ["migrate"])
 }
 
 app.MapGet("/receipts", async (Guid? invoiceId, ReceiptsDbContext db, CancellationToken ct) =>
-    await db.Receipts.Where(r => invoiceId == null || r.InvoiceId == invoiceId).ToListAsync(ct));
+    await db.Receipts.Where(r => invoiceId == null || r.InvoiceId == invoiceId).OrderByDescending(r => r.IssuedAt).Take(100).ToListAsync(ct));
 
 app.MapHealthChecks("/health");
 

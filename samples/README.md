@@ -25,7 +25,9 @@ POST /invoices/{id}/payments
 
 ## Prerequisites
 
-- Docker with Compose v2 (`docker compose up --wait`). Ports 8080, 8081 and 15672 must be free.
+- Docker with Compose v2 (`docker compose up --wait`). Ports 8080, 8081 and 15672 must be free; if one is
+  taken, set `BILLING_PORT`, `RECEIPTS_PORT` or `RABBITMQ_UI_PORT` before `docker compose up` (the scripts read
+  `BILLING` and `RECEIPTS` for the URLs).
 - To run the scripts: Bash (on Windows, Git Bash or WSL) or PowerShell 7 (`pwsh`).
 - To run the sample's tests: the .NET 10 SDK.
 
@@ -39,7 +41,8 @@ docker compose up --build --wait
 ```
 
 The first build takes a minute or two. `--wait` returns once both services are healthy. Every command below runs from
-`samples/`, except the tests (repository root).
+`samples/`. In the logs, the migrate steps print one `fail:` line about `__EFMigrationsHistory` on a fresh database:
+that is EF Core checking for its history table before creating it, not an error.
 
 ## Publish the first event
 
@@ -49,7 +52,7 @@ Bash:
 id=$(curl -fsS -X POST localhost:8080/invoices -H 'Content-Type: application/json' \
   -d "{\"number\":\"INV-$RANDOM\",\"amount\":42.50}" | sed -E 's/.*"id":"([^"]+)".*/\1/')
 curl -fsS -X POST localhost:8080/invoices/$id/payments; echo
-sleep 2; curl -fsS "localhost:8081/receipts?invoiceId=$id"; echo
+for i in 1 2 3 4 5 6 7 8 9 10; do r=$(curl -fsS "localhost:8081/receipts?invoiceId=$id"); [ "$r" != "[]" ] && break; sleep 1; done; echo "$r"
 ```
 
 PowerShell:
@@ -57,19 +60,20 @@ PowerShell:
 ```
 $invoice = Invoke-RestMethod -Method Post http://localhost:8080/invoices -ContentType 'application/json' -Body (@{ number = "INV-$(Get-Random)"; amount = 42.50 } | ConvertTo-Json)
 Invoke-RestMethod -Method Post "http://localhost:8080/invoices/$($invoice.id)/payments"
-Start-Sleep 2; Invoke-RestMethod "http://localhost:8081/receipts?invoiceId=$($invoice.id)"
+foreach ($i in 1..10) { $receipt = Invoke-RestMethod "http://localhost:8081/receipts?invoiceId=$($invoice.id)"; if ($receipt) { break }; Start-Sleep 1 }; $receipt
 ```
 
-The payment returns the invoice with `"status":"Paid"`. The receipt is issued asynchronously, usually well within the
-two seconds the snippet waits: the event goes from the outbox to the broker to the consumer. Paying the same invoice
-again returns `409` and publishes nothing; so does creating an invoice with a number that already exists.
+The payment returns the invoice with `"status":"Paid"`. The receipt is issued asynchronously, usually within a second: the
+event goes from the outbox to the broker to the consumer, so the snippet polls for it. Paying the same invoice
+again, even concurrently, returns `409` and publishes nothing; so does creating an invoice with a number that already exists.
 
 What to look at:
 
 - **The events:** the RabbitMQ UI at http://localhost:15672 (user `waybill`, password `waybill`), queue `audit`,
   "Get messages". Waybill sets `message_id` (the id the inbox deduplicates on), `type` (the registered name),
   `content_type`, `timestamp`, and the headers `waybill-key` and, when the publishing code runs inside a trace,
-  `traceparent`. `x-dotnet-pub-seq-no` comes from the RabbitMQ client and `x-acquired-count` from the broker.
+  `traceparent`. `x-dotnet-pub-seq-no` comes from the RabbitMQ client; the broker adds
+  `x-acquired-count` once a message has been fetched.
 - **The outboxes** (one per service):
   ```
   docker compose exec postgres psql -U postgres -d billing -c "SELECT id, type, status, published_at FROM waybill.outbox"
@@ -114,7 +118,9 @@ Consumer side (Receipts):
 
 | File | What it shows |
 | --- | --- |
-| [`Receipts/Program.cs`](Receipts/Program.cs) | `AddWaybillInbox<T>` next to the outbox setup (the consumer also publishes) |
+| [`Receipts/Program.cs`](Receipts/Program.cs) | `AddWaybillInbox<T>` next to the outbox setup (the consumer also publishes). The inbox needs no model mapping |
+| [`Receipts/ReceiptsDbContext.cs`](Receipts/ReceiptsDbContext.cs) | `MapWaybillOutbox()` for the event it publishes |
+| [`Receipts/ReceiptsMessages.cs`](Receipts/ReceiptsMessages.cs) | The consumer's own copy of the `InvoicePaid` contract, and the message it publishes |
 | [`Receipts/InvoicePaidConsumer.cs`](Receipts/InvoicePaidConsumer.cs) | A plain RabbitMQ.Client consumer: read the Waybill message id, run the handler, ack after the commit |
 | [`Receipts/InvoicePaidHandler.cs`](Receipts/InvoicePaidHandler.cs) | `inbox.ProcessAsync(...)` around the handler, which also enqueues an event |
 
@@ -126,12 +132,14 @@ Things worth knowing:
   `modelBuilder.MapWaybillOutbox()` maps the table into `T`'s model. Forget the first and `IOutbox<T>` cannot be
   resolved; forget the second and the first `Enqueue` throws, saying to call `MapWaybillOutbox()`. Forget to register
   a message type and `Enqueue` throws, naming the type and `AddMessage`.
-- **`key` is optional.** It names the aggregate the message is about and travels as the `waybill-key` header. In this
-  version it does not change delivery: per-key ordering is planned for v0.2.
+- **`key` is optional.** It names the entity whose messages belong together (here, the invoice, also for the receipt
+  issued for it) and travels as the `waybill-key` header. In this version it does not change delivery: per-key ordering
+  is planned for v0.2.
 - **Inside `ProcessAsync`, do not call `SaveChanges`.** The `db` your handler receives is the scope's context, the same
   instance the injected `IOutbox<T>` enqueues into. When the handler returns, the inbox saves and commits once: the
   effect, the inbox record and any enqueued event together. If the handler throws, nothing commits and the broker
-  delivers the message again; the queue's `x-delivery-limit` then dead-letters it to `receipts.invoice-paid.dead`.
+  delivers the message again, after a growing delay (up to 30 s); past the queue's `x-delivery-limit` (20) it is
+  dead-lettered to `receipts.invoice-paid.dead`, which someone has to look at.
 - **Retention** deletes published outbox rows after 7 days and inbox rows after 30. It never deletes a message that
   was not published.
 
@@ -142,11 +150,9 @@ PostgreSQL, no broker. See [`Billing.Tests`](Billing.Tests/InvoicePaymentsTests.
 [`Receipts.Tests`](Receipts.Tests/InvoicePaidHandlerTests.cs). The fakes treat a successful `SaveChanges` as the commit
 and have no transactions, so rollback paths need a test against real PostgreSQL.
 
-From the repository root:
-
 ```
-dotnet test --project samples/Billing.Tests
-dotnet test --project samples/Receipts.Tests
+dotnet test --project Billing.Tests
+dotnet test --project Receipts.Tests
 ```
 
 ## Why the API does not migrate at startup
@@ -171,3 +177,5 @@ at boot from [`rabbitmq/definitions.json`](rabbitmq/definitions.json):
 ```
 docker compose down -v --rmi local
 ```
+
+This removes the sample's containers, volumes and images; the base images (postgres, rabbitmq, .NET) stay.

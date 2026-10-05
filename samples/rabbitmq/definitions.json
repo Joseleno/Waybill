@@ -16,9 +16,9 @@
     { "name": "receipts.dead-letter", "vhost": "/", "type": "fanout", "durable": true, "auto_delete": false, "internal": false, "arguments": {} }
   ],
   "queues": [
-    { "name": "receipts.invoice-paid", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum", "x-delivery-limit": 5, "x-dead-letter-exchange": "receipts.dead-letter" } },
-    { "name": "receipts.invoice-paid.dead", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum" } },
-    { "name": "audit", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum" } }
+    { "name": "receipts.invoice-paid", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum", "x-delivery-limit": 20, "x-dead-letter-exchange": "receipts.dead-letter" } },
+    { "name": "receipts.invoice-paid.dead", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum", "x-max-length": 10000 } },
+    { "name": "audit", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum", "x-max-length": 10000 } }
   ],
   "bindings": [
     { "source": "events", "vhost": "/", "destination": "receipts.invoice-paid", "destination_type": "queue", "routing_key": "billing.invoice-paid.v1", "arguments": {} },

@@ -26,6 +26,9 @@ pending() {
 
 health() { curl -sS "$BILLING/health" || true; }
 
+# Whatever happens below, leave the broker running.
+trap 'docker compose start rabbitmq >/dev/null 2>&1 || true' EXIT
+
 echo "== stopping the broker"
 docker compose stop rabbitmq >/dev/null
 
