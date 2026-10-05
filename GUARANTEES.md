@@ -1,11 +1,11 @@
 # Guarantees
 
-Waybill 0.1 makes three promises. Each one holds under the conditions listed with it, and each condition links to
-the test that proves it. A unit test ([`Garantias_CadaTesteCitadoExiste`](tests/Waybill.Tests.Unit/RastreabilidadeTests.cs))
+Waybill 0.1 makes three promises. Each one holds under the conditions listed with it, and each condition Waybill can
+test links to the test that proves it; the few it cannot test (database durability, the broker's consumer timeout) say so. A unit test ([`Garantias_CadaTesteCitadoExiste`](tests/Waybill.Tests.Unit/RastreabilidadeTests.cs))
 fails the build when a test cited here is renamed, moved or deleted. Anything not written here is not promised.
 
-The tests run on every pull request against PostgreSQL 15 and 18, with .NET 10, EF Core 10, Npgsql 10 and
-RabbitMQ.Client 7. The tests marked as long (a one-hour broker outage, eight dispatchers for ten minutes) run on a
+The unit and integration tests run on every pull request against PostgreSQL 15 and 18, and the short
+chaos tests against PostgreSQL 18, with .NET 10, EF Core 10, Npgsql 10 and RabbitMQ.Client 7. The tests marked as long (a one-hour broker outage, eight dispatchers for ten minutes) run on a
 schedule.
 
 ## G1. An event exists if, and only if, the transaction that enqueued it commits
@@ -80,7 +80,8 @@ that says what to change, instead of running a claim whose concurrency rules no 
 **The only ways into the DLQ.** Each one is a defect of the message, and the reason is recorded with it:
 - **A row written under a larger size limit than the current one.**
   [`G2_PayloadAcimaDoLimiteAtual_SoElaVaiParaDlq_NumLoteDeCem`](tests/Waybill.Tests.Integration/G2/G2_PayloadAcimaDoLimiteAtual_SoElaVaiParaDlq.cs)
-- **A message the broker refuses for its size.** It is isolated one message at a time on a fresh channel, so the
+- **A message the broker refuses when it is published alone** (a 406 that closes the channel, such as a message
+  above the broker's `max_message_size`). It is isolated one message at a time on a fresh channel, so the
   rest of the batch is published.
   [`G2_MensagemAcimaDoMaxMessageSizeDoBroker_IsoladaUmAUm_SoElaVaiParaDlq`](tests/Waybill.Tests.Integration/G2/RabbitMq/G2_MensagemAcimaDoMaxMessageSizeDoBroker_IsoladaUmAUm.cs)
 - **A message that cannot be expressed in AMQP.**
@@ -121,7 +122,8 @@ that says what to change, instead of running a claim whose concurrency rules no 
   [`G2_KillDuranteAPublicacao_VoltaAposLease_NuncaAntes`](tests/Waybill.Tests.Chaos/G2_KillDuranteAPublicacao_VoltaAposLease.cs)
 - **A late mark or hand-back** from an older claim is fenced out.
   [`G2_MesmaInstanciaReivindicaDeNovo_FenceBarraMarcacaoEDevolucaoAntigas`](tests/Waybill.Tests.Integration/G2/G2_MesmaInstanciaReivindicaDeNovo_FenceBarraMarcacaoAntiga.cs)
-- **A graceful shutdown** finishes the batch in flight and hands back only this instance's rows.
+- **A graceful shutdown** finishes the batch in flight and hands back only this instance's rows, as long as the
+  host's `ShutdownTimeout` (30 s by default) outlasts `PublishTimeout` (20 s by default); see OPERATIONS.md.
   [`G2_ShutdownGracioso_TerminaOLoteEmVooENadaFicaReivindicado`](tests/Waybill.Tests.Integration/G2/G2_ShutdownGracioso_DevolveOQueNaoPublicou.cs),
   [`G2_ShutdownGracioso_DevolveSoAsLinhasDesteOwnerIntactas`](tests/Waybill.Tests.Integration/G2/G2_ShutdownGracioso_DevolveOQueNaoPublicou.cs)
 

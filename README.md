@@ -6,7 +6,7 @@ An event you enqueue in the same transaction as your data reaches the broker. Th
 database is applied once, even when the message is delivered more than once. Waybill is not a messaging framework:
 you keep consuming with whatever broker client you already use.
 
-**Status: alpha (0.1.0-alpha).** The API can still change before 1.0. Every promise below has a concurrency test
+**Status: alpha (0.1.0-alpha).** The API can still change before 1.0. Every promise below has a test
 behind it, listed in [GUARANTEES.md](https://github.com/Joseleno/Waybill/blob/main/GUARANTEES.md); anything not listed
 there is not promised.
 
@@ -73,7 +73,7 @@ nothing when the database already has any table.
 - **Waybill does not create topology.** Declare the exchange (a topic exchange fits, since the routing key is the
   registered name) and bind your queues yourself, before you publish. Until the exchange exists, messages wait in the
   outbox without spending attempts. Once it exists, a message no queue is bound to comes back unroutable
-  (`basic.return`); after `MaxReturns` returns (5 by default, about one per polling interval) it goes to the outbox DLQ
+  (`basic.return`); after `MaxReturns` returns (5 by default) it goes to the outbox DLQ
   with the reason `312 NO_ROUTE`. [OPERATIONS.md](https://github.com/Joseleno/Waybill/blob/main/docs/OPERATIONS.md)
   shows how to send it back once the binding exists.
 
@@ -164,7 +164,7 @@ These remain with Waybill configured correctly, because they are outside the rea
 | An event with wrong content | A bug in the event is published faithfully | A compensating event and contract tests |
 | A contract change that breaks consumers | Waybill moves bytes; it does not know the schema | Versioned message names and contract tests |
 | A broker down for hours | The outbox grows and delivery waits; nothing goes to the DLQ, but the disk grows | Alert on the age of the oldest pending message |
-| A slow consumer | Waybill measures the delay; it does not scale the consumer | More consumers, partitioning |
+| A slow consumer | Waybill measures how long messages wait before publication, not the consumer's lag (that is the queue depth in the broker), and it does not scale the consumer | More consumers, partitioning |
 | Writes outside the database (Redis, another database, files) | Atomicity covers only the `DbContext`'s transaction | Bring the write into the same database, or accept the dual write there |
 
 ## Operating Waybill

@@ -40,7 +40,7 @@ First release. What each guarantee covers, and the test that proves it, is in [G
 - Retention (`AddWaybillRetention<TContext>()`, `WaybillRetentionOptions`): deletes published outbox rows past `OutboxRetention` (7 days, from publication) and inbox rows past `InboxRetention` (30 days, from processing), in batches with `FOR UPDATE SKIP LOCKED`. Pending, claimed and dead-lettered rows are never deleted.
 - Gauge `waybill.outbox.oldest_pending.age` (meter `Waybill`, seconds), sampled every `MetricsInterval` (15 s) on the database clock.
 - Health check `AddHealthChecks().AddWaybillDispatcherCheck()`: `Degraded` while the broker is unreachable, `Unhealthy` when the loop stops or stalls, or the database fails three cycles in a row.
-- [OPERATIONS.md](docs/OPERATIONS.md): defaults, what to monitor, autovacuum and how to size the inbox retention.
+- [OPERATIONS.md](docs/OPERATIONS.md): defaults, shutdown, what to monitor, how to send dead-lettered messages back, isolation level, autovacuum and how to size the inbox retention.
 
 #### Testing (`Waybill.Testing`)
 
