@@ -30,7 +30,9 @@ public sealed class BillingDbContext(DbContextOptions<BillingDbContext> options)
             invoice.Property(i => i.Id).HasColumnName("id");
             invoice.Property(i => i.Number).HasColumnName("number");
             invoice.Property(i => i.Amount).HasColumnName("amount").HasPrecision(12, 2);
-            invoice.Property(i => i.Status).HasColumnName("status").HasConversion<string>();
+            // Concurrency token: a payment updates only an invoice still in the status it read, so two concurrent
+            // payments cannot both succeed (and both publish).
+            invoice.Property(i => i.Status).HasColumnName("status").HasConversion<string>().IsConcurrencyToken();
             invoice.Property(i => i.PaidAt).HasColumnName("paid_at");
             invoice.HasIndex(i => i.Number).IsUnique();
         });

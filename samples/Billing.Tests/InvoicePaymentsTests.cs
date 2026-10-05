@@ -7,14 +7,17 @@ namespace Billing.Tests;
 // The use case tested the way a user of Waybill would: an in-memory DbContext and FakeOutbox, no PostgreSQL, no broker.
 public sealed class InvoicePaymentsTests : IDisposable
 {
-    private readonly BillingDbContext _db = new(new DbContextOptionsBuilder<BillingDbContext>()
+    private readonly DbContextOptions<BillingDbContext> _dbOptions = new DbContextOptionsBuilder<BillingDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString())
-        .Options);
+        .Options;
+
+    private readonly BillingDbContext _db;
 
     private readonly FakeOutbox<BillingDbContext> _outbox;
 
     public InvoicePaymentsTests()
     {
+        _db = new BillingDbContext(_dbOptions);
         var options = new WaybillOptions();
         BillingMessages.Register(options);
         _outbox = new FakeOutbox<BillingDbContext>(_db, options);
@@ -45,6 +48,26 @@ public sealed class InvoicePaymentsTests : IDisposable
 
         Assert.Equal(PaymentResult.AlreadyPaid, second);
         Assert.Single(_outbox.Saved);
+    }
+
+    // Two concurrent payments: the second request read the invoice while it was still open. The status is a
+    // concurrency token, so its update matches no row, nothing it enqueued is saved, and it reports AlreadyPaid.
+    [Fact]
+    public async Task Pay_ConcurrentPayment_OnlyOneEventIsSaved()
+    {
+        var invoice = await OpenInvoiceAsync(10m);
+        var options = new WaybillOptions();
+        BillingMessages.Register(options);
+        await using var secondDb = new BillingDbContext(_dbOptions);
+        using var secondOutbox = new FakeOutbox<BillingDbContext>(secondDb, options);
+        await secondDb.Invoices.FindAsync([invoice.Id], TestContext.Current.CancellationToken); // read before the first pays
+
+        var first = await new InvoicePayments(_db, _outbox).PayAsync(invoice.Id, TestContext.Current.CancellationToken);
+        var second = await new InvoicePayments(secondDb, secondOutbox).PayAsync(invoice.Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal((PaymentResult.Paid, PaymentResult.AlreadyPaid), (first, second));
+        Assert.Single(_outbox.Saved);
+        secondOutbox.ShouldBeEmpty();
     }
 
     [Fact]

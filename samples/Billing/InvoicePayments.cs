@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Waybill.EntityFrameworkCore;
 
 namespace Billing;
@@ -26,7 +27,16 @@ public sealed class InvoicePayments(BillingDbContext db, IOutbox<BillingDbContex
         // The event joins the SaveChanges below: it exists if and only if the payment commits. The key names the
         // aggregate; it travels with the message (header `waybill-key`).
         outbox.Enqueue(new InvoicePaid(invoice.Id, invoice.Number, invoice.Amount, invoice.PaidAt.Value), key: invoice.Id.ToString());
-        await db.SaveChangesAsync(cancellationToken);
-        return PaymentResult.Paid;
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+            return PaymentResult.Paid;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Another request paid it first. Nothing was written; drop this attempt, the enqueued event included.
+            db.ChangeTracker.Clear();
+            return PaymentResult.AlreadyPaid;
+        }
     }
 }
