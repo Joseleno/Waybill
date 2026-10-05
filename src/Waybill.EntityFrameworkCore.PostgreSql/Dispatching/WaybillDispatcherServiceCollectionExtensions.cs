@@ -1,10 +1,11 @@
 using System.Diagnostics.Metrics;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Waybill.EntityFrameworkCore.Dispatching;
+using Waybill;
 
-namespace Waybill.EntityFrameworkCore.Dispatching;
+namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>Registers the outbox dispatcher.</summary>
 public static class WaybillDispatcherServiceCollectionExtensions
@@ -40,14 +41,4 @@ public static class WaybillDispatcherServiceCollectionExtensions
         services.AddHostedService<WaybillMetricsService>();
         return services;
     }
-}
-
-/// <summary>The dispatcher's own data source, owned (and disposed) by the container.</summary>
-internal sealed class DispatcherDataSource(NpgsqlDataSource value) : IAsyncDisposable, IDisposable
-{
-    public NpgsqlDataSource Value { get; } = value;
-
-    public ValueTask DisposeAsync() => Value.DisposeAsync();
-
-    public void Dispose() => Value.Dispose();
 }

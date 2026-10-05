@@ -1,6 +1,6 @@
-using Microsoft.EntityFrameworkCore;
+using Waybill.EntityFrameworkCore;
 
-namespace Waybill.EntityFrameworkCore;
+namespace Microsoft.EntityFrameworkCore;
 
 /// <summary>Maps Waybill's outbox into the application's model.</summary>
 public static class WaybillModelBuilderExtensions

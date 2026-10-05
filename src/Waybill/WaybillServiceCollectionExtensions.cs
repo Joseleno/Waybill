@@ -1,6 +1,6 @@
-using Microsoft.Extensions.DependencyInjection;
+using Waybill;
 
-namespace Waybill;
+namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>Registers Waybill's core configuration.</summary>
 public static class WaybillServiceCollectionExtensions

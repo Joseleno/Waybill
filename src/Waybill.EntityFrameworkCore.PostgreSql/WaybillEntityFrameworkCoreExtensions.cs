@@ -1,8 +1,8 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Waybill.EntityFrameworkCore;
 
-namespace Waybill.EntityFrameworkCore;
+namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>Wires Waybill's outbox into an application's <see cref="DbContext"/>.</summary>
 public static class WaybillEntityFrameworkCoreExtensions

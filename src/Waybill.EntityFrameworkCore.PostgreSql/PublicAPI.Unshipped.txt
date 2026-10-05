@@ -14,20 +14,20 @@ Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.PollingInterval
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.PublishTimeout.get -> System.TimeSpan
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.PublishTimeout.set -> void
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.WaybillDispatcherOptions() -> void
-Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherServiceCollectionExtensions
+Microsoft.Extensions.DependencyInjection.WaybillDispatcherServiceCollectionExtensions
 Waybill.EntityFrameworkCore.IInbox<TContext>
 Waybill.EntityFrameworkCore.IInbox<TContext>.ProcessAsync(string! handler, System.Guid messageId, System.Func<TContext!, System.Threading.CancellationToken, System.Threading.Tasks.Task!>! handle, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Waybill.EntityFrameworkCore.InboxResult>!
 Waybill.EntityFrameworkCore.IOutbox<TContext>
 Waybill.EntityFrameworkCore.InboxResult
 Waybill.EntityFrameworkCore.InboxResult.Duplicate = 2 -> Waybill.EntityFrameworkCore.InboxResult
 Waybill.EntityFrameworkCore.InboxResult.Processed = 1 -> Waybill.EntityFrameworkCore.InboxResult
-Waybill.EntityFrameworkCore.WaybillEntityFrameworkCoreExtensions
-Waybill.EntityFrameworkCore.WaybillModelBuilderExtensions
+Microsoft.Extensions.DependencyInjection.WaybillEntityFrameworkCoreExtensions
+Microsoft.EntityFrameworkCore.WaybillModelBuilderExtensions
 Waybill.EntityFrameworkCore.WaybillSchema
-static Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherServiceCollectionExtensions.AddWaybillDispatcher(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
-static Waybill.EntityFrameworkCore.WaybillEntityFrameworkCoreExtensions.AddWaybillInbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
-static Waybill.EntityFrameworkCore.WaybillEntityFrameworkCoreExtensions.AddWaybillOutbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
-static Waybill.EntityFrameworkCore.WaybillModelBuilderExtensions.MapWaybillOutbox(this Microsoft.EntityFrameworkCore.ModelBuilder! modelBuilder) -> Microsoft.EntityFrameworkCore.ModelBuilder!
+static Microsoft.Extensions.DependencyInjection.WaybillDispatcherServiceCollectionExtensions.AddWaybillDispatcher(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static Microsoft.Extensions.DependencyInjection.WaybillEntityFrameworkCoreExtensions.AddWaybillInbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static Microsoft.Extensions.DependencyInjection.WaybillEntityFrameworkCoreExtensions.AddWaybillOutbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static Microsoft.EntityFrameworkCore.WaybillModelBuilderExtensions.MapWaybillOutbox(this Microsoft.EntityFrameworkCore.ModelBuilder! modelBuilder) -> Microsoft.EntityFrameworkCore.ModelBuilder!
 static Waybill.EntityFrameworkCore.WaybillSchema.MigrateAsync(string! connectionString, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions
 Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.BatchSize.get -> int
@@ -41,9 +41,9 @@ Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.Interval.set -> vo
 Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.OutboxRetention.get -> System.TimeSpan
 Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.OutboxRetention.set -> void
 Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.WaybillRetentionOptions() -> void
-Waybill.EntityFrameworkCore.Retention.WaybillRetentionServiceCollectionExtensions
-static Waybill.EntityFrameworkCore.Retention.WaybillRetentionServiceCollectionExtensions.AddWaybillRetention(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Microsoft.Extensions.DependencyInjection.WaybillRetentionServiceCollectionExtensions
+static Microsoft.Extensions.DependencyInjection.WaybillRetentionServiceCollectionExtensions.AddWaybillRetention(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MetricsInterval.get -> System.TimeSpan
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MetricsInterval.set -> void
-Waybill.EntityFrameworkCore.Dispatching.WaybillHealthChecksBuilderExtensions
-static Waybill.EntityFrameworkCore.Dispatching.WaybillHealthChecksBuilderExtensions.AddWaybillDispatcherCheck(this Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder! builder, string! name = "waybill-dispatcher", System.Collections.Generic.IEnumerable<string!>? tags = null) -> Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder!
+Microsoft.Extensions.DependencyInjection.WaybillHealthChecksBuilderExtensions
+static Microsoft.Extensions.DependencyInjection.WaybillHealthChecksBuilderExtensions.AddWaybillDispatcherCheck(this Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder! builder, string! name = "waybill-dispatcher", System.Collections.Generic.IEnumerable<string!>? tags = null) -> Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder!

@@ -1,9 +1,9 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Waybill.EntityFrameworkCore;
+using Waybill.Testing;
 
-namespace Waybill.Testing;
+namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>Swaps the real outbox for <see cref="FakeOutbox{TContext}"/> in a test container.</summary>
 public static class WaybillTestingServiceCollectionExtensions

@@ -34,11 +34,11 @@ Waybill.Testing.FakeOutboxMessage.Name.get -> string!
 Waybill.Testing.FakeOutboxMessage.Name.init -> void
 Waybill.Testing.WaybillAssertionException
 Waybill.Testing.WaybillAssertionException.WaybillAssertionException(string! message) -> void
-Waybill.Testing.WaybillTestingServiceCollectionExtensions
+Microsoft.Extensions.DependencyInjection.WaybillTestingServiceCollectionExtensions
 override Waybill.Testing.FakeOutboxMessage.Equals(object? obj) -> bool
 override Waybill.Testing.FakeOutboxMessage.GetHashCode() -> int
 override Waybill.Testing.FakeOutboxMessage.ToString() -> string!
 static Waybill.Testing.FakeOutboxMessage.operator !=(Waybill.Testing.FakeOutboxMessage? left, Waybill.Testing.FakeOutboxMessage? right) -> bool
 static Waybill.Testing.FakeOutboxMessage.operator ==(Waybill.Testing.FakeOutboxMessage? left, Waybill.Testing.FakeOutboxMessage? right) -> bool
-static Waybill.Testing.WaybillTestingServiceCollectionExtensions.AddFakeWaybillInbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
-static Waybill.Testing.WaybillTestingServiceCollectionExtensions.AddFakeWaybillOutbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static Microsoft.Extensions.DependencyInjection.WaybillTestingServiceCollectionExtensions.AddFakeWaybillInbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static Microsoft.Extensions.DependencyInjection.WaybillTestingServiceCollectionExtensions.AddFakeWaybillOutbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!

@@ -1,7 +1,8 @@
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Waybill.RabbitMQ;
+using Waybill;
 
-namespace Waybill.RabbitMQ;
+namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>Registers the RabbitMQ transport.</summary>
 public static class WaybillRabbitMqServiceCollectionExtensions

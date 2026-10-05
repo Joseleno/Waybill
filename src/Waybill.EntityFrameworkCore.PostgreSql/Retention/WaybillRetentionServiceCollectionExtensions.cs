@@ -1,9 +1,9 @@
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Waybill.EntityFrameworkCore.Retention;
 
-namespace Waybill.EntityFrameworkCore.Retention;
+namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>Registers retention cleanup.</summary>
 public static class WaybillRetentionServiceCollectionExtensions
@@ -34,14 +34,4 @@ public static class WaybillRetentionServiceCollectionExtensions
         services.AddHostedService<WaybillRetentionService>();
         return services;
     }
-}
-
-/// <summary>Retention's own data source, owned (and disposed) by the container.</summary>
-internal sealed class RetentionDataSource(NpgsqlDataSource value) : IAsyncDisposable, IDisposable
-{
-    public NpgsqlDataSource Value { get; } = value;
-
-    public ValueTask DisposeAsync() => Value.DisposeAsync();
-
-    public void Dispose() => Value.Dispose();
 }

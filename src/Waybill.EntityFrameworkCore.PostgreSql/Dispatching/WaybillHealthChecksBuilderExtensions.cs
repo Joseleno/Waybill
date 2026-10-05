@@ -1,8 +1,8 @@
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
+using Waybill.EntityFrameworkCore.Dispatching;
 
-namespace Waybill.EntityFrameworkCore.Dispatching;
+namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>Registers the dispatcher's health check.</summary>
 public static class WaybillHealthChecksBuilderExtensions
