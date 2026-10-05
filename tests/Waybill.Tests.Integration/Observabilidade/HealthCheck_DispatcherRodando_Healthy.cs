@@ -3,13 +3,13 @@ using Waybill.Tests.Integration.G2;
 
 namespace Waybill.Tests.Integration.Observabilidade;
 
-// AddHealthChecks().AddWaybillDispatcher(): with the broker confirming, the dispatcher reports Healthy and carries
-// the age of the oldest pending message in the entry's data.
+// AddHealthChecks().AddWaybillDispatcher(): with the broker confirming, the dispatcher reports Healthy and the entry
+// carries the oldest_pending_age_seconds field (its value is proven by the Metrica_* scenarios).
 [Collection(PostgresCollection.Name)]
 public sealed class HealthCheck_DispatcherRodando_Healthy(PostgresFixture postgres)
 {
     [Fact]
-    public async Task HealthCheck_BrokerConfirmando_HealthyComAIdadeNosDados()
+    public async Task HealthCheck_BrokerConfirmando_HealthyComOCampoDeIdade()
     {
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);

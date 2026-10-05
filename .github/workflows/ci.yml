@@ -49,8 +49,7 @@ jobs:
         with:
           global-json-file: global.json
       - run: dotnet build -c Release
-      # Exit code 8 = zero tests ran; tolerated until stage 3 adds the first chaos scenarios.
-      - run: dotnet test --project tests/Waybill.Tests.Chaos -c Release --no-build --filter-not-trait "Category=Long" --ignore-exit-code 8
+      - run: dotnet test --project tests/Waybill.Tests.Chaos -c Release --no-build --filter-not-trait "Category=Long"
 
   pack:
     needs: [test, chaos]

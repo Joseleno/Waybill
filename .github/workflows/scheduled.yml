@@ -31,9 +31,8 @@ jobs:
         with:
           global-json-file: global.json
       - run: dotnet build -c Release
-      # The long load has its own job below. Exit code 8 = zero tests ran in a project.
-      - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build --filter-trait "Category=Long" --filter-not-class "*CargaLonga*" --ignore-exit-code 8
-      - run: dotnet test --project tests/Waybill.Tests.Chaos -c Release --no-build --filter-trait "Category=Long" --ignore-exit-code 8
+      # The only long integration scenario is the long load, which has its own job below.
+      - run: dotnet test --project tests/Waybill.Tests.Chaos -c Release --no-build --filter-trait "Category=Long"
 
   # GitHub-hosted runners cap a job at 6 h, so the long load runs 5 h in a job of its own (ADR 0004);
   # 24 h would need a self-hosted runner.
