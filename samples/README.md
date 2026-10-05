@@ -94,7 +94,7 @@ The script:
 | --- | --- |
 | [`Billing/Program.cs`](Billing/Program.cs) | The whole Waybill setup: message registry, outbox, RabbitMQ transport, dispatcher, retention, health check |
 | [`Billing/BillingMessages.cs`](Billing/BillingMessages.cs) | Message registration with a stable, versioned name and a source-generated `JsonTypeInfo` |
-| [`Billing/BillingDbContext.cs`](Billing/BillingDbContext.cs) | `modelBuilder.AddWaybillOutbox()`: maps the outbox so `Enqueue` joins this context's `SaveChanges` |
+| [`Billing/BillingDbContext.cs`](Billing/BillingDbContext.cs) | `modelBuilder.MapWaybillOutbox()`: maps the outbox so `Enqueue` joins this context's `SaveChanges` |
 | [`Billing/InvoicePayments.cs`](Billing/InvoicePayments.cs) | `outbox.Enqueue(...)` next to the state change, one `SaveChanges` |
 | [`Receipts/InvoicePaidConsumer.cs`](Receipts/InvoicePaidConsumer.cs) | A plain RabbitMQ.Client consumer: read the Waybill message id, run the handler, ack after the commit |
 | [`Receipts/InvoicePaidHandler.cs`](Receipts/InvoicePaidHandler.cs) | `inbox.ProcessAsync(...)` around the handler, which also enqueues an event |

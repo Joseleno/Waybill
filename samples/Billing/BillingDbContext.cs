@@ -37,7 +37,7 @@ public sealed class BillingDbContext(DbContextOptions<BillingDbContext> options)
 
         // Maps waybill.outbox so Enqueue joins this context's SaveChanges; the table itself comes from
         // WaybillSchema.MigrateAsync, not from this application's migrations.
-        modelBuilder.AddWaybillOutbox();
+        modelBuilder.MapWaybillOutbox();
     }
 }
 

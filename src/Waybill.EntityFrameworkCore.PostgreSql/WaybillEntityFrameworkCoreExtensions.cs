@@ -9,7 +9,7 @@ public static class WaybillEntityFrameworkCoreExtensions
 {
     /// <summary>
     /// Registers <see cref="IOutbox{TContext}"/> as a scoped service bound to the scope's <typeparamref name="TContext"/>,
-    /// which must map the outbox with <c>modelBuilder.AddWaybillOutbox()</c>. Requires <c>services.AddWaybill(...)</c>.
+    /// which must map the outbox with <c>modelBuilder.MapWaybillOutbox()</c>. Requires <c>services.AddWaybill(...)</c>.
     /// </summary>
     public static IServiceCollection AddWaybillOutbox<TContext>(this IServiceCollection services)
         where TContext : DbContext

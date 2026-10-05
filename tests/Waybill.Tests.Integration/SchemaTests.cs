@@ -67,7 +67,7 @@ public sealed class SchemaTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Configuracao_ContextoSemAddWaybillOutbox_FalhaNoEnqueue()
+    public async Task Configuracao_ContextoSemMapWaybillOutbox_FalhaNoEnqueue()
     {
         var connectionString = await postgres.CreateDatabaseAsync();
         var services = new ServiceCollection()
@@ -84,7 +84,7 @@ public sealed class SchemaTests(PostgresFixture postgres)
         var outbox = scope.ServiceProvider.GetRequiredService<IOutbox<UnmappedDbContext>>();
 
         var error = Assert.Throws<InvalidOperationException>(() => outbox.Enqueue(new InvoicePaid(Guid.NewGuid(), 1m)));
-        Assert.Contains("AddWaybillOutbox()", error.Message);
+        Assert.Contains("MapWaybillOutbox()", error.Message);
     }
 
     // Unsupported by the contract, and dangerous: the outbox row could commit apart from the data.

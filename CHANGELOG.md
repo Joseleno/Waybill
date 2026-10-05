@@ -25,7 +25,7 @@ All notable changes to this project are documented here. The format follows
 
 - `IOutbox<TContext>.Enqueue(...)`: writes messages to the outbox in the same `SaveChanges` and transaction as the application's data. The message id (UUIDv7), type registration, serialization and size are fixed and checked at enqueue time.
 - Message registry with stable names and source-generated `JsonTypeInfo` (`AddMessage("billing.invoice-paid.v1", ...)`); mandatory `MaxPayloadBytes`.
-- Package-owned `waybill` schema (`outbox`, `inbox`) shipped as EF Core migrations and applied by `WaybillSchema.MigrateAsync`; the application maps the outbox with `AddWaybillOutbox()`. Outbox records join the `DbContext` change tracker at enqueue time, so the EF unit of work is the single source of truth.
+- Package-owned `waybill` schema (`outbox`, `inbox`) shipped as EF Core migrations and applied by `WaybillSchema.MigrateAsync`; the application maps the outbox with `modelBuilder.MapWaybillOutbox()`. Outbox records join the `DbContext` change tracker at enqueue time, so the EF unit of work is the single source of truth.
 - `Waybill.Testing` package: `FakeOutbox<TContext>` with assertions, checked for equivalence against the real outbox.
 - ADR 0002: enqueue API, package-owned schema, `key_hash` instead of a stored partition, type registry.
 - Project skeleton: `Waybill`, `Waybill.EntityFrameworkCore.PostgreSql` and `Waybill.RabbitMQ` packages targeting .NET 10, with unit, integration and chaos test projects.

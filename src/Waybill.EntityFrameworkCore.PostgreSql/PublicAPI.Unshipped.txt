@@ -27,7 +27,7 @@ Waybill.EntityFrameworkCore.WaybillSchema
 static Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherServiceCollectionExtensions.AddWaybillDispatcher(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static Waybill.EntityFrameworkCore.WaybillEntityFrameworkCoreExtensions.AddWaybillInbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static Waybill.EntityFrameworkCore.WaybillEntityFrameworkCoreExtensions.AddWaybillOutbox<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
-static Waybill.EntityFrameworkCore.WaybillModelBuilderExtensions.AddWaybillOutbox(this Microsoft.EntityFrameworkCore.ModelBuilder! modelBuilder) -> Microsoft.EntityFrameworkCore.ModelBuilder!
+static Waybill.EntityFrameworkCore.WaybillModelBuilderExtensions.MapWaybillOutbox(this Microsoft.EntityFrameworkCore.ModelBuilder! modelBuilder) -> Microsoft.EntityFrameworkCore.ModelBuilder!
 static Waybill.EntityFrameworkCore.WaybillSchema.MigrateAsync(string! connectionString, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions
 Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions.BatchSize.get -> int

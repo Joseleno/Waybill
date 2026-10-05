@@ -10,7 +10,7 @@ public static class WaybillModelBuilderExtensions
     /// transaction, as the application's data. The table is excluded from the application's migrations: Waybill
     /// ships and applies its own (<see cref="WaybillSchema.MigrateAsync"/>). Call it from <c>OnModelCreating</c>.
     /// </summary>
-    public static ModelBuilder AddWaybillOutbox(this ModelBuilder modelBuilder)
+    public static ModelBuilder MapWaybillOutbox(this ModelBuilder modelBuilder)
     {
         ArgumentNullException.ThrowIfNull(modelBuilder);
 

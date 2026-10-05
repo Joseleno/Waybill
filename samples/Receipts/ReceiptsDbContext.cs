@@ -27,7 +27,7 @@ public sealed class ReceiptsDbContext(DbContextOptions<ReceiptsDbContext> option
         });
 
         // This service also publishes (receipts.receipt-issued.v1), so it maps the outbox too.
-        modelBuilder.AddWaybillOutbox();
+        modelBuilder.MapWaybillOutbox();
     }
 }
 
