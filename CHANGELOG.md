@@ -40,3 +40,4 @@ All notable changes to this project are documented here. The format follows
   - `AddHealthChecks().AddWaybillDispatcher()` is now `AddWaybillDispatcherCheck()`.
   - `modelBuilder.AddWaybillOutbox()` is now `modelBuilder.MapWaybillOutbox()`.
   - The `AddWaybill*` registration methods live in `Microsoft.Extensions.DependencyInjection`, and `MapWaybillOutbox` in `Microsoft.EntityFrameworkCore`, so setup needs no `using Waybill...`.
+- `FakeOutbox<TContext>` follows the context's change tracker like the real outbox: a message discarded by `ChangeTracker.Clear()` is neither pending nor saved (it used to stay pending and fail the test at dispose).
