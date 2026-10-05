@@ -37,7 +37,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             invoice.ToTable("invoices");
             invoice.HasIndex(i => i.Number).IsUnique();
         });
-        modelBuilder.AddWaybillOutbox();
+        modelBuilder.MapWaybillOutbox();
     }
 }
 
@@ -54,7 +54,7 @@ public sealed class AuditDbContext(DbContextOptions<AuditDbContext> options) : D
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<AuditEntry>().ToTable("audit_entries");
-        modelBuilder.AddWaybillOutbox();
+        modelBuilder.MapWaybillOutbox();
     }
 }
 

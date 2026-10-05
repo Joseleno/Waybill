@@ -13,8 +13,9 @@ public sealed record FakeOutboxMessage(Guid Id, string Name, string? Key, object
 
 /// <summary>
 /// In-memory <see cref="IOutbox{TContext}"/> for testing application code without PostgreSQL. It validates
-/// messages exactly like the real outbox (registered type, size), and a message counts as saved after the next
-/// successful <c>SaveChanges</c> of the same context. Disposing it with messages still pending fails the test.
+/// messages exactly like the real outbox (registered type, size) and, like it, adds each message to the context's change
+/// tracker: a message counts as saved after the next successful <c>SaveChanges</c>, stays pending after a failed one,
+/// and is discarded by <c>ChangeTracker.Clear()</c>. Disposing it with messages still pending fails the test.
 /// </summary>
 /// <remarks>
 /// Limit: the fake treats a successful <c>SaveChanges</c> as the commit. It does not observe the commit or the
@@ -25,7 +26,7 @@ public sealed class FakeOutbox<TContext> : IOutbox<TContext>, IDisposable
 {
     private readonly TContext _context;
     private readonly WaybillOptions _options;
-    private readonly List<FakeOutboxMessage> _pending = [];
+    private readonly List<(FakeOutboxMessage Message, OutboxRecord Record)> _tracked = [];
     private readonly List<FakeOutboxMessage> _saved = [];
     private bool _mappingVerified;
 
@@ -46,7 +47,7 @@ public sealed class FakeOutbox<TContext> : IOutbox<TContext>, IDisposable
     }
 
     /// <summary>Messages enqueued and not yet saved.</summary>
-    public IReadOnlyList<FakeOutboxMessage> Pending => _pending;
+    public IReadOnlyList<FakeOutboxMessage> Pending => [.. _tracked.Where(t => IsPending(t.Record)).Select(t => t.Message)];
 
     /// <summary>Messages saved by a successful <c>SaveChanges</c>, in enqueue order.</summary>
     public IReadOnlyList<FakeOutboxMessage> Saved => _saved;
@@ -59,7 +60,9 @@ public sealed class FakeOutbox<TContext> : IOutbox<TContext>, IDisposable
         // without a transaction), so a suite that passes with the fake does not fail in production at the first Enqueue.
         DbContextOutbox<TContext>.Verify(_context, ref _mappingVerified);
         var envelope = EnvelopeFactory.Create(_options, message, key, correlationId, tenantId);
-        _pending.Add(new FakeOutboxMessage(envelope.Id, envelope.Name, envelope.Key, message));
+        var record = OutboxRecord.From(envelope);
+        _context.Add(record); // the same unit of work as the real outbox: saved, kept or discarded with the context's data
+        _tracked.Add((new FakeOutboxMessage(envelope.Id, envelope.Name, envelope.Key, message), record));
         return envelope.Id;
     }
 
@@ -87,9 +90,10 @@ public sealed class FakeOutbox<TContext> : IOutbox<TContext>, IDisposable
     /// <exception cref="WaybillAssertionException">Some message is still pending.</exception>
     public void ShouldHaveNoPending()
     {
-        if (_pending.Count > 0)
+        var pending = Pending;
+        if (pending.Count > 0)
             throw new WaybillAssertionException(
-                $"{_pending.Count} message(s) were enqueued on {typeof(TContext).Name} but never saved: SaveChanges was not called, or it failed. {Describe()}");
+                $"{pending.Count} message(s) were enqueued on {typeof(TContext).Name} but never saved: SaveChanges was not called, or it failed. {Describe()}");
     }
 
     /// <summary>Stops observing the context and fails if any message is still pending.</summary>
@@ -102,12 +106,18 @@ public sealed class FakeOutbox<TContext> : IOutbox<TContext>, IDisposable
 
     private void OnSavedChanges(object? sender, SavedChangesEventArgs e)
     {
-        _saved.AddRange(_pending);
-        _pending.Clear();
+        // Inserted: saved. Still Added: kept for the next SaveChanges. Detached (ChangeTracker.Clear): discarded.
+        foreach (var tracked in _tracked.Where(t => _context.Entry(t.Record).State == EntityState.Unchanged).ToList())
+        {
+            _saved.Add(tracked.Message);
+            _tracked.Remove(tracked);
+        }
     }
 
+    private bool IsPending(OutboxRecord record) => _context.Entry(record).State == EntityState.Added;
+
     private string Describe() =>
-        $"Saved: [{string.Join(", ", _saved.Select(m => m.Name))}]. Pending: [{string.Join(", ", _pending.Select(m => m.Name))}].";
+        $"Saved: [{string.Join(", ", _saved.Select(m => m.Name))}]. Pending: [{string.Join(", ", Pending.Select(m => m.Name))}].";
 }
 
 /// <summary>Thrown by <see cref="FakeOutbox{TContext}"/> assertions; independent of the test framework.</summary>

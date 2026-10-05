@@ -1,14 +1,35 @@
+using Microsoft.EntityFrameworkCore;
 using System.Diagnostics.Metrics;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Waybill.EntityFrameworkCore;
+using Waybill.EntityFrameworkCore.Dispatching;
+using Waybill;
 
-namespace Waybill.EntityFrameworkCore.Dispatching;
+namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>Registers the outbox dispatcher.</summary>
 public static class WaybillDispatcherServiceCollectionExtensions
 {
+    /// <summary>
+    /// Runs the outbox dispatcher for the database of <typeparamref name="TContext"/>: the connection string is read from
+    /// the registered context at startup, unless <paramref name="configure"/> sets one. With
+    /// <c>UseNpgsql(NpgsqlDataSource)</c> Npgsql leaves the password out of the context's connection string: set it then. Requires
+    /// <c>services.AddWaybill(...)</c> and an <see cref="ITransport"/>. Options are validated at startup.
+    /// </summary>
+    public static IServiceCollection AddWaybillDispatcher<TContext>(this IServiceCollection services, Action<WaybillDispatcherOptions>? configure = null)
+        where TContext : DbContext
+    {
+        services.AddWaybillDispatcher(configure ?? (_ => { }));
+        services.AddOptions<WaybillDispatcherOptions>().PostConfigure<IServiceScopeFactory>((options, scopes) =>
+        {
+            if (string.IsNullOrWhiteSpace(options.ConnectionString))
+                options.ConnectionString = DbContextConnectionString.Of<TContext>(scopes);
+        });
+        return services;
+    }
+
     /// <summary>
     /// Runs the outbox dispatcher as a hosted service in this process. Requires <c>services.AddWaybill(...)</c> and an
     /// <see cref="ITransport"/> (for example <c>services.AddWaybillRabbitMQ(...)</c>). Options are validated at startup.
@@ -40,14 +61,4 @@ public static class WaybillDispatcherServiceCollectionExtensions
         services.AddHostedService<WaybillMetricsService>();
         return services;
     }
-}
-
-/// <summary>The dispatcher's own data source, owned (and disposed) by the container.</summary>
-internal sealed class DispatcherDataSource(NpgsqlDataSource value) : IAsyncDisposable, IDisposable
-{
-    public NpgsqlDataSource Value { get; } = value;
-
-    public ValueTask DisposeAsync() => Value.DisposeAsync();
-
-    public void Dispose() => Value.Dispose();
 }

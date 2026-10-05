@@ -26,6 +26,8 @@
   <!-- Tests -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.4" />
+    <!-- The samples' tests run the fakes over an in-memory DbContext; must match the EF Core version Npgsql resolves. -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.4" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.4" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.4" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.10.0" />

@@ -6,12 +6,14 @@ What to configure, what to watch, and what the defaults assume. The reasoning be
 ## Setup
 
 ```csharp
-services.AddWaybillDispatcher(o => o.ConnectionString = "...");   // also samples the pending-age gauge
-services.AddWaybillRetention(o => o.ConnectionString = "...");    // deletes delivered and expired rows
-services.AddHealthChecks().AddWaybillDispatcher();                // entry "waybill-dispatcher"
+services.AddWaybillDispatcher<AppDbContext>();          // the context's database; also samples the pending-age gauge
+services.AddWaybillRetention<AppDbContext>();           // deletes delivered and expired rows
+services.AddHealthChecks().AddWaybillDispatcherCheck(); // entry "waybill-dispatcher"
 ```
 
-Retention is a hosted service of its own, so a consumer that only uses the inbox can run it without a dispatcher.
+Both read the connection string from the registered `DbContext`; set `ConnectionString` in the options to use another
+one (for example, a user with fewer rights). Set it too when the context is configured with `UseNpgsql(NpgsqlDataSource)`:
+Npgsql leaves the password out of that context's connection string. Retention is a hosted service of its own, so a consumer that only uses the inbox can run it without a dispatcher.
 Any number of instances may run either service against the same database.
 
 ## Defaults

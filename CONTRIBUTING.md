@@ -24,6 +24,8 @@ dotnet build
 dotnet test --project tests/Waybill.Tests.Unit
 dotnet test --project tests/Waybill.Tests.Integration --filter-not-trait "Category=Long"
 dotnet test --project tests/Waybill.Tests.Chaos --filter-not-trait "Category=Long"
+dotnet test --project samples/Billing.Tests
+dotnet test --project samples/Receipts.Tests
 ```
 
 Long-running scenarios (`[Trait("Category", "Long")]`) run in the scheduled CI workflow, not on pull requests.

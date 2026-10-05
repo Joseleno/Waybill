@@ -35,7 +35,7 @@ internal sealed partial class DbContextOutbox<TContext>(
         {
             if (context.Model.FindEntityType(typeof(OutboxRecord)) is null)
                 throw new InvalidOperationException(
-                    $"{context.GetType().Name} does not map the Waybill outbox. Call modelBuilder.AddWaybillOutbox() in OnModelCreating.");
+                    $"{context.GetType().Name} does not map the Waybill outbox. Call modelBuilder.MapWaybillOutbox() in OnModelCreating.");
             mappingVerified = true;
         }
 

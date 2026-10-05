@@ -3,7 +3,7 @@ using Waybill.Tests.Integration.G2;
 
 namespace Waybill.Tests.Integration.Observabilidade;
 
-// AddHealthChecks().AddWaybillDispatcher(): with the broker confirming, the dispatcher reports Healthy and the entry
+// AddHealthChecks().AddWaybillDispatcherCheck(): with the broker confirming, the dispatcher reports Healthy and the entry
 // carries the oldest_pending_age_seconds field (its value is proven by the Metrica_* scenarios).
 [Collection(PostgresCollection.Name)]
 public sealed class HealthCheck_DispatcherRodando_Healthy(PostgresFixture postgres)

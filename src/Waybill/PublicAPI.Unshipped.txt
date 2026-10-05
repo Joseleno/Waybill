@@ -47,7 +47,7 @@ Waybill.WaybillOptions.MaxPayloadBytes.set -> void
 Waybill.WaybillOptions.ThrowOnPendingMessagesAtDispose.get -> bool
 Waybill.WaybillOptions.ThrowOnPendingMessagesAtDispose.set -> void
 Waybill.WaybillOptions.WaybillOptions() -> void
-Waybill.WaybillServiceCollectionExtensions
+Microsoft.Extensions.DependencyInjection.WaybillServiceCollectionExtensions
 override Waybill.PublishResult.GetHashCode() -> int
 static Waybill.PublishResult.Confirmed.get -> Waybill.PublishResult
 static Waybill.PublishResult.Defect(string! reason) -> Waybill.PublishResult
@@ -56,6 +56,6 @@ static Waybill.PublishResult.RetryAfter(Waybill.TransportFailure failure, string
 static Waybill.PublishResult.Returned(string! reason) -> Waybill.PublishResult
 static Waybill.PublishResult.operator !=(Waybill.PublishResult left, Waybill.PublishResult right) -> bool
 static Waybill.PublishResult.operator ==(Waybill.PublishResult left, Waybill.PublishResult right) -> bool
-static Waybill.WaybillServiceCollectionExtensions.AddWaybill(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.WaybillOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static Microsoft.Extensions.DependencyInjection.WaybillServiceCollectionExtensions.AddWaybill(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.WaybillOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 ~override Waybill.PublishResult.Equals(object obj) -> bool
 ~override Waybill.PublishResult.ToString() -> string

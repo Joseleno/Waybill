@@ -24,7 +24,7 @@ public sealed class HealthHarness : IAsyncDisposable
                 o.ConnectionString = database.ConnectionString;
                 o.PollingInterval = TimeSpan.FromMilliseconds(100);
             })
-            .AddHealthChecks().AddWaybillDispatcher().Services
+            .AddHealthChecks().AddWaybillDispatcherCheck().Services
             .BuildServiceProvider();
         Dispatcher = _services.GetServices<IHostedService>().OfType<WaybillDispatcherService>().Single();
     }
