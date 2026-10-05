@@ -57,3 +57,4 @@ A revisão de código independente desta etapa encontrou e motivou:
 - **Uma tabela que falha travava a outra.** A limpeza do outbox e a do inbox passaram a ser independentes: a falha numa gera log e a outra segue.
 - **Intervalos sem teto.** `Task.Delay` lança acima de ~49 dias e derrubaria o host; `PollingInterval`, `MetricsInterval` e `Interval` passaram a aceitar no máximo um dia.
 - **CI que tolerava zero testes.** `--ignore-exit-code 8` saiu dos passos que agora sempre têm testes.
+- **"Not running" logo depois da partida.** No .NET 10 o `BackgroundService` roda o `ExecuteAsync` inteiro numa tarefa à parte, então um health check logo depois do `StartAsync` lia `Unhealthy`. O status passou a ser marcado no `StartAsync` (e a parada também no `StopAsync`). Achado ao investigar um teste instável.
