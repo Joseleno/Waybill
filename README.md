@@ -24,17 +24,20 @@ Requires .NET 10, EF Core 10 with Npgsql, PostgreSQL 15 or later, and RabbitMQ (
 
 <!-- api -->
 ```csharp
+using System.Text.Json.Serialization;
+using Waybill.EntityFrameworkCore; // WaybillSchema, IOutbox<T>, IInbox<T>
+
 // Once, as a deployment step: creates the waybill schema (outbox and inbox tables).
 await WaybillSchema.MigrateAsync(connectionString);
 
-// Startup: the messages you publish, the outbox on your DbContext, the transport and the dispatcher.
+// Startup, next to services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString)):
 services.AddWaybill(o =>
 {
     o.MaxPayloadBytes = 16 * 1024;
     o.AddMessage("billing.invoice-paid.v1", AppJson.Default.InvoicePaid);
 });
 services.AddWaybillOutbox<AppDbContext>();
-services.AddWaybillRabbitMQ(o => { o.Uri = rabbitUri; o.Exchange = "events"; });
+services.AddWaybillRabbitMQ(o => { o.Uri = new Uri("amqp://localhost"); o.Exchange = "events"; });
 services.AddWaybillDispatcher<AppDbContext>();
 
 // In AppDbContext.OnModelCreating: map the outbox table.
@@ -43,9 +46,19 @@ modelBuilder.MapWaybillOutbox();
 // Wherever you change data: the event commits with it, or not at all.
 outbox.Enqueue(new InvoicePaid(invoice.Id, invoice.Amount), key: invoice.Id.ToString());
 await db.SaveChangesAsync(ct);
+
+// Your messages, serialized with System.Text.Json source generation.
+[JsonSerializable(typeof(InvoicePaid))]
+internal sealed partial class AppJson : JsonSerializerContext;
 ```
 
-`outbox` is the `IOutbox<AppDbContext>` from DI. A test runs these exact lines against PostgreSQL on every pull request.
+`services` is your host's `IServiceCollection` (`builder.Services`), and `outbox` is the `IOutbox<AppDbContext>` from
+DI. A test runs these exact lines against PostgreSQL on every pull request.
+
+`WaybillSchema.MigrateAsync` creates only the `waybill` schema, and `MapWaybillOutbox()` keeps the outbox out of your
+own migrations, so the two never collide. Create your own tables with EF Core migrations. If you use
+`Database.EnsureCreated()` instead, call it before `MigrateAsync`: `EnsureCreated` does nothing when the database
+already has any table.
 
 - **Messages are registered by a stable name** (`billing.invoice-paid.v1`), not by class name, with a `JsonTypeInfo`
   (source generation recommended). `Enqueue` refuses unregistered types, payloads that fail to serialize and payloads above
@@ -67,8 +80,14 @@ Wrap your handler, inside whatever consumer you already have, in
 `AddWaybillInbox<TContext>()`). Waybill records `(handler, message_id)` and runs your handler in the same
 `READ COMMITTED` transaction, on the same context. A repeated delivery returns `InboxResult.Duplicate` without running
 the handler, and you acknowledge the message after `ProcessAsync` returns. Events the handler enqueues commit together
-with its effect. With plain RabbitMQ.Client, `GetWaybillMessageId()` reads the message id from the delivery
-properties.
+with its effect.
+
+With plain RabbitMQ.Client, the body is the JSON of the registered `JsonTypeInfo`
+(`JsonSerializer.Deserialize(args.Body.Span, AppJson.Default.InvoicePaid)`), the AMQP `type` property carries the
+registered name, and `GetWaybillMessageId()` (`using Waybill.RabbitMQ;`) reads the message id from the delivery
+properties. The sample's
+[receipts consumer](https://github.com/Joseleno/Waybill/blob/main/samples/Receipts/InvoicePaidConsumer.cs) is a
+complete one.
 
 ## Testing your code
 
