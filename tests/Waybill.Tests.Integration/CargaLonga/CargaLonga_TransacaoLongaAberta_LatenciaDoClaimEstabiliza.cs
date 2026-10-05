@@ -45,7 +45,7 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
         var workers = Task.WhenAll(running);
         var samples = new List<Sample>();
         await using var csv = new StreamWriter(output) { AutoFlush = true };
-        await csv.WriteLineAsync("elapsed_s,phase,claims,claim_p95_ms,outbox_bytes,dead_tuples,rows,last_autovacuum,claim_p50_ms,claim_max_ms,claimable_index_bytes,pk_bytes,claimable_idx_scan,claimable_idx_tup_read,autovacuum_count,vacuum_running");
+        await csv.WriteLineAsync("elapsed_s,phase,claims,claim_p95_ms,outbox_bytes,dead_tuples,rows,last_autovacuum,claim_p50_ms,claim_max_ms,claimable_index_bytes,pk_bytes,claimable_idx_scan,claimable_idx_tup_read,autovacuum_count,vacuum_running,claimable_idx_blks,pk_idx_blks,heap_blks");
 
         var started = Stopwatch.StartNew();
         NpgsqlConnection? holder = null;
@@ -244,15 +244,20 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
             SELECT pg_total_relation_size('waybill.outbox'), t.n_dead_tup, t.n_live_tup, t.last_autovacuum,
                    pg_relation_size('waybill.ix_outbox_claimable'), pg_relation_size('waybill.pk_outbox'),
                    i.idx_scan, i.idx_tup_read, t.autovacuum_count,
-                   (SELECT count(*) FROM pg_stat_progress_vacuum p WHERE p.relid = t.relid)
+                   (SELECT count(*) FROM pg_stat_progress_vacuum p WHERE p.relid = t.relid),
+                   ci.idx_blks_hit + ci.idx_blks_read, pk.idx_blks_hit + pk.idx_blks_read,
+                   h.heap_blks_hit + h.heap_blks_read
             FROM pg_stat_user_tables t
             JOIN pg_stat_user_indexes i ON i.relid = t.relid AND i.indexrelname = 'ix_outbox_claimable'
+            JOIN pg_statio_user_indexes ci ON ci.relid = t.relid AND ci.indexrelname = 'ix_outbox_claimable'
+            JOIN pg_statio_user_indexes pk ON pk.relid = t.relid AND pk.indexrelname = 'pk_outbox'
+            JOIN pg_statio_user_tables h ON h.relid = t.relid
             WHERE t.schemaname = 'waybill' AND t.relname = 'outbox'
             """);
         await using var reader = await command.ExecuteReaderAsync(ct);
         await reader.ReadAsync(ct);
         DateTimeOffset? lastAutovacuum = reader.IsDBNull(3) ? null : new DateTimeOffset(reader.GetDateTime(3), TimeSpan.Zero);
-        var diagnostics = string.Join(',', Enumerable.Range(4, 6).Select(c => Convert.ToInt64(reader.GetValue(c), CultureInfo.InvariantCulture)));
+        var diagnostics = string.Join(',', Enumerable.Range(4, 9).Select(c => Convert.ToInt64(reader.GetValue(c), CultureInfo.InvariantCulture)));
         return new Sample(elapsed, phase, claims, reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), lastAutovacuum, diagnostics);
     }
 
