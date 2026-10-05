@@ -26,13 +26,19 @@ public sealed class FakeOutboxEquivalenceTests(PostgresFixture postgres)
     [InlineData("salvo", "INV-1", true)]
     [InlineData("falha-no-save", "INV-0", true)] // INV-0 already exists: unique violation
     [InlineData("sem-save", "INV-1", false)]
-    public async Task FakeOutbox_EquivalenteAoReal(string scenario, string number, bool save)
+    [InlineData("falha-e-clear", "INV-0", true, true)] // the application gives up: ChangeTracker.Clear() discards the message
+    public async Task FakeOutbox_EquivalenteAoReal(string scenario, string number, bool save, bool clear = false)
     {
-        var real = await RunReal(number, save);
-        var fake = await RunFake(number, save);
+        var real = await RunReal(number, save, clear);
+        var fake = await RunFake(number, save, clear);
 
         Assert.Equal(real, fake);
-        Assert.Equal(scenario == "salvo" ? new Outcome(1, 0, false) : new Outcome(0, 1, true), real);
+        Assert.Equal(scenario switch
+        {
+            "salvo" => new Outcome(1, 0, false),
+            "falha-e-clear" => new Outcome(0, 0, false),
+            _ => new Outcome(0, 1, true),
+        }, real);
     }
 
     [Fact]
@@ -70,7 +76,7 @@ public sealed class FakeOutboxEquivalenceTests(PostgresFixture postgres)
 
     private sealed record Unregistered;
 
-    private async Task<Outcome> RunReal(string number, bool save)
+    private async Task<Outcome> RunReal(string number, bool save, bool clear)
     {
         var database = await SeededDatabase();
         var logs = new LogSink();
@@ -81,16 +87,18 @@ public sealed class FakeOutboxEquivalenceTests(PostgresFixture postgres)
         {
             var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await Swallow(() => PayInvoice(context, scope.ServiceProvider.GetRequiredService<IOutbox<AppDbContext>>(), number, save));
+            if (clear)
+                context.ChangeTracker.Clear();
             // Measured, not inferred: outbox records the real context still has to insert.
             pending = context.ChangeTracker.Entries<OutboxRecord>().Count(e => e.State == EntityState.Added);
         }
 
-        var reported = logs.Entries.Any(e => e.Level == LogLevel.Error);
+        var reported = logs.Entries.Any(e => e.Level == LogLevel.Error && e.Category.StartsWith("Waybill", StringComparison.Ordinal)); // not EF's own log of the failed save
         var saved = (int)await database.OutboxCountAsync();
         return new Outcome(saved, pending, reported);
     }
 
-    private async Task<Outcome> RunFake(string number, bool save)
+    private async Task<Outcome> RunFake(string number, bool save, bool clear)
     {
         var database = await SeededDatabase();
         await using var services = FakeServices(database);
@@ -98,6 +106,8 @@ public sealed class FakeOutboxEquivalenceTests(PostgresFixture postgres)
         var scope = services.CreateAsyncScope();
         var fake = scope.ServiceProvider.GetRequiredService<FakeOutbox<AppDbContext>>();
         await Swallow(() => PayInvoice(scope.ServiceProvider.GetRequiredService<AppDbContext>(), fake, number, save));
+        if (clear)
+            scope.ServiceProvider.GetRequiredService<AppDbContext>().ChangeTracker.Clear();
         var (saved, pending) = (fake.Saved.Count, fake.Pending.Count);
 
         var reported = false;
