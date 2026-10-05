@@ -1,34 +1,136 @@
 # Waybill
 
-Transactional outbox and inbox for .NET, PostgreSQL-first and framework-free.
+Transactional outbox and inbox for .NET, on EF Core, PostgreSQL and RabbitMQ.
 
-The goal: an event written in the same transaction as your data reaches the broker, and the effect a consumer writes
-to its own database is applied once, even when the message is delivered more than once. You keep consuming with
-whatever broker client you already use.
+An event you enqueue in the same transaction as your data reaches the broker. The effect a consumer writes to its own
+database is applied once, even when the message is delivered more than once. Waybill is not a messaging framework:
+you keep consuming with whatever broker client you already use.
 
-## Status
+**Status: alpha (0.1.0-alpha).** The API can still change before 1.0. Every promise below has a concurrency test
+behind it, listed in [GUARANTEES.md](https://github.com/Joseleno/Waybill/blob/main/GUARANTEES.md); anything not listed
+there is not promised.
 
-**Experimental.** The write side (outbox), the dispatcher and the RabbitMQ transport work end to end, with failure
-classification, a circuit breaker and chaos tests. The inbox applies a consumer's effect once per handler. Retention cleanup, a pending-age gauge and a dispatcher health check keep it operable over time. Packages built from this repository before `v0.1.0-alpha` are pipeline tests, not releases.
+## Install
 
-This README describes only what exists. Each guarantee will be written down only after a concurrency test proves it;
-until then, nothing here is a promise.
+```
+dotnet add package Waybill.EntityFrameworkCore.PostgreSql --prerelease
+dotnet add package Waybill.RabbitMQ --prerelease
+dotnet add package Waybill.Testing --prerelease   # in test projects
+```
 
-## What exists today
+Requires .NET 10, EF Core 10 with Npgsql, PostgreSQL 15 or later, and RabbitMQ (RabbitMQ.Client 7).
 
-- Design documents (in Portuguese) in [`docs/`](docs): business analysis, scope and boundaries, development plan, and review notes.
-- [ADR 0001](docs/adr/0001-claim-por-linha-skip-locked-e-fencing.md): how the dispatcher claims rows (`FOR UPDATE SKIP LOCKED`, per-row lease, fencing token), with the [stage 0 spike](spike/RESULTADOS.md) behind it (archived code and raw numbers, outside the solution and CI).
-- [ADR 0002](docs/adr/0002-enfileiramento-schema-e-registro-de-tipos.md): the enqueue API, the package-owned `waybill` schema and the message type registry.
-- [ADR 0003](docs/adr/0003-classificacao-de-falhas-do-dispatcher.md): how the dispatcher classifies failures (DLQ, retry, circuit breaker, batch reduction).
-- [ADR 0004](docs/adr/0004-retencao-metrica-e-health-check.md): retention, the pending-age metric and the dispatcher health check; [OPERATIONS.md](docs/OPERATIONS.md) says what to configure and watch.
-- [ADR 0005](docs/adr/0005-ergonomia-do-registro.md): registration names and namespaces, settled with a newcomer running the sample.
-- [`samples/`](samples): a billing API and a receipts consumer, runnable with `docker compose up --wait`. Start there to see the whole flow, including a broker outage.
-- `Waybill` and `Waybill.EntityFrameworkCore.PostgreSql`: `IOutbox<TContext>.Enqueue(...)` writes messages to `waybill.outbox` in the same `SaveChanges` and transaction as your data, and `WaybillSchema.MigrateAsync` creates the tables. `AddWaybillDispatcher<TContext>()` runs the dispatcher as a hosted service on the context's database: per-row claim with lease and fencing token, publish outside the transaction, hand-back on transport failure, DLQ as a status.
-- `IInbox<TContext>.ProcessAsync(handler, messageId, handle)` (`AddWaybillInbox<TContext>()`): records `(handler, message_id)` in `waybill.inbox` and runs your handler in the same `READ COMMITTED` transaction, on the same context, so the effect commits once however many times the message arrives; a repeat returns `Duplicate` without running it. Events the handler enqueues on the outbox join that commit. Writing through another instance of the context while the handler runs fails loudly. It wraps the handler inside whatever consumer you already have; `GetWaybillMessageId()` reads the id from RabbitMQ properties.
-- `Waybill.Testing`: in-memory `FakeOutbox<TContext>` and `FakeInbox<TContext>` with assertions, to test code that enqueues or consumes messages without PostgreSQL, each checked for equivalence against the real one.
-- `Waybill.RabbitMQ`: `AddWaybillRabbitMQ(...)` publishes to one exchange you declare, with the registered message name as routing key, publisher confirms, `mandatory` and persistent delivery. Waybill does not create topology.
-- Retention (`AddWaybillRetention(...)`): a hosted service that deletes, in small batches, published outbox rows past `OutboxRetention` and inbox rows past `InboxRetention`. Pending, claimed and dead-lettered rows are never deleted, also while the broker is down for longer than the retention. A message redelivered after its inbox row was deleted is processed again; [OPERATIONS.md](docs/OPERATIONS.md#sizing-the-inbox-retention) explains how to size the inbox retention.
-- Observability without OpenTelemetry: the gauge `waybill.outbox.oldest_pending.age` (meter `Waybill`, seconds) and `AddHealthChecks().AddWaybillDispatcherCheck()`, which reports `Degraded` while the broker is unreachable and `Unhealthy` when the dispatcher loop stops or the database keeps failing.
+## The API in ten lines
+
+<!-- api -->
+```csharp
+// Once, as a deployment step: creates the waybill schema (outbox and inbox tables).
+await WaybillSchema.MigrateAsync(connectionString);
+
+// Startup: the messages you publish, the outbox on your DbContext, the transport and the dispatcher.
+services.AddWaybill(o =>
+{
+    o.MaxPayloadBytes = 16 * 1024;
+    o.AddMessage("billing.invoice-paid.v1", AppJson.Default.InvoicePaid);
+});
+services.AddWaybillOutbox<AppDbContext>();
+services.AddWaybillRabbitMQ(o => { o.Uri = rabbitUri; o.Exchange = "events"; });
+services.AddWaybillDispatcher<AppDbContext>();
+
+// In AppDbContext.OnModelCreating: map the outbox table.
+modelBuilder.MapWaybillOutbox();
+
+// Wherever you change data: the event commits with it, or not at all.
+outbox.Enqueue(new InvoicePaid(invoice.Id, invoice.Amount), key: invoice.Id.ToString());
+await db.SaveChangesAsync(ct);
+```
+
+`outbox` is the `IOutbox<AppDbContext>` from DI. A test runs these exact lines against PostgreSQL on every pull request.
+
+- **Messages are registered by a stable name** (`billing.invoice-paid.v1`), not by class name, with a `JsonTypeInfo`
+  (source generation recommended). `Enqueue` refuses unregistered types, payloads that fail to serialize and payloads above
+  `MaxPayloadBytes`, before anything is written.
+- **The dispatcher** runs as a hosted service in your API or in a worker. It claims rows with
+  `FOR UPDATE SKIP LOCKED`, publishes outside the transaction with publisher confirms, and hands messages back without
+  spending attempts when the broker or the network fails (G2).
+- **Waybill does not create topology.** Declare the exchange and queues yourself; every message is published to the
+  configured exchange with its registered name as routing key.
+
+The [sample](https://github.com/Joseleno/Waybill/tree/main/samples) runs the whole flow with
+`docker compose up --wait`: a billing API that publishes, a receipts consumer that uses the inbox and publishes in
+turn, and a script that stops the broker to show the backlog drain when it comes back.
+
+## Consuming with the inbox
+
+Wrap your handler, inside whatever consumer you already have, in
+`IInbox<TContext>.ProcessAsync(handlerName, messageId, (db, ct) => ...)` (registered by
+`AddWaybillInbox<TContext>()`). Waybill records `(handler, message_id)` and runs your handler in the same
+`READ COMMITTED` transaction, on the same context. A repeated delivery returns `InboxResult.Duplicate` without running
+the handler, and you acknowledge the message after `ProcessAsync` returns. Events the handler enqueues commit together
+with its effect. With plain RabbitMQ.Client, `GetWaybillMessageId()` reads the message id from the delivery
+properties.
+
+## Testing your code
+
+`Waybill.Testing` has in-memory `FakeOutbox<TContext>` and `FakeInbox<TContext>`, checked for equivalence against the
+real ones, so you can test code that enqueues or consumes messages without PostgreSQL: `ShouldContain<T>()`,
+`ShouldBeEmpty()` and `ShouldHaveNoPending()`, which fails the test for an event enqueued and never saved.
+
+## Guarantees
+
+In short, under the conditions written in [GUARANTEES.md](https://github.com/Joseleno/Waybill/blob/main/GUARANTEES.md),
+each linked to the test that proves it:
+
+1. **G1.** An event exists if, and only if, the transaction that enqueued it commits.
+2. **G2.** Every persisted event is published at least once, or goes to the outbox DLQ with a recorded reason; none
+   is dropped silently.
+3. **G3.** The effect a consumer writes to its own database is applied once, even when the message is delivered more
+   than once.
+
+Publication is at least once: consumers see duplicates, and the inbox is how their effect is applied once. Version 0.1
+makes no ordering promise; ordering by aggregate key is planned for 0.2.
+
+## When not to use Waybill
+
+- **You want a messaging framework:** handlers, routing, retries on the consuming side, sagas, scheduling. Use
+  Wolverine, MassTransit, NServiceBus or CAP. Waybill only publishes and deduplicates.
+- **Your database is not PostgreSQL, or you do not write through EF Core.** Writes through `ExecuteUpdate` or raw SQL do not
+  produce events.
+- **Your broker is not RabbitMQ.** Kafka is planned for 0.2.
+- **You need ordering per aggregate today.** It is planned for 0.2.
+- **The effect you need once is outside your database** (an e-mail, a call to a payment gateway). The inbox protects
+  your database, not the calls that leave it.
+
+## Comparison
+
+<!-- comparison: pending measured data -->
+
+## What Waybill does not solve
+
+These remain with Waybill configured correctly, because they are outside the reach of any outbox:
+
+| Problem | Why it remains | Way out |
+| --- | --- | --- |
+| Business consistency across services | Waybill delivers the event; it does not make the other service accept the decision | A saga with explicit compensation |
+| An event without its data after a PostgreSQL failover | With asynchronous replication or `synchronous_commit = off`, a failover can lose a commit whose event was already published | Synchronous replication where the business requires it |
+| An event with wrong content | A bug in the event is published faithfully | A compensating event and contract tests |
+| A contract change that breaks consumers | Waybill moves bytes; it does not know the schema | Versioned message names and contract tests |
+| A broker down for hours | The outbox grows and delivery waits; nothing goes to the DLQ, but the disk grows | Alert on the age of the oldest pending message |
+| A slow consumer | Waybill measures the delay; it does not scale the consumer | More consumers, partitioning |
+| Writes outside the database (Redis, another database, files) | Atomicity covers only the `DbContext`'s transaction | Bring the write into the same database, or accept the dual write there |
+
+## Operating Waybill
+
+[OPERATIONS.md](https://github.com/Joseleno/Waybill/blob/main/docs/OPERATIONS.md) covers the defaults, retention
+(`AddWaybillRetention`), the gauge `waybill.outbox.oldest_pending.age` (meter `Waybill`), the dispatcher health check
+(`AddHealthChecks().AddWaybillDispatcherCheck()`), autovacuum settings and how to size the inbox retention.
+
+## Design documents
+
+The design is documented in Portuguese in [`docs/`](https://github.com/Joseleno/Waybill/tree/main/docs): scope and
+boundaries, the development plan and five architecture decision records, from the row claim
+([ADR 0001](https://github.com/Joseleno/Waybill/blob/main/docs/adr/0001-claim-por-linha-skip-locked-e-fencing.md)) to
+the registration API ([ADR 0005](https://github.com/Joseleno/Waybill/blob/main/docs/adr/0005-ergonomia-do-registro.md)).
 
 ## Building
 
@@ -46,4 +148,4 @@ Integration tests run against `postgres:18-alpine` by default; set `WAYBILL_POST
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](https://github.com/Joseleno/Waybill/blob/main/LICENSE)
