@@ -2,6 +2,8 @@
   <Folder Name="/samples/">
     <Project Path="samples/Billing.Tests/Billing.Tests.csproj" />
     <Project Path="samples/Billing/Billing.csproj" />
+    <Project Path="samples/Receipts.Tests/Receipts.Tests.csproj" />
+    <Project Path="samples/Receipts/Receipts.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Waybill.EntityFrameworkCore.PostgreSql/Waybill.EntityFrameworkCore.PostgreSql.csproj" />

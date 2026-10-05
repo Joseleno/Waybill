@@ -1,7 +1,7 @@
 # Etapa 6 — Tarefas
 
 - [x] Billing: domínio, migrations EF, endpoints, configuração do Waybill, modo migrate; `Billing.Tests`
-- [ ] Receipts: consumidor RabbitMQ.Client, handler no inbox que também produz, modo migrate; `Receipts.Tests`
+- [x] Receipts: consumidor RabbitMQ.Client, handler no inbox que também produz, modo migrate; `Receipts.Tests`
 - [ ] Compose: Dockerfiles, `definitions.json`, init dos bancos, serviço `migrate`, healthchecks
 - [ ] Scripts: `smoke.sh`, `broker-outage.sh` e `broker-outage.ps1`, verificados localmente
 - [ ] `samples/README.md` (inglês): subir, publicar o primeiro evento, o cenário de falha, por que a API não migra
