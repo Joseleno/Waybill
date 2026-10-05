@@ -11,6 +11,7 @@
     <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="Testcontainers.RabbitMq" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
   </ItemGroup>
@@ -20,6 +21,7 @@
     <Compile Include="..\Waybill.Tests.Integration\PostgresFixture.cs" Link="Shared\PostgresFixture.cs" />
     <Compile Include="..\Waybill.Tests.Integration\TestModel.cs" Link="Shared\TestModel.cs" />
     <Compile Include="..\Waybill.Tests.Integration\G2\DispatcherHarness.cs" Link="Shared\DispatcherHarness.cs" />
+    <Compile Include="..\Waybill.Tests.Integration\Observabilidade\GaugeReader.cs" Link="Shared\GaugeReader.cs" />
   </ItemGroup>
 
 </Project>

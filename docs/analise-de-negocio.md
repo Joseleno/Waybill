@@ -131,7 +131,7 @@ O pacote vale a pena sob uma condição: cada garantia prometida precisa de um t
 | Ordem de commit diferente da ordem de id | Polling por status, nunca por cursor; sequência por chave gerada pela versão do agregado ou por contador por chave |
 | Entregas concorrentes da mesma mensagem passam pelo “já existe?” | `INSERT … ON CONFLICT DO NOTHING` no inbox antes do handler; ack só depois do commit |
 | Mensagem não roteável some no RabbitMQ | Publisher confirms obrigatórios e `mandatory` tratado como falha |
-| Inchaço da tabela no MVCC do Postgres | DELETE em lote, monitoramento do horizonte do vacuum, benchmark de 24 h com transação longa aberta |
+| Inchaço da tabela no MVCC do Postgres | DELETE em lote, monitoramento do horizonte do vacuum, benchmark de carga longa (5 h) com transação longa aberta |
 | `EnableRetryOnFailure` com transação do usuário | Transação dentro de `CreateExecutionStrategy().ExecuteAsync`; `TransactionScope` não suportado |
 | PgBouncer em modo transaction quebra LISTEN/NOTIFY | Polling como padrão, NOTIFY só como otimização |
 | `Type.GetType(nome)` quebra com trimming e abre desserialização insegura | Registro explícito de tipos e System.Text.Json com source generation |

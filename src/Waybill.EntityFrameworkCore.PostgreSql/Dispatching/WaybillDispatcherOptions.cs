@@ -27,6 +27,12 @@ public sealed class WaybillDispatcherOptions
     /// <summary>How many times a message may be returned as unroutable before it goes to the DLQ. Default 5.</summary>
     public int MaxReturns { get; set; } = 5;
 
+    /// <summary>
+    /// How often the age of the oldest message not yet published is sampled for the
+    /// <c>waybill.outbox.oldest_pending.age</c> gauge (meter <c>Waybill</c>). Default 15 seconds.
+    /// </summary>
+    public TimeSpan MetricsInterval { get; set; } = TimeSpan.FromSeconds(15);
+
     /// <summary>The claim lease: <see cref="PublishTimeout"/> plus <see cref="LeaseMargin"/>, so it always outlives the publish wait.</summary>
     public TimeSpan Lease => PublishTimeout + LeaseMargin;
 }

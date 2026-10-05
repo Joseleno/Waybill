@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -21,17 +22,22 @@ public static class WaybillDispatcherServiceCollectionExtensions
             .Configure(configure)
             .Validate(o => !string.IsNullOrWhiteSpace(o.ConnectionString), "WaybillDispatcherOptions.ConnectionString is required.")
             .Validate(o => o.BatchSize > 0, "WaybillDispatcherOptions.BatchSize must be positive.")
-            .Validate(o => o.PollingInterval > TimeSpan.Zero, "WaybillDispatcherOptions.PollingInterval must be positive.")
+            .Validate(o => o.PollingInterval > TimeSpan.Zero && o.PollingInterval <= TimeSpan.FromDays(1), "WaybillDispatcherOptions.PollingInterval must be positive and at most one day.")
             .Validate(o => o.PublishTimeout > TimeSpan.Zero, "WaybillDispatcherOptions.PublishTimeout must be positive.")
             .Validate(o => o.LeaseMargin > TimeSpan.Zero, "WaybillDispatcherOptions.LeaseMargin must be positive.")
             .Validate(o => o.MaxReturns > 0, "WaybillDispatcherOptions.MaxReturns must be positive.")
+            .Validate(o => o.MetricsInterval > TimeSpan.Zero && o.MetricsInterval <= TimeSpan.FromDays(1), "WaybillDispatcherOptions.MetricsInterval must be positive and at most one day.")
             .ValidateOnStart();
 
         services.TryAddSingleton(sp => new DispatcherDataSource(
             NpgsqlDataSource.Create(sp.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value.ConnectionString!)));
         services.TryAddSingleton(sp => new OutboxStore(sp.GetRequiredService<DispatcherDataSource>().Value));
         services.TryAddSingleton<OutboxDispatcher>();
+        services.TryAddSingleton(_ => new DispatcherStatus(TimeProvider.System));
         services.AddHostedService<WaybillDispatcherService>();
+        services.TryAddSingleton(sp => new OutboxMetrics(sp.GetService<IMeterFactory>()));
+        services.TryAddSingleton<OldestPendingSampler>();
+        services.AddHostedService<WaybillMetricsService>();
         return services;
     }
 }

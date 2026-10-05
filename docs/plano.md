@@ -8,7 +8,7 @@ Deriva das garantias e do contrato técnico de Doc. Atualizado em Oct 4, 2026 co
 
 A ordem das etapas segue uma regra: o que pode mudar o desenho vem antes do que depende dele, e a promessa vem por último. Por isso o spike abre o trabalho e o README fecha. Rascunhar o README cedo é bom exercício de API; publicá-lo cedo é prometer o que ainda não existe.
 
-Cada etapa termina num conjunto de testes, não numa data. A duração é estimativa de trabalho em tempo integral e serve para dimensionar o todo, não para cobrar o calendário. A soma dá oito semanas, o teto do timebox, sem folga; a reserva está declarada na etapa 3, que é a mais arriscada: se ela atrasar, o cenário de 24 horas da etapa 5 passa para a v0.2 e o exemplo da etapa 6 encolhe para um serviço. Este plano cobre só a v0.1; Kafka, OpenTelemetry e a API de operação têm plano próprio depois.
+Cada etapa termina num conjunto de testes, não numa data. A duração é estimativa de trabalho em tempo integral e serve para dimensionar o todo, não para cobrar o calendário. A soma dá oito semanas, o teto do timebox, sem folga; a reserva está declarada na etapa 3, que é a mais arriscada: se ela atrasar, o cenário de carga longa da etapa 5 passa para a v0.2 e o exemplo da etapa 6 encolhe para um serviço. Este plano cobre só a v0.1; Kafka, OpenTelemetry e a API de operação têm plano próprio depois.
 
 | Etapa | Duração | Entrega central |
 | --- | --- | --- |
@@ -94,7 +94,7 @@ O repositório nasce cedo porque o histórico de commits faz parte do portfolio.
 - MinVer para versionamento, com sufixo `-alpha` até estabilizar
 - Source Link e `.snupkg`
 - GitHub Actions com .NET 10 e matriz de versões do PostgreSQL (15, o piso, e 18, a mais recente), publicação por tag via Trusted Publishing com OIDC
-- Dois jobs de teste desde o início: a suíte por PR (unitários, integração e caos curto) e um job agendado para os cenários longos, de uma hora e de 24 horas, que não cabem em PR
+- Dois jobs de teste desde o início: a suíte por PR (unitários, integração e caos curto) e um job agendado para os cenários longos, de uma hora e de carga longa (5 h), que não cabem em PR
 - Analisador de API pública ligado, aceitando churn em `PublicAPI.Unshipped.txt` durante a alpha; o congelamento em `Shipped` fica para a v1.0
 - `SECURITY.md` já nesta etapa, porque é a resposta à objeção do autor único
 - `CONTRIBUTING`, `CHANGELOG` e a pasta `docs/adr`, que já recebe o ADR 0001 da etapa 0; o spike fica arquivado em `spike/` como evidência dele
@@ -186,7 +186,7 @@ Quando o canal fecha por causa de uma mensagem grande, o cliente não diz qual m
 
 Ao travar uma linha que outra transação alterou e commitou, o PostgreSQL só reavalia os predicados da tabela travada. Qualquer condição de claim posta numa subconsulta ou num `JOIN` deixa passar uma linha já reivindicada; o spike achou esse bug duas vezes. A forma `UPDATE … WHERE id IN (SELECT … LIMIT n FOR UPDATE SKIP LOCKED)` também depende de o planner não reexecutar a subconsulta: vale um teste que force variações de plano, ou a forma `WITH … AS MATERIALIZED`.
 
-**Pronto quando** os oito cenários passam, os de PR rodam a cada pull request e os dois longos têm histórico verde no job agendado. Esta é a etapa com reserva: se estourar, o cenário de 24 horas da etapa 5 passa para a v0.2.
+**Pronto quando** os oito cenários passam, os de PR rodam a cada pull request e os dois longos têm histórico verde no job agendado. Esta é a etapa com reserva: se estourar, o cenário de carga longa da etapa 5 passa para a v0.2.
 
 ## Ordenação — primeiro item do plano da v0.2
 
@@ -265,15 +265,15 @@ O que mantém o pacote utilizável depois do primeiro mês em produção. São d
 
 | Cenário | Resultado esperado | Onde roda |
 | --- | --- | --- |
-| Carga de 24 h com uma transação longa aberta | Latência do claim e tamanho estabilizam depois que ela fecha; a métrica acompanhada é a latência, não só o tamanho | Job agendado; passa para a v0.2 se a etapa 3 estourar. Runners do GitHub limitam um job a 6 h: decidir runner próprio ou duração menor antes desta etapa |
+| Carga longa (5 h) com uma transação longa aberta | Latência do claim e tamanho estabilizam depois que ela fecha; a métrica acompanhada é a latência, não só o tamanho | Job agendado, com a duração configurável. Runners do GitHub limitam um job a 6 h; 24 h exigiriam runner próprio (ADR 0004) |
 | Broker parado por mais tempo que a retenção | Nenhuma mensagem pendente é apagada | PR, com retenção de segundos |
 | Broker parado e religado | A métrica de idade cresce e volta a zero; o health check vai a degradado e volta | PR |
 
 **Armadilha**
 
-Cada claim muda o `status`, que é coluna do predicado do índice parcial. Isso impede HOT update e gera duas entradas de índice por mensagem. Com o horizonte do vacuum preso por uma transação longa, a latência do claim cresce mesmo com a tabela aparentemente estável. Por isso o teste de 24 h mede tempo, não só bytes.
+Cada claim muda o `status`, que é coluna do predicado do índice parcial. Isso impede HOT update e gera duas entradas de índice por mensagem. Com o horizonte do vacuum preso por uma transação longa, a latência do claim cresce mesmo com a tabela aparentemente estável. Por isso o teste de carga longa mede tempo, não só bytes.
 
-**Pronto quando** os três cenários passam, com o de 24 horas no job agendado, e existe um documento curto de operação com os defaults e o que monitorar.
+**Pronto quando** os três cenários passam, com o de carga longa no job agendado, e existe um documento curto de operação com os defaults e o que monitorar.
 
 ## Etapa 6 — Exemplo executável
 
@@ -331,7 +331,7 @@ Cada garantia tem uma etapa que a implementa e um teste que a prova. Esta tabela
 | G2. Todo evento persistido é publicado ou vai para a DLQ por um defeito da lista fechada | 3 | Broker parado por 1 h sem nada na DLQ; mensagem grande isolada num lote de cem, tanto na validação local quanto no fechamento de canal; Toxiproxy no meio da publicação |
 | G3. O efeito no banco do consumidor é aplicado uma vez | 4 | Entrega dupla em paralelo aplica uma vez; dois handlers do mesmo evento aplicam os dois; handler que enfileira e falha não deixa nem inbox nem outbox |
 | G4. Ordem por chave de agregado | v0.2 | Teste de propriedade com leases forçados a vencer; no RabbitMQ, toda regressão chega à DLX; consumidor com assinatura parcial não fica preso em gap |
-| Operação sustentável (não é garantia, é condição de uso) | 5 | 24 h com transação longa aberta; latência do claim estabiliza |
+| Operação sustentável (não é garantia, é condição de uso) | 5 | Carga longa (5 h) com transação longa aberta; latência do claim estabiliza |
 
 **O que não entra na v0.1 e por quê**
 

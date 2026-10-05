@@ -63,6 +63,16 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
 
     private const string ReleaseOwnedSql = "UPDATE waybill.outbox SET status = 'pending', lease_until = NULL WHERE owner = $1 AND status = 'claimed'";
 
+    // The first row still in flight in claim order (ix_outbox_claimable), not min(created_at): with the broker down and a
+    // large backlog that would read every pending row on every sample. The age comes from the database clock.
+    private const string OldestPendingAgeSql = """
+        SELECT extract(epoch FROM clock_timestamp() - created_at)::float8
+        FROM waybill.outbox
+        WHERE status IN ('pending', 'claimed')
+        ORDER BY id
+        LIMIT 1
+        """;
+
     public async Task<List<ClaimedMessage>> ClaimAsync(string owner, int batchSize, TimeSpan lease, CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand(ClaimSql);
@@ -147,6 +157,13 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         await using var command = dataSource.CreateCommand(ReleaseOwnedSql);
         command.Parameters.Add(new NpgsqlParameter { Value = owner });
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Seconds since the oldest message not yet published was written; 0 when there is none.</summary>
+    public async Task<double> OldestPendingAgeAsync(CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(OldestPendingAgeSql);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is double age ? Math.Max(age, 0) : 0;
     }
 
     private static Dictionary<string, string> ParseHeaders(string? json)

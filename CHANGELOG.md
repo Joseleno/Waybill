@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Retention (`AddWaybillRetention`, `WaybillRetentionOptions`): hosted service that deletes published outbox rows past `OutboxRetention` (7 days, counted from publication) and inbox rows past `InboxRetention` (30 days, counted from processing), in batches with `FOR UPDATE SKIP LOCKED`; pending, claimed and dead-lettered rows are never deleted. Any number of instances may run it. New migration: index `ix_inbox_processed_at`. ADR 0004.
+- Gauge `waybill.outbox.oldest_pending.age` (meter `Waybill`, seconds), sampled in the background every `WaybillDispatcherOptions.MetricsInterval` (15 s) on the database clock; a failed sample keeps the last value.
+- Dispatcher health check (`AddHealthChecks().AddWaybillDispatcher()`): `Degraded` while the broker is unreachable, `Unhealthy` when the loop is not running or stalled or the database failed three cycles in a row. `Waybill.EntityFrameworkCore.PostgreSql` now depends on `Microsoft.Extensions.Diagnostics.HealthChecks`.
+- `docs/OPERATIONS.md`: defaults, what to monitor, autovacuum settings and how to size the inbox retention.
+
 - Inbox (`AddWaybillInbox<TContext>`, `IInbox<TContext>.ProcessAsync`): records `(handler, message_id)` with `INSERT … ON CONFLICT DO NOTHING` and runs the handler with the same context in one `READ COMMITTED` transaction, so the effect applies once per handler; a duplicate returns `InboxResult.Duplicate` without running it, and a handler failure rolls back everything (including events it enqueued) and clears the change tracker. A `SaveChanges` through another instance of the context while a handler runs throws instead of committing outside the inbox transaction.
 - `GetWaybillMessageId()` on RabbitMQ `IReadOnlyBasicProperties`, for consumers written with plain RabbitMQ.Client.
 - `FakeInbox<TContext>` and `AddFakeWaybillInbox<TContext>()` in `Waybill.Testing`, checked for equivalence against the real inbox.

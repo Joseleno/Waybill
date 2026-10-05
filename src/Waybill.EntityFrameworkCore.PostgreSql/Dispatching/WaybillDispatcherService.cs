@@ -6,17 +6,42 @@ namespace Waybill.EntityFrameworkCore.Dispatching;
 
 /// <summary>Hosts one dispatcher instance: cycles until the host stops, then hands back what it still holds.</summary>
 internal sealed partial class WaybillDispatcherService(
-    OutboxDispatcher dispatcher, IOptions<WaybillDispatcherOptions> options, ILogger<WaybillDispatcherService> logger)
+    OutboxDispatcher dispatcher, IOptions<WaybillDispatcherOptions> options, ILogger<WaybillDispatcherService> logger,
+    DispatcherStatus? status = null)
     : BackgroundService
 {
+    private readonly DispatcherStatus _status = status ?? new DispatcherStatus(TimeProvider.System);
+
     /// <summary>Upper bound of the wait between cycles while the transport or the database keeps failing.</summary>
     internal static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
 
     private static readonly TimeSpan ReleaseTimeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Marks the loop as running before it starts: since .NET 10 <see cref="ExecuteAsync"/> runs on its own task, so a
+    /// health check right after start would otherwise read "not running".
+    /// </summary>
+    public override Task StartAsync(CancellationToken cancellationToken)
+    {
+        _status.Started();
+        return base.StartAsync(cancellationToken);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         LogStarted(logger, dispatcher.Owner);
+        try
+        {
+            await RunAsync(stoppingToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _status.Stopped();
+        }
+    }
+
+    private async Task RunAsync(CancellationToken stoppingToken)
+    {
         var databaseFailures = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -25,6 +50,7 @@ internal sealed partial class WaybillDispatcherService(
             {
                 var cycle = await dispatcher.RunOnceAsync(stoppingToken).ConfigureAwait(false);
                 databaseFailures = 0;
+                _status.CycleCompleted(cycle.Outcome);
 
                 // A full batch that made progress: go straight to the next one. Breaker open (connection or channel
                 // failure): wait it out, nothing is claimed meanwhile. Otherwise: the polling interval.
@@ -43,6 +69,7 @@ internal sealed partial class WaybillDispatcherService(
                 // The database is unreachable or a statement failed: nothing was lost (claimed rows come back with
                 // their lease or at shutdown), so back off (doubling up to MaxBackoff) and try again.
                 LogCycleFailed(logger, exception);
+                _status.CycleFailed();
                 wait = Wait(options.Value.PollingInterval, ++databaseFailures);
             }
 
@@ -69,6 +96,7 @@ internal sealed partial class WaybillDispatcherService(
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         await base.StopAsync(cancellationToken).ConfigureAwait(false);
+        _status.Stopped(); // also when ExecuteAsync never got to run
         using var release = new CancellationTokenSource(ReleaseTimeout);
         try
         {
