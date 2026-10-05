@@ -19,6 +19,7 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
@@ -28,8 +29,15 @@ jobs:
           global-json-file: global.json
       - run: dotnet build -c Release
       - run: dotnet test --project tests/Waybill.Tests.Unit -c Release --no-build
-      - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build
+      # The long load (Category=Long) runs for hours; it belongs to the scheduled workflow, not to a release.
+      - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build --filter-not-trait "Category=Long"
       - run: dotnet pack -c Release --no-build -o artifacts
+
+      # Deterministic build, Source Link, symbols and metadata, on every tag, before anything is pushed.
+      - name: Validate packages (Source Link, symbols, metadata)
+        run: |
+          dotnet tool install --tool-path "$RUNNER_TEMP/tools" Meziantou.Framework.NuGetPackageValidation.Tool --version 2.0.13
+          "$RUNNER_TEMP/tools/meziantou.validate-nuget-package" --excluded-rules IconMustBeSet --github-token "${{ github.token }}" artifacts/*.nupkg
 
       - name: Validate packages from a local feed (test tags)
         if: contains(github.ref_name, '-test')
