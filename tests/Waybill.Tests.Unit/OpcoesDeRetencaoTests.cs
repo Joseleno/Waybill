@@ -5,7 +5,8 @@ using Waybill.EntityFrameworkCore.Retention;
 namespace Waybill.Tests.Unit;
 
 // A misconfigured retention fails at startup, not by deleting the wrong rows later: a zero or negative retention
-// would make every published row (and every inbox row) eligible at once.
+// would make every published row (and every inbox row) eligible at once; an interval past a day is a mistake (and
+// past ~49 days Task.Delay would throw and stop the host).
 public sealed class OpcoesDeRetencaoTests
 {
     public static TheoryData<string, Action<WaybillRetentionOptions>> Invalidas => new()
@@ -16,6 +17,7 @@ public sealed class OpcoesDeRetencaoTests
         { "InboxRetention", o => o.InboxRetention = TimeSpan.Zero },
         { "InboxRetention", o => o.InboxRetention = TimeSpan.FromDays(-1) },
         { "Interval", o => o.Interval = TimeSpan.Zero },
+        { "Interval", o => o.Interval = TimeSpan.FromDays(2) }, // Task.Delay throws past ~49 days; nothing needs more than a day
         { "BatchSize", o => o.BatchSize = 0 },
     };
 

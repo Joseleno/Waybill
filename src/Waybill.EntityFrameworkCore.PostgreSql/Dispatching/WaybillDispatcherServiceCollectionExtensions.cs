@@ -22,11 +22,11 @@ public static class WaybillDispatcherServiceCollectionExtensions
             .Configure(configure)
             .Validate(o => !string.IsNullOrWhiteSpace(o.ConnectionString), "WaybillDispatcherOptions.ConnectionString is required.")
             .Validate(o => o.BatchSize > 0, "WaybillDispatcherOptions.BatchSize must be positive.")
-            .Validate(o => o.PollingInterval > TimeSpan.Zero, "WaybillDispatcherOptions.PollingInterval must be positive.")
+            .Validate(o => o.PollingInterval > TimeSpan.Zero && o.PollingInterval <= TimeSpan.FromDays(1), "WaybillDispatcherOptions.PollingInterval must be positive and at most one day.")
             .Validate(o => o.PublishTimeout > TimeSpan.Zero, "WaybillDispatcherOptions.PublishTimeout must be positive.")
             .Validate(o => o.LeaseMargin > TimeSpan.Zero, "WaybillDispatcherOptions.LeaseMargin must be positive.")
             .Validate(o => o.MaxReturns > 0, "WaybillDispatcherOptions.MaxReturns must be positive.")
-            .Validate(o => o.MetricsInterval > TimeSpan.Zero, "WaybillDispatcherOptions.MetricsInterval must be positive.")
+            .Validate(o => o.MetricsInterval > TimeSpan.Zero && o.MetricsInterval <= TimeSpan.FromDays(1), "WaybillDispatcherOptions.MetricsInterval must be positive and at most one day.")
             .ValidateOnStart();
 
         services.TryAddSingleton(sp => new DispatcherDataSource(

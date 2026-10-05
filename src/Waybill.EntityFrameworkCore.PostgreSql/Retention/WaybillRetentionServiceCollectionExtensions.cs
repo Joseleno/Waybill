@@ -23,7 +23,7 @@ public static class WaybillRetentionServiceCollectionExtensions
             .Validate(o => !string.IsNullOrWhiteSpace(o.ConnectionString), "WaybillRetentionOptions.ConnectionString is required.")
             .Validate(o => o.OutboxRetention > TimeSpan.Zero, "WaybillRetentionOptions.OutboxRetention must be positive.")
             .Validate(o => o.InboxRetention > TimeSpan.Zero, "WaybillRetentionOptions.InboxRetention must be positive.")
-            .Validate(o => o.Interval > TimeSpan.Zero, "WaybillRetentionOptions.Interval must be positive.")
+            .Validate(o => o.Interval > TimeSpan.Zero && o.Interval <= TimeSpan.FromDays(1), "WaybillRetentionOptions.Interval must be positive and at most one day.")
             .Validate(o => o.BatchSize > 0, "WaybillRetentionOptions.BatchSize must be positive.")
             .ValidateOnStart();
 
