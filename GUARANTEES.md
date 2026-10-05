@@ -60,10 +60,12 @@ topology.
 
 **Refused before anything is written.** `Enqueue` throws, and nothing is persisted, for:
 - an unregistered message type;
+- a message that fails to serialize;
 - a payload above `MaxPayloadBytes`;
 - a name, correlation id, key or tenant id above 255 bytes.
 
 [`Envelope_TipoNaoRegistrado_FalhaNoEnqueue`](tests/Waybill.Tests.Unit/EnvelopeTests.cs),
+[`Envelope_FalhaDeSerializacao_FalhaNoEnqueue`](tests/Waybill.Tests.Unit/EnvelopeTests.cs),
 [`Envelope_PayloadAcimaDoLimite_FalhaNoEnqueue`](tests/Waybill.Tests.Unit/EnvelopeTests.cs),
 [`Envelope_CorrelacaoAcimaDe255Bytes_FalhaNoEnqueue`](tests/Waybill.Tests.Unit/EnvelopeTests.cs),
 [`Envelope_ChaveOuTenantAcimaDe255Bytes_FalhaNoEnqueue`](tests/Waybill.Tests.Unit/EnvelopeTests.cs),
@@ -94,10 +96,11 @@ topology.
   [`G2_BrokerParado_NadaNaDlqEDrenaSozinho_UmaHora`](tests/Waybill.Tests.Chaos/Broker/ChaosBrokerTests.cs),
   [`G2_BrokerForaComBacklog_SemRajadaDeClaims_RecuaEDepoisDrena`](tests/Waybill.Tests.Integration/G2/G2_BrokerForaComBacklog_SemRajadaDeClaims.cs)
 - **Confirmation timeouts and nacks** halve the batch without opening the breaker. Repeated timeouts on a batch of
-  one count as a silent outage and do open it.
+  one count as a silent outage and do open it. A probe that times out reopens it for twice as long.
   [`G2_TimeoutDeConfirmacaoOuNack_ReduzLoteSemAbrirBreaker`](tests/Waybill.Tests.Integration/G2/G2_FalhaDeTransporte_ReabreSemGastarTentativa.cs),
   [`G2_LatenciaAlta_BreakerFechadoLoteReduzido`](tests/Waybill.Tests.Chaos/Broker/ChaosBrokerTests.cs),
   [`G2_QuedaSilenciosa_TimeoutsComLoteDe1AbremOBreaker`](tests/Waybill.Tests.Integration/G2/G2_BreakerReageSoAoBroker.cs),
+  [`G2_QuedaSilenciosa_SondaQueEstouraOTimeout_ReabrePeloDobro`](tests/Waybill.Tests.Integration/G2/G2_BreakerReageSoAoBroker.cs),
   [`G2_BuracoNegro_TimeoutsAbremOBreakerSemDlq`](tests/Waybill.Tests.Chaos/Broker/ChaosBrokerTests.cs)
 - **A publication whose outcome is unknown** after the timeout is handed back before the lease expires. A
   transport result Waybill does not recognize never counts as confirmed.
