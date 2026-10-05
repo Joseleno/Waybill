@@ -1,6 +1,8 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Waybill.EntityFrameworkCore;
 using Waybill.EntityFrameworkCore.Retention;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -8,6 +10,22 @@ namespace Microsoft.Extensions.DependencyInjection;
 /// <summary>Registers retention cleanup.</summary>
 public static class WaybillRetentionServiceCollectionExtensions
 {
+    /// <summary>
+    /// Runs retention cleanup for the database of <typeparamref name="TContext"/>: the connection string is read from the
+    /// registered context at startup, unless <paramref name="configure"/> sets one. Options are validated at startup.
+    /// </summary>
+    public static IServiceCollection AddWaybillRetention<TContext>(this IServiceCollection services, Action<WaybillRetentionOptions>? configure = null)
+        where TContext : DbContext
+    {
+        services.AddWaybillRetention(configure ?? (_ => { }));
+        services.AddOptions<WaybillRetentionOptions>().PostConfigure<IServiceScopeFactory>((options, scopes) =>
+        {
+            if (string.IsNullOrWhiteSpace(options.ConnectionString))
+                options.ConnectionString = DbContextConnectionString.Of<TContext>(scopes);
+        });
+        return services;
+    }
+
     /// <summary>
     /// Runs retention cleanup as a hosted service in this process: published outbox rows and processed inbox rows past
     /// their retention are deleted in small batches. Any number of instances may run it at once. Options are validated
