@@ -24,9 +24,18 @@ Any number of instances may run either service against the same database.
 | `WaybillRetentionOptions.InboxRetention` | 30 days | An inbox row is deleted this long after the message was processed. See [Sizing the inbox retention](#sizing-the-inbox-retention). |
 | `WaybillRetentionOptions.Interval` | 5 minutes | Wait between cleanup passes. A failed pass is logged and retried at the next interval. |
 | `WaybillRetentionOptions.BatchSize` | 1000 | Rows deleted per statement; a pass repeats until a batch comes back short. |
+| `WaybillDispatcherOptions.BatchSize` | 100 | Most messages claimed and published per cycle. Timeouts and nacks halve the batch in use, down to 1; healthy batches double it back. |
+| `WaybillDispatcherOptions.PollingInterval` | 1 second | Wait before the next cycle when the last one did not fill a batch. Also the first open period of the circuit breaker, which doubles up to 30 seconds. |
+| `WaybillDispatcherOptions.PublishTimeout` | 20 seconds | How long the dispatcher waits for the broker to confirm a batch. Past it, the batch is handed back and published again: a duplicate is possible, a loss is not. |
+| `WaybillDispatcherOptions.LeaseMargin` | 10 seconds | Added to `PublishTimeout` to form the claim lease (30 seconds by default), so the lease always outlives the publish wait. A crashed instance's rows become claimable again after the lease. |
+| `WaybillDispatcherOptions.MaxReturns` | 5 | How many times a message may come back unroutable (`basic.return`) before it goes to the DLQ. |
 | `WaybillDispatcherOptions.MetricsInterval` | 15 seconds | How often the pending-age gauge is sampled. |
 
 All options are validated at startup; a zero or negative retention fails the host instead of deleting everything.
+
+On shutdown, the dispatcher stops claiming, waits for the batch in flight up to `PublishTimeout`, and hands back the
+rows it still holds. The host's `HostOptions.ShutdownTimeout` (30 seconds by default) bounds that wait: keep it above
+`PublishTimeout`, or a message of the batch in flight may be published and handed back, and then published again.
 
 ## What to monitor
 

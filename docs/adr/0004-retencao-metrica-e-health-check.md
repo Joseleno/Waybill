@@ -10,7 +10,7 @@ Sem limpeza, `waybill.outbox` e `waybill.inbox` crescem para sempre. Uma limpeza
 
 ## Decisão
 
-**Limpeza em serviço próprio.** `AddWaybillRetention` registra um `BackgroundService` separado do dispatcher, com data source próprio. Um consumidor que só usa o inbox não sobe dispatcher. A limpeza roda em lotes (`BatchSize`), cada um com `DELETE … WHERE id IN (SELECT … LIMIT … FOR UPDATE SKIP LOCKED)` numa transação curta, repetido enquanto o lote vier cheio. Várias instâncias limpam ao mesmo tempo sem esperar umas pelas outras.
+**Limpeza em serviço próprio.** `AddWaybillRetention` registra um `BackgroundService` separado do dispatcher, com data source próprio. Um consumidor que só usa o inbox não sobe dispatcher. A limpeza roda em lotes (`BatchSize`), cada um com `DELETE … USING` sobre uma CTE `MATERIALIZED` com `LIMIT … FOR UPDATE SKIP LOCKED` (na outbox, o `DELETE` repete `status = 'published'`) num comando curto, repetido enquanto o lote vier cheio. Várias instâncias limpam ao mesmo tempo sem esperar umas pelas outras.
 
 | Tabela | Apaga | Nunca apaga |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ Sem limpeza, `waybill.outbox` e `waybill.inbox` crescem para sempre. Uma limpeza
 
 **Métrica.** `ObservableGauge<double>` `waybill.outbox.oldest_pending.age`, unidade `s`, no Meter `Waybill`, criado pelo `IMeterFactory` quando houver um. Um amostrador registrado por `AddWaybillDispatcher` consulta a cada `MetricsInterval` (15 s) a idade da linha `pending` ou `claimed` mais antiga na ordem do claim (`ORDER BY id LIMIT 1` no índice parcial `ix_outbox_claimable`), medida pelo relógio do banco. O callback do gauge só lê o valor guardado. Ele roda no ritmo do exportador e é síncrono; consultar o banco ali bloquearia a coleta. Sem pendentes, o valor é 0. Se a consulta falha, gera log e o gauge mantém o último valor. O menor `created_at` foi descartado porque, com o broker fora e um backlog grande, varreria todas as pendentes a cada amostra.
 
-**Health check.** Fica em `Waybill.EntityFrameworkCore.PostgreSql`, onde estão o dispatcher e o breaker. O pacote passa a depender de `Microsoft.Extensions.Diagnostics.HealthChecks`, e não só do `.Abstractions`, porque é ali que está o `IHealthChecksBuilder` usado por `AddHealthChecks().AddWaybillDispatcher()`. O health check do próprio EF Core segue o mesmo caminho. O núcleo não muda. Regras, na ordem:
+**Health check.** Fica em `Waybill.EntityFrameworkCore.PostgreSql`, onde estão o dispatcher e o breaker. O pacote passa a depender de `Microsoft.Extensions.Diagnostics.HealthChecks`, e não só do `.Abstractions`, porque é ali que está o `IHealthChecksBuilder` usado por `AddHealthChecks().AddWaybillDispatcherCheck()` (nome dado pelo ADR 0005). O health check do próprio EF Core segue o mesmo caminho. O núcleo não muda. Regras, na ordem:
 
 | Estado | Quando |
 | --- | --- |
