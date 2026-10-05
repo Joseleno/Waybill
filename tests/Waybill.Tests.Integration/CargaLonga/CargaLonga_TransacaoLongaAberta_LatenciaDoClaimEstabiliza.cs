@@ -42,7 +42,7 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
         var workers = Task.WhenAll(running);
         var samples = new List<Sample>();
         await using var csv = new StreamWriter(output) { AutoFlush = true };
-        await csv.WriteLineAsync("elapsed_s,phase,claims,claim_p95_ms,outbox_bytes,dead_tuples,rows");
+        await csv.WriteLineAsync("elapsed_s,phase,claims,claim_p95_ms,outbox_bytes,dead_tuples,rows,last_autovacuum");
 
         var started = Stopwatch.StartNew();
         NpgsqlConnection? holder = null;
@@ -92,11 +92,20 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
         }
 
         Assert.NotNull(closedAt);
-        var lastAutovacuum = await LastAutovacuumAsync(dataSource, ct);
-        Assert.True(lastAutovacuum > closedAt, $"no autovacuum of waybill.outbox after the long transaction closed at {closedAt:O} (last: {lastAutovacuum:O})");
-
         var baseline = samples.Where(s => s.Phase == Phase.Baseline).ToList();
-        var window = samples.Where(s => s.Elapsed >= duration - plan.FinalWindow).ToList();
+
+        // The trap was actually exercised: with the horizon pinned, dead tuples piled up well past anything the
+        // baseline saw. Without this, a run where the snapshot did not hold anything would pass without proving a thing.
+        var baselineDead = baseline.Max(s => s.DeadTuples);
+        var pinnedDead = samples.Where(s => s.Phase == Phase.LongTransaction).Max(s => s.DeadTuples);
+        Assert.True(pinnedDead > 2 * baselineDead,
+            $"the long transaction did not pin the vacuum horizon: {pinnedDead} dead tuples at most with it open, {baselineDead} in the baseline; see {output}");
+
+        // The final window counts only once autovacuum has run after the transaction closed.
+        var vacuumed = samples.FirstOrDefault(s => s.LastAutovacuum > closedAt);
+        Assert.True(vacuumed is not null, $"no autovacuum of waybill.outbox after the long transaction closed at {closedAt:O}; see {output}");
+        var window = samples.Where(s => s.Elapsed >= vacuumed.Elapsed && s.Elapsed >= duration - plan.FinalWindow).ToList();
+        Assert.True(window.Count >= 3, $"autovacuum ran too late ({vacuumed.Elapsed}) to leave a final window to measure; see {output}");
         var baselineP95 = Percentile95(baseline.SelectMany(s => s.ClaimMs));
         var finalP95 = Percentile95(window.SelectMany(s => s.ClaimMs));
         var allowed = Math.Max(2 * baselineP95, baselineP95 + 5);
@@ -131,7 +140,8 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
         };
     }
 
-    private sealed record Sample(TimeSpan Elapsed, Phase Phase, IReadOnlyList<double> ClaimMs, long OutboxBytes, long DeadTuples, long Rows)
+    private sealed record Sample(
+        TimeSpan Elapsed, Phase Phase, IReadOnlyList<double> ClaimMs, long OutboxBytes, long DeadTuples, long Rows, DateTimeOffset? LastAutovacuum)
     {
         public string ToCsv() => string.Join(',',
             ((long)Elapsed.TotalSeconds).ToString(CultureInfo.InvariantCulture),
@@ -140,7 +150,8 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
             Percentile95(ClaimMs).ToString("0.00", CultureInfo.InvariantCulture),
             OutboxBytes.ToString(CultureInfo.InvariantCulture),
             DeadTuples.ToString(CultureInfo.InvariantCulture),
-            Rows.ToString(CultureInfo.InvariantCulture));
+            Rows.ToString(CultureInfo.InvariantCulture),
+            LastAutovacuum?.ToString("O", CultureInfo.InvariantCulture) ?? "");
     }
 
     /// <summary>Claim durations since the last sample, recorded by the dispatch loop.</summary>
@@ -216,19 +227,13 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
     private static async Task<Sample> SampleAsync(NpgsqlDataSource dataSource, TimeSpan elapsed, Phase phase, IReadOnlyList<double> claims, CancellationToken ct)
     {
         await using var command = dataSource.CreateCommand("""
-            SELECT pg_total_relation_size('waybill.outbox'), n_dead_tup, n_live_tup
+            SELECT pg_total_relation_size('waybill.outbox'), n_dead_tup, n_live_tup, last_autovacuum
             FROM pg_stat_user_tables WHERE schemaname = 'waybill' AND relname = 'outbox'
             """);
         await using var reader = await command.ExecuteReaderAsync(ct);
         await reader.ReadAsync(ct);
-        return new Sample(elapsed, phase, claims, reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2));
-    }
-
-    private static async Task<DateTimeOffset?> LastAutovacuumAsync(NpgsqlDataSource dataSource, CancellationToken ct)
-    {
-        await using var command = dataSource.CreateCommand(
-            "SELECT last_autovacuum FROM pg_stat_user_tables WHERE schemaname = 'waybill' AND relname = 'outbox'");
-        return await command.ExecuteScalarAsync(ct) is DateTime at ? new DateTimeOffset(at, TimeSpan.Zero) : null;
+        DateTimeOffset? lastAutovacuum = reader.IsDBNull(3) ? null : new DateTimeOffset(reader.GetDateTime(3), TimeSpan.Zero);
+        return new Sample(elapsed, phase, claims, reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), lastAutovacuum);
     }
 
     private static async Task ExecuteAsync(NpgsqlDataSource dataSource, string sql, CancellationToken ct)
