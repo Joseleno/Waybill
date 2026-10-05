@@ -1,4 +1,8 @@
 <Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/Billing.Tests/Billing.Tests.csproj" />
+    <Project Path="samples/Billing/Billing.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Waybill.EntityFrameworkCore.PostgreSql/Waybill.EntityFrameworkCore.PostgreSql.csproj" />
     <Project Path="src/Waybill.RabbitMQ/Waybill.RabbitMQ.csproj" />
