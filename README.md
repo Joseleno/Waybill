@@ -103,7 +103,27 @@ makes no ordering promise; ordering by aggregate key is planned for 0.2.
 
 ## Comparison
 
-<!-- comparison: pending measured data -->
+Wolverine and CAP are messaging frameworks that include an outbox; Waybill is only the outbox and the inbox. The table
+compares what a team adopting one of them for EF Core, PostgreSQL and RabbitMQ takes on. Facts as of 2026-10-05, with
+Wolverine 6.46.0 and CAP 10.0.2; each cell about them links to its source.
+
+| | Waybill | Wolverine | CAP |
+| --- | --- | --- | --- |
+| License | Apache-2.0 | MIT ([license](https://github.com/JasperFx/wolverine/blob/main/LICENSE)) | MIT ([license](https://github.com/dotnetcore/CAP/blob/master/LICENSE.txt)) |
+| NuGet packages pulled in, EF Core + PostgreSQL + RabbitMQ (measured, see below) | 25 | 85; 94 with `WolverineFx.RuntimeCompilation`, which its default code generation mode needs ([codegen](https://wolverinefx.net/guide/codegen)) | 23 |
+| Runtime of its own in the host | No: DI registrations, and the dispatcher is a hosted service | Yes: `DbContextOutbox<T>` takes `IWolverineRuntime`, registered by `UseWolverine()` ([source](https://github.com/JasperFx/wolverine/blob/1f22835a2b3e32dbf4b75c7a5273622ee74a4929/src/Persistence/Wolverine.EntityFrameworkCore/DbContextOutbox.cs)) | Yes: `AddCap()` registers the publisher with its consumer infrastructure and a hosted bootstrapper ([source](https://github.com/dotnetcore/CAP/blob/master/src/DotNetCore.CAP/CAP.ServiceCollectionExtensions.cs)) |
+| Code generation at runtime | No | Yes, by default; pre-generated code is an option ([codegen](https://wolverinefx.net/guide/codegen)) | No |
+| Consumption (handlers, routing, ack) | Yours, with any client | Wolverine's ([listeners](https://wolverinefx.net/guide/messaging/listeners)) | CAP's `[CapSubscribe]` subscribers ([configuration](https://cap.dotnetcore.xyz/user-guide/en/cap/configuration/)) |
+| Consumer deduplication | Inbox keyed by `(handler, message_id)` in the handler's transaction; rows kept 30 days by default | Durable inbox skips an envelope already handled, kept 5 minutes by default; optional deduplication id with a 24-hour window ([idempotency](https://wolverinefx.net/guide/durability/idempotency)) | None built in: at least once, and idempotency is left to the application ([idempotence](https://cap.dotnetcore.xyz/user-guide/en/cap/idempotence/)) |
+| Ordering by key | Not in 0.1; planned for 0.2 | Partitioned sequential messaging, "per-slot best effort" ([partitioning](https://wolverinefx.net/guide/messaging/partitioning)) | None documented beyond the Kafka partition key ([messaging](https://cap.dotnetcore.xyz/user-guide/en/cap/messaging/)) |
+| Databases | PostgreSQL | PostgreSQL, SQL Server, MySQL, SQLite, Oracle and others ([durability](https://wolverinefx.net/guide/durability/)) | SQL Server, MySQL, PostgreSQL, MongoDB ([storage](https://cap.dotnetcore.xyz/user-guide/en/storage/general/)) |
+| Brokers | RabbitMQ | RabbitMQ, Kafka, Azure Service Bus, Amazon SQS/SNS and others ([transports](https://wolverinefx.net/guide/messaging/transports/)) | RabbitMQ, Kafka, Azure Service Bus, Amazon SQS and others ([transports](https://cap.dotnetcore.xyz/user-guide/en/transport/general/)) |
+
+Package counts: distinct packages in `dotnet list package --include-transitive` for a new `net10.0` console project
+with `Waybill.EntityFrameworkCore.PostgreSql` and `Waybill.RabbitMQ`; `WolverineFx.EntityFrameworkCore`,
+`WolverineFx.Postgresql` and `WolverineFx.RabbitMQ`; or `DotNetCore.CAP`, `DotNetCore.CAP.PostgreSql` and
+`DotNetCore.CAP.RabbitMQ`. Wolverine and CAP also got `Npgsql.EntityFrameworkCore.PostgreSQL`, which Waybill already
+brings and an EF Core application needs.
 
 ## What Waybill does not solve
 
