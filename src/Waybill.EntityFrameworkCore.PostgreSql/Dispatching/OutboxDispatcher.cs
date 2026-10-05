@@ -198,6 +198,8 @@ internal sealed partial class OutboxDispatcher
 
     public Task<int> ReleaseOwnedAsync(CancellationToken cancellationToken) => _store.ReleaseOwnedAsync(Owner, cancellationToken);
 
+    public Task<string> DefaultIsolationAsync(CancellationToken cancellationToken) => _store.DefaultIsolationAsync(cancellationToken);
+
     [LoggerMessage(EventId = 10, Level = LogLevel.Warning,
         Message = "Publishing a batch of {Count} message(s) failed (timed out: {TimedOut}); the batch is handed back to be published again.")]
     private static partial void LogPublishFailed(ILogger logger, Exception exception, int count, bool timedOut);

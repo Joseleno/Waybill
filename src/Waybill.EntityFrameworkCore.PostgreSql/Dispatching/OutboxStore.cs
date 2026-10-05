@@ -159,6 +159,10 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>The isolation level the claim runs under: the session default (<see cref="IsolationLevelCheck"/>).</summary>
+    public Task<string> DefaultIsolationAsync(CancellationToken cancellationToken) =>
+        IsolationLevelCheck.DefaultAsync(dataSource, cancellationToken);
+
     /// <summary>Seconds since the oldest message not yet published was written; 0 when there is none.</summary>
     public async Task<double> OldestPendingAgeAsync(CancellationToken cancellationToken)
     {

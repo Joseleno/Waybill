@@ -43,11 +43,25 @@ internal sealed partial class WaybillDispatcherService(
     private async Task RunAsync(CancellationToken stoppingToken)
     {
         var databaseFailures = 0;
+        var isolationVerified = false;
         while (!stoppingToken.IsCancellationRequested)
         {
             TimeSpan wait;
             try
             {
+                // Before the first claim, once the database answers: a wrong isolation level is a configuration error
+                // that no retry fixes, so stop (the health check then reports the loop as not running).
+                if (!isolationVerified)
+                {
+                    var isolation = await dispatcher.DefaultIsolationAsync(stoppingToken).ConfigureAwait(false);
+                    if (isolation != IsolationLevelCheck.Required)
+                    {
+                        LogWrongIsolation(logger, isolation);
+                        return;
+                    }
+                    isolationVerified = true;
+                }
+
                 var cycle = await dispatcher.RunOnceAsync(stoppingToken).ConfigureAwait(false);
                 databaseFailures = 0;
                 _status.CycleCompleted(cycle.Outcome);
@@ -120,4 +134,9 @@ internal sealed partial class WaybillDispatcherService(
 
     [LoggerMessage(EventId = 23, Level = LogLevel.Warning, Message = "Handing back claimed rows at shutdown failed; their leases will expire on their own.")]
     private static partial void LogReleaseFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 25, Level = LogLevel.Critical,
+        Message = "The Waybill dispatcher stopped: default_transaction_isolation is '{Isolation}', and the claim needs 'read committed'. " +
+            "Set it for the role or the database (ALTER ROLE ... SET default_transaction_isolation = 'read committed') and restart.")]
+    private static partial void LogWrongIsolation(ILogger logger, string isolation);
 }

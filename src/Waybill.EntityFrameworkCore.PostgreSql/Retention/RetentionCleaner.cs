@@ -9,6 +9,8 @@ internal readonly record struct RetentionPass(int OutboxDeleted, int InboxDelete
 /// <summary>One cleanup pass: deletes, batch by batch, what is past the retention in the outbox and the inbox.</summary>
 internal sealed partial class RetentionCleaner(RetentionStore store, IOptions<WaybillRetentionOptions> options, ILogger<RetentionCleaner> logger)
 {
+    public Task<string> DefaultIsolationAsync(CancellationToken cancellationToken) => store.DefaultIsolationAsync(cancellationToken);
+
     public async Task<RetentionPass> RunOnceAsync(CancellationToken cancellationToken)
     {
         var settings = options.Value;
