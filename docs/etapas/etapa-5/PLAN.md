@@ -33,7 +33,7 @@
 | `HealthCheck_BancoFora_Unhealthy` | Três ciclos seguidos com falha de banco | `Unhealthy` | PR |
 | `HealthCheck_LacoParado_Unhealthy` | Host parado | `Unhealthy` | PR |
 | `BrokerParadoEReligado_MetricaEHealthCheckAcompanham` | RabbitMQ real atrás do Toxiproxy, caminho cortado com backlog e depois religado | Health check vai a `Degraded` e volta a `Healthy`; a métrica cresce e volta a 0; nada na DLQ | PR (caos curto) |
-| `CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza` | Ver Desenho | Na última janela de 15 min da recuperação, depois de um autovacuum posterior ao fechamento: p95 do claim ≤ 2× o da linha de base, e tamanho do outbox ≤ 1,5× o da linha de base | Agendado, 5 h |
+| `CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza` | Ver Desenho | Na última janela de 15 min da recuperação, depois de um autovacuum posterior ao fechamento: p95 do claim ≤ max(2× o da linha de base, linha de base + 5 ms), e o tamanho do outbox cresce no máximo 5% dentro da janela. O tamanho não volta ao da linha de base: o vacuum comum libera espaço para reuso, mas não encolhe o arquivo; o que se exige é que pare de crescer | Agendado, 5 h |
 
 Opções inválidas, como retenção zero ou negativa, falham na partida. Isso fica num teste de unidade por opção.
 

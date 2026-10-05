@@ -7,6 +7,10 @@ on:
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
+    inputs:
+      long_duration:
+        description: 'Duration of the long load scenario (hh:mm:ss)'
+        default: '05:00:00'
 
 permissions:
   contents: read
@@ -18,7 +22,23 @@ env:
 jobs:
   long:
     runs-on: ubuntu-latest
-    # GitHub-hosted runners cap a job at 6 h, so the long load runs 5 h (ADR 0004); 24 h would need a self-hosted runner.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - run: dotnet build -c Release
+      # The long load has its own job below. Exit code 8 = zero tests ran in a project.
+      - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build --filter-trait "Category=Long" --filter-not-class "*CargaLonga*" --ignore-exit-code 8
+      - run: dotnet test --project tests/Waybill.Tests.Chaos -c Release --no-build --filter-trait "Category=Long" --ignore-exit-code 8
+
+  # GitHub-hosted runners cap a job at 6 h, so the long load runs 5 h in a job of its own (ADR 0004);
+  # 24 h would need a self-hosted runner.
+  long-load:
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v5
@@ -28,6 +48,13 @@ jobs:
         with:
           global-json-file: global.json
       - run: dotnet build -c Release
-      # Exit code 8 = zero tests ran; tolerated until the first long scenarios exist.
-      - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build --filter-trait "Category=Long" --ignore-exit-code 8
-      - run: dotnet test --project tests/Waybill.Tests.Chaos -c Release --no-build --filter-trait "Category=Long" --ignore-exit-code 8
+      - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build --filter-trait "Category=Long" --filter-class "*CargaLonga*"
+        env:
+          WAYBILL_LONG_DURATION: ${{ inputs.long_duration || '05:00:00' }}
+          WAYBILL_LONG_OUTPUT: ${{ github.workspace }}/carga-longa.csv
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: carga-longa
+          path: carga-longa.csv
+          if-no-files-found: warn

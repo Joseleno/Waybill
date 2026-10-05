@@ -36,7 +36,7 @@ jobs:
           global-json-file: global.json
       - run: dotnet build -c Release
       - run: dotnet test --project tests/Waybill.Tests.Unit -c Release --no-build
-      - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build
+      - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build --filter-not-trait "Category=Long"
 
   chaos:
     name: chaos (short)

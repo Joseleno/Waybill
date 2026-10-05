@@ -32,7 +32,7 @@ Requires the .NET 10 SDK and Docker (integration tests use Testcontainers).
 ```
 dotnet build
 dotnet test --project tests/Waybill.Tests.Unit
-dotnet test --project tests/Waybill.Tests.Integration
+dotnet test --project tests/Waybill.Tests.Integration --filter-not-trait "Category=Long"
 dotnet pack -c Release -o artifacts
 ```
 
