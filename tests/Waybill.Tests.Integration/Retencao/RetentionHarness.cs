@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Waybill.EntityFrameworkCore.Retention;
@@ -14,8 +15,9 @@ public static class RetentionHarness
     }
 
     /// <summary>A cleaner over the test database, driven pass by pass by the test.</summary>
-    internal static RetentionCleaner Create(NpgsqlDataSource dataSource, WaybillRetentionOptions options) =>
-        new(new RetentionStore(dataSource), Microsoft.Extensions.Options.Options.Create(options), NullLogger<RetentionCleaner>.Instance);
+    internal static RetentionCleaner Create(NpgsqlDataSource dataSource, WaybillRetentionOptions options, LogSink? logs = null) =>
+        new(new RetentionStore(dataSource), Microsoft.Extensions.Options.Options.Create(options),
+            logs is null ? NullLogger<RetentionCleaner>.Instance : new LoggerFactory([logs]).CreateLogger<RetentionCleaner>());
 
     /// <summary>
     /// Writes one outbox row as it would be after its life so far: the id is a UUIDv7 from <paramref name="createdAgo"/>,
