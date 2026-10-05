@@ -42,6 +42,18 @@ public sealed class RegistroDoContextoTests
         Assert.Contains("ConnectionString", error.Message);
     }
 
+    // The context type is not registered as a service (only a factory, or a typo): say what to do, at startup.
+    [Fact]
+    public void Registro_ContextoNaoRegistrado_ErroDizOQueFazer()
+    {
+        using var services = new ServiceCollection().AddLogging().AddWaybillDispatcher<OrdersDbContext>().BuildServiceProvider();
+
+        var error = Assert.Throws<InvalidOperationException>(() => services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+        Assert.Contains(nameof(OrdersDbContext), error.Message);
+        Assert.Contains("AddDbContext", error.Message);
+        Assert.Contains("ConnectionString", error.Message);
+    }
+
     private static ServiceProvider Build(Action<IServiceCollection> waybill, string? contextConnectionString = FromContext)
     {
         var services = new ServiceCollection()

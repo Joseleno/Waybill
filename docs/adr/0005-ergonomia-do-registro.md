@@ -23,9 +23,10 @@ O núcleo continua dependendo só de `Microsoft.Extensions.*` e da BCL: mudar o 
 
 - Quebra de API em relação ao código das etapas 2 a 5. Ainda não houve release; o CHANGELOG registra as mudanças em "Changed".
 - A mensagem de erro de quem esquece o mapeamento passa a citar `MapWaybillOutbox()`.
-- `AddWaybillDispatcher<TContext>()` falha na partida, com mensagem, se o contexto não tiver connection string (por exemplo, configurado só com uma conexão aberta).
+- `AddWaybillDispatcher<TContext>()` falha na partida, com mensagem, se o contexto não estiver registrado ou não tiver connection string.
+- Com `UseNpgsql(NpgsqlDataSource)`, o Npgsql devolve a connection string do contexto sem a senha (verificado). A sobrecarga não tem como recuperá-la: quem configura assim passa `ConnectionString` explicitamente. Está documentado na sobrecarga e no `OPERATIONS.md`; a falha de autenticação aparece como `Unhealthy` no health check (achado da revisão).
 - Não mudam: `AddWaybill` (registra opções e mensagens; o README explica), `Enqueue` (o README e a documentação dizem que entra no próximo `SaveChanges`) e `key` (documentado como identificador do agregado; ordenação por chave é da v0.2).
 
 ## Testes que provam
 
-`Registro_DispatcherDoContexto_UsaAConnectionStringDoDbContext`, `Registro_ConnectionStringExplicita_TemPrecedencia`, `Registro_ContextoSemConnectionString_FalhaNaPartida`, `Registro_SoComUsingDeDependencyInjection_RegistraTudo` (unidade). Os testes de integração e o exemplo passam a usar os nomes novos.
+`Registro_DispatcherDoContexto_UsaAConnectionStringDoDbContext`, `Registro_ConnectionStringExplicita_TemPrecedencia`, `Registro_ContextoSemConnectionString_FalhaNaPartida`, `Registro_ContextoNaoRegistrado_ErroDizOQueFazer`, `Registro_SoComUsingDeDependencyInjection_RegistraTudo` (unidade). Os testes de integração e o exemplo passam a usar os nomes novos.

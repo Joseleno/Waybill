@@ -12,7 +12,8 @@ public static class WaybillRetentionServiceCollectionExtensions
 {
     /// <summary>
     /// Runs retention cleanup for the database of <typeparamref name="TContext"/>: the connection string is read from the
-    /// registered context at startup, unless <paramref name="configure"/> sets one. Options are validated at startup.
+    /// registered context at startup, unless <paramref name="configure"/> sets one. Options are validated at startup. With
+    /// <c>UseNpgsql(NpgsqlDataSource)</c> Npgsql leaves the password out of the context's connection string: set it then.
     /// </summary>
     public static IServiceCollection AddWaybillRetention<TContext>(this IServiceCollection services, Action<WaybillRetentionOptions>? configure = null)
         where TContext : DbContext

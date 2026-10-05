@@ -12,7 +12,8 @@ services.AddHealthChecks().AddWaybillDispatcherCheck(); // entry "waybill-dispat
 ```
 
 Both read the connection string from the registered `DbContext`; set `ConnectionString` in the options to use another
-one (for example, a user with fewer rights). Retention is a hosted service of its own, so a consumer that only uses the inbox can run it without a dispatcher.
+one (for example, a user with fewer rights). Set it too when the context is configured with `UseNpgsql(NpgsqlDataSource)`:
+Npgsql leaves the password out of that context's connection string. Retention is a hosted service of its own, so a consumer that only uses the inbox can run it without a dispatcher.
 Any number of instances may run either service against the same database.
 
 ## Defaults

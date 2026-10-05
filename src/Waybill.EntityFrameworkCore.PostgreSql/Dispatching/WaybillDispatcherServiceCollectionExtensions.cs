@@ -14,7 +14,8 @@ public static class WaybillDispatcherServiceCollectionExtensions
 {
     /// <summary>
     /// Runs the outbox dispatcher for the database of <typeparamref name="TContext"/>: the connection string is read from
-    /// the registered context at startup, unless <paramref name="configure"/> sets one. Requires
+    /// the registered context at startup, unless <paramref name="configure"/> sets one. With
+    /// <c>UseNpgsql(NpgsqlDataSource)</c> Npgsql leaves the password out of the context's connection string: set it then. Requires
     /// <c>services.AddWaybill(...)</c> and an <see cref="ITransport"/>. Options are validated at startup.
     /// </summary>
     public static IServiceCollection AddWaybillDispatcher<TContext>(this IServiceCollection services, Action<WaybillDispatcherOptions>? configure = null)
