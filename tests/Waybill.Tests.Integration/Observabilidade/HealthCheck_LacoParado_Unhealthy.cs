@@ -17,6 +17,9 @@ public sealed class HealthCheck_LacoParado_Unhealthy(PostgresFixture postgres)
         Assert.Equal(HealthStatus.Unhealthy, (await harness.CheckAsync(ct)).Status);
 
         await harness.Dispatcher.StartAsync(ct);
+        // Running as soon as StartAsync returns: since .NET 10 ExecuteAsync starts on its own task, a check right after
+        // start must not read "not running" (review finding).
+        Assert.NotEqual(HealthStatus.Unhealthy, (await harness.CheckAsync(ct)).Status);
         await harness.WaitForAsync(HealthStatus.Healthy, ct);
         await harness.Dispatcher.StopAsync(ct);
         var stopped = await harness.CheckAsync(ct);
