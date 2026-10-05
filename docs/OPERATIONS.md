@@ -41,7 +41,7 @@ registered, so OpenTelemetry or any `MeterListener` picks it up; Waybill does no
 | --- | --- | --- |
 | `Healthy` | The dispatcher loop runs and the broker is reachable. | — |
 | `Degraded` | The broker is unreachable (circuit breaker open or a connection failure). The outbox keeps accepting events; they are published when the broker is back. | Alert. Do not restart the process: it would not help. |
-| `Unhealthy` | The dispatcher loop is not running, has not finished a cycle for longer than the lease plus 30 s, or the database failed three cycles in a row. | Liveness / restart. |
+| `Unhealthy` | The dispatcher loop is not running, has not finished a cycle for longer than the lease plus the longest wait between cycles (30 s, or `PollingInterval` if longer) plus 30 s — 90 s with the defaults — or the database failed three cycles in a row. | Liveness / restart. |
 
 The entry's data carries `oldest_pending_age_seconds`.
 

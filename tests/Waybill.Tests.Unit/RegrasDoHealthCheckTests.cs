@@ -11,8 +11,9 @@ public sealed class RegrasDoHealthCheckTests
 {
     private static readonly WaybillDispatcherOptions Options = new() { ConnectionString = "Host=localhost" };
 
-    // Lease (20 s + 10 s) + MaxBackoff (30 s): a loop that has not finished a cycle for this long is stuck.
-    private static readonly TimeSpan StallAfter = TimeSpan.FromSeconds(60);
+    // Lease (20 s + 10 s) + the longest wait between cycles (MaxBackoff 30 s; PollingInterval 1 s is shorter) + a 30 s
+    // margin for the cycle itself: a loop that has not finished a cycle for this long is stuck.
+    private static readonly TimeSpan StallAfter = TimeSpan.FromSeconds(90);
 
     private readonly FakeTimeProvider _time = new();
 
@@ -116,6 +117,21 @@ public sealed class RegrasDoHealthCheckTests
         Assert.Contains("stalled", result.Description);
     }
 
+    // An idle dispatcher waits PollingInterval between cycles; a long one must not read as stalled (review finding).
+    [Fact]
+    public async Task HealthCheck_Regra_PollingIntervalLongo_OciosoNaoEhTravado()
+    {
+        var options = new WaybillDispatcherOptions { ConnectionString = "Host=localhost", PollingInterval = TimeSpan.FromMinutes(2) };
+        var status = Started();
+        status.CycleCompleted(DispatchOutcome.Idle);
+
+        _time.Advance(TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(30));
+        Assert.Equal(HealthStatus.Healthy, (await CheckAsync(status, options)).Status);
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(HealthStatus.Unhealthy, (await CheckAsync(status, options)).Status);
+    }
+
     [Fact]
     public async Task HealthCheck_Regra_TravadoAntesDoPrimeiroCiclo_Unhealthy()
     {
@@ -133,7 +149,7 @@ public sealed class RegrasDoHealthCheckTests
         return status;
     }
 
-    private Task<HealthCheckResult> CheckAsync(DispatcherStatus status) =>
-        new WaybillDispatcherHealthCheck(status, Microsoft.Extensions.Options.Options.Create(Options), metrics: null, _time)
+    private Task<HealthCheckResult> CheckAsync(DispatcherStatus status, WaybillDispatcherOptions? options = null) =>
+        new WaybillDispatcherHealthCheck(status, Microsoft.Extensions.Options.Options.Create(options ?? Options), metrics: null, _time)
             .CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken);
 }

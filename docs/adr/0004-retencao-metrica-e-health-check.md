@@ -31,7 +31,7 @@ Sem limpeza, `waybill.outbox` e `waybill.inbox` crescem para sempre. Uma limpeza
 
 | Estado | Quando |
 | --- | --- |
-| `Unhealthy` | Laço do dispatcher fora de execução, ou último ciclo concluído há mais de `Lease + MaxBackoff` |
+| `Unhealthy` | Laço do dispatcher fora de execução, ou último ciclo concluído há mais de `Lease + max(MaxBackoff, PollingInterval) + 30 s` (a maior espera legítima entre ciclos mais folga para o próprio ciclo; 90 s com os padrões) |
 | `Unhealthy` | Três ou mais falhas de banco seguidas |
 | `Degraded` | Breaker aberto ou último ciclo com falha de conexão: o broker está fora, mas o outbox continua aceitando eventos |
 | `Healthy` | Nenhuma das anteriores |
