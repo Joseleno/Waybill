@@ -38,6 +38,7 @@ Sem limpeza, `waybill.outbox` e `waybill.inbox` crescem para sempre. Uma limpeza
 
 ## Consequências
 
+- Depois de uma pane longa do broker, o filtro por `id` deixa de estreitar: o backlog tem `id` antigo e `published_at` recente, e cada passada percorre essas linhas sem apagá-las até passarem da retenção. O custo é proporcional ao backlog, uma vez por `Interval`. Fica documentado no `OPERATIONS.md`; um índice parcial por `published_at` só entra se isso aparecer em medição (achado da revisão).
 - Broker fora por mais tempo que a retenção: nada pendente é apagado, a tabela cresce e a métrica mostra o atraso. Quando o broker volta, a fila drena, e as linhas publicadas só saem depois de mais uma retenção.
 - Reentrega depois da limpeza do inbox processa de novo. É a fronteira declarada de G3, caracterizada por teste e documentada no `OPERATIONS.md`; não é garantia.
 - A métrica tem a resolução do `MetricsInterval`, e o valor pode ter até esse atraso.
@@ -46,3 +47,13 @@ Sem limpeza, `waybill.outbox` e `waybill.inbox` crescem para sempre. Uma limpeza
 ## Testes que provam
 
 `G2_BrokerParadoAlemDaRetencao_NenhumaPendenteApagada`, `Retencao_*`, `Inbox_ReentregaDepoisDaLimpeza_ProcessaDeNovo`, `Metrica_*`, `HealthCheck_*` (integração); `BrokerParadoEReligado_MetricaEHealthCheckAcompanham` (caos); `CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza` (agendado, 5 h).
+
+## Revisão (2026-10-04)
+
+A revisão de código independente desta etapa encontrou e motivou:
+
+- **Laço travado com `PollingInterval` longo.** O limiar `Lease + MaxBackoff` marcava `Unhealthy` um dispatcher ocioso com intervalo de polling maior que 60 s. Passou a `Lease + max(MaxBackoff, PollingInterval) + 30 s`.
+- **Carga longa que podia passar sem provar nada.** O teste passou a exigir que os dead tuples com a transação aberta passem do dobro dos da linha de base, e a janela final só conta depois do primeiro autovacuum posterior ao fechamento.
+- **Uma tabela que falha travava a outra.** A limpeza do outbox e a do inbox passaram a ser independentes: a falha numa gera log e a outra segue.
+- **Intervalos sem teto.** `Task.Delay` lança acima de ~49 dias e derrubaria o host; `PollingInterval`, `MetricsInterval` e `Interval` passaram a aceitar no máximo um dia.
+- **CI que tolerava zero testes.** `--ignore-exit-code 8` saiu dos passos que agora sempre têm testes.

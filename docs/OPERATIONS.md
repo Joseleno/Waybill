@@ -80,12 +80,21 @@ ALTER TABLE waybill.outbox SET (autovacuum_vacuum_scale_factor = 0.01, autovacuu
 Do not set a `fillfactor` on the outbox: it only helps HOT updates, and they cannot happen here.
 
 A long-running transaction anywhere in the database (a report, an idle-in-transaction session, a standby with
-`hot_standby_feedback` running a long query) holds back the vacuum horizon. While it is open the claim gets slower even if the table size looks stable; once
-it closes and autovacuum runs, the claim latency comes back and the table stops growing. The table file does not
-shrink after such an episode (plain `VACUUM` makes the space reusable, it does not return it). Watch for long
-transactions with `pg_stat_activity` (`xact_start`, `state = 'idle in transaction'`) and set
-`idle_in_transaction_session_timeout`.
+`hot_standby_feedback` running a long query) holds back the vacuum horizon. While it is open, dead tuples pile up and
+the claim can get slower, even if the table size looks stable. The table file does not shrink after such an episode
+(plain `VACUUM` makes the space reusable, it does not return it). Watch for long transactions with
+`pg_stat_activity` (`xact_start`, `state = 'idle in transaction'`) and set `idle_in_transaction_session_timeout`.
 
-This behavior is exercised by the long load scenario
-(`CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza`), which runs for 5 hours in the scheduled CI workflow
-with the autovacuum settings above.
+The long load scenario (`CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza`) holds such a transaction open
+under constant load with the autovacuum settings above. It checks that dead tuples pile up while it is open and that,
+once it closes and autovacuum runs, the claim latency comes back near the baseline and the table stops growing. It
+runs for 5 hours in the scheduled CI workflow and writes one CSV line per minute (claim p95, table size, dead tuples).
+
+## Retention after a long broker outage
+
+To find what to delete without an extra index, retention walks the outbox primary key below the UUIDv7 of the cutoff
+time and checks `status` and `published_at` row by row. In steady state that range holds only rows due for deletion.
+After a long outage it also holds the whole backlog: messages created before the outage but published only when the
+broker came back. Until they pass `OutboxRetention` (counted from publication), every pass walks over them without
+deleting them, a cost proportional to that backlog once per `Interval`. If that shows up in your database, raise
+`Interval` while it lasts.
