@@ -14,6 +14,7 @@ var broker = builder.Configuration.GetConnectionString("RabbitMQ")
 
 builder.Services.AddDbContext<BillingDbContext>(o => o.UseNpgsql(database));
 builder.Services.AddScoped<InvoicePayments>();
+builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 
 // Waybill: messages, the outbox on this context, the dispatcher with its transport, retention and the health check.
 builder.Services.AddWaybill(BillingMessages.Register);

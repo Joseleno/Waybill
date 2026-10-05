@@ -1,0 +1,67 @@
+name: waybill-sample
+
+x-connections: &connections
+  ConnectionStrings__Billing: Host=postgres;Database=billing;Username=postgres;Password=postgres
+  ConnectionStrings__Receipts: Host=postgres;Database=receipts;Username=postgres;Password=postgres
+  ConnectionStrings__RabbitMQ: amqp://waybill:waybill@rabbitmq:5672
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    ports:
+      - "15672:15672"   # management UI: http://localhost:15672 (waybill / waybill)
+    volumes:
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      retries: 30
+
+  # Schema changes run once, as their own step, before the services start. Never from the API at startup.
+  billing-migrate:
+    build: { context: .., dockerfile: samples/Billing/Dockerfile }
+    image: waybill-sample/billing
+    command: ["migrate"]
+    environment: *connections
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  receipts-migrate:
+    build: { context: .., dockerfile: samples/Receipts/Dockerfile }
+    image: waybill-sample/receipts
+    command: ["migrate"]
+    environment: *connections
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  billing:
+    build: { context: .., dockerfile: samples/Billing/Dockerfile }
+    image: waybill-sample/billing
+    ports:
+      - "8080:8080"
+    environment: *connections
+    depends_on:
+      billing-migrate: { condition: service_completed_successfully }
+      rabbitmq: { condition: service_healthy }
+
+  receipts:
+    build: { context: .., dockerfile: samples/Receipts/Dockerfile }
+    image: waybill-sample/receipts
+    ports:
+      - "8081:8080"
+    environment: *connections
+    depends_on:
+      receipts-migrate: { condition: service_completed_successfully }
+      rabbitmq: { condition: service_healthy }
