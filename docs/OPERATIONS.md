@@ -79,6 +79,17 @@ Keep `InboxRetention` above the longest delay between enqueueing a message and i
 
 Replaying a queue or an offset older than the inbox retention is not covered.
 
+## PostgreSQL: isolation level
+
+The claim and the retention run as single statements at the session's default isolation, and they rely on
+`READ COMMITTED`, PostgreSQL's default. If `default_transaction_isolation` is set to something else for the database
+or for the role Waybill connects with, the dispatcher and the retention stop before their first cycle with a critical
+log, and the health check reports the dispatcher as not running. Set it back for Waybill's role:
+
+```sql
+ALTER ROLE waybill_dispatcher SET default_transaction_isolation = 'read committed';
+```
+
 ## PostgreSQL: autovacuum and long transactions
 
 Every claim changes `status`, which is part of the predicate of the partial index the claim walks. That rules out HOT

@@ -23,6 +23,7 @@ First release. What each guarantee covers, and the test that proves it, is in [G
 - `AddWaybillDispatcher<TContext>()`: hosted service on the context's database (an explicit `ConnectionString` wins). Per-row claim with `FOR UPDATE SKIP LOCKED`, lease (`PublishTimeout` + `LeaseMargin`) and fencing token; publication outside any transaction; fenced marking and hand-back; graceful shutdown that hands back what it holds.
 - Failure classification (ADR 0003): only message defects go to the outbox DLQ, with a reason. Connection and channel failures hand the batch back without spending attempts and open a per-dispatcher circuit breaker (no claims while open, a one-message probe when half-open, open period doubling up to 30 s). Confirmation timeouts and nacks halve the batch without opening it; repeated pressure at a batch of one opens it as a silent outage. `basic.return` has its own budget (`MaxReturns`).
 - `ITransport` contract with per-message results (`Confirmed`, `Retry`, `Returned`, `Defect`).
+- The dispatcher and the retention check `default_transaction_isolation` before their first cycle and stop with a critical log unless it is `read committed`, which the claim relies on.
 
 #### RabbitMQ transport (`Waybill.RabbitMQ`)
 

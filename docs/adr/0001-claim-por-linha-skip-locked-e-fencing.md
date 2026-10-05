@@ -77,3 +77,13 @@ O spike também exercitou lease por partição e filtro de cabeça por chave. Fi
 
 - Cabeça por chave sozinha só é segura com M=1; com M=4 houve 1.268 a 1.936 inversões em três execuções. Com lease por partição, 0 inversões em M=1 e M=4 — mas sem troca de dono durante o teste.
 - Riscos abertos da revisão: `SKIP LOCKED` pula uma linha-prefixo travada por um Mark/Release concorrente e, com M≥2, leva a seguinte (quebra a ordem sem publicação zumbi); `epoch` gravado e não usado no fencing; P e lease precisam ser globais e validados no startup; GC de `outbox_instances`; varredura do filtro de cabeça é O(backlog pendente).
+
+**`READ COMMITTED` passou a ser verificado.** O claim (e a limpeza do ADR 0004) roda no nível padrão da sessão, e nada
+garantia que ele fosse `READ COMMITTED`: com `default_transaction_isolation` diferente no banco ou no role, o item 2
+desta decisão vira erro 40001 em todo ciclo concorrente. Antes do primeiro ciclo, o dispatcher e a limpeza leem
+`default_transaction_isolation`; se não for `read committed`, registram um erro crítico que diz o que mudar e param, e o
+health check acusa o laço parado. Banco fora do ar na partida segue o backoff de sempre. Descartado: transação explícita
+`ReadCommitted` em cada claim, que custaria um round-trip a mais no caminho mais quente; e só documentar, que deixaria o
+erro aparecer em produção como falha de ciclo sem causa clara. Testes:
+`Configuracao_IsolamentoDiferenteDeReadCommitted_DispatcherParaComErroCritico` e
+`Configuracao_IsolamentoDiferenteDeReadCommitted_RetencaoParaComErroCritico`.

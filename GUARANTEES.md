@@ -58,6 +58,12 @@ topology.
 [`G2_RabbitMq_PontaAPonta_ComOHost_EventoGravadoComODadoChegaAFila`](tests/Waybill.Tests.Integration/G2/RabbitMq/G2_RabbitMq_PontaAPonta_ComOHost.cs),
 [`G2_DispatcherPublicaEMarca_EmOrdemDeIdComEnvelopeCompleto`](tests/Waybill.Tests.Integration/G2/G2_DispatcherPublicaEMarca.cs)
 
+The dispatcher's sessions run at `READ COMMITTED`, PostgreSQL's default. If the database or the role sets another
+`default_transaction_isolation`, the dispatcher and the retention stop before their first cycle with a critical log
+that says what to change, instead of running a claim whose concurrency rules no longer hold.
+[`Configuracao_IsolamentoDiferenteDeReadCommitted_DispatcherParaComErroCritico`](tests/Waybill.Tests.Integration/Configuracao_IsolamentoTests.cs),
+[`Configuracao_IsolamentoDiferenteDeReadCommitted_RetencaoParaComErroCritico`](tests/Waybill.Tests.Integration/Configuracao_IsolamentoTests.cs)
+
 **Refused before anything is written.** `Enqueue` throws, and nothing is persisted, for:
 - an unregistered message type;
 - a message that fails to serialize;
