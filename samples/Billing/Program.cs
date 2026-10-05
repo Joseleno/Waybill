@@ -26,7 +26,7 @@ builder.Services.AddWaybillRabbitMQ(o =>
 });
 builder.Services.AddWaybillDispatcher(o => o.ConnectionString = database);
 builder.Services.AddWaybillRetention(o => o.ConnectionString = database);
-builder.Services.AddHealthChecks().AddWaybillDispatcher();
+builder.Services.AddHealthChecks().AddWaybillDispatcherCheck();
 
 var app = builder.Build();
 

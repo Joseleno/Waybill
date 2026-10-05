@@ -41,7 +41,7 @@ public sealed class BrokerParadoEReligado_MetricaEHealthCheckAcompanham(Postgres
                 o.LeaseMargin = TimeSpan.FromSeconds(2);
                 o.MetricsInterval = TimeSpan.FromMilliseconds(200);
             })
-            .AddHealthChecks().AddWaybillDispatcher().Services
+            .AddHealthChecks().AddWaybillDispatcherCheck().Services
             .BuildServiceProvider();
         var factory = services.GetRequiredService<IMeterFactory>();
         var health = services.GetRequiredService<HealthCheckService>();

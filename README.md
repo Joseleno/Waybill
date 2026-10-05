@@ -26,7 +26,7 @@ until then, nothing here is a promise.
 - `Waybill.Testing`: in-memory `FakeOutbox<TContext>` and `FakeInbox<TContext>` with assertions, to test code that enqueues or consumes messages without PostgreSQL, each checked for equivalence against the real one.
 - `Waybill.RabbitMQ`: `AddWaybillRabbitMQ(...)` publishes to one exchange you declare, with the registered message name as routing key, publisher confirms, `mandatory` and persistent delivery. Waybill does not create topology.
 - Retention (`AddWaybillRetention(...)`): a hosted service that deletes, in small batches, published outbox rows past `OutboxRetention` and inbox rows past `InboxRetention`. Pending, claimed and dead-lettered rows are never deleted, also while the broker is down for longer than the retention. A message redelivered after its inbox row was deleted is processed again; [OPERATIONS.md](docs/OPERATIONS.md#sizing-the-inbox-retention) explains how to size the inbox retention.
-- Observability without OpenTelemetry: the gauge `waybill.outbox.oldest_pending.age` (meter `Waybill`, seconds) and `AddHealthChecks().AddWaybillDispatcher()`, which reports `Degraded` while the broker is unreachable and `Unhealthy` when the dispatcher loop stops or the database keeps failing.
+- Observability without OpenTelemetry: the gauge `waybill.outbox.oldest_pending.age` (meter `Waybill`, seconds) and `AddHealthChecks().AddWaybillDispatcherCheck()`, which reports `Degraded` while the broker is unreachable and `Unhealthy` when the dispatcher loop stops or the database keeps failing.
 
 ## Building
 

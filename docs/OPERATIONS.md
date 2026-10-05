@@ -8,7 +8,7 @@ What to configure, what to watch, and what the defaults assume. The reasoning be
 ```csharp
 services.AddWaybillDispatcher(o => o.ConnectionString = "...");   // also samples the pending-age gauge
 services.AddWaybillRetention(o => o.ConnectionString = "...");    // deletes delivered and expired rows
-services.AddHealthChecks().AddWaybillDispatcher();                // entry "waybill-dispatcher"
+services.AddHealthChecks().AddWaybillDispatcherCheck();                // entry "waybill-dispatcher"
 ```
 
 Retention is a hosted service of its own, so a consumer that only uses the inbox can run it without a dispatcher.

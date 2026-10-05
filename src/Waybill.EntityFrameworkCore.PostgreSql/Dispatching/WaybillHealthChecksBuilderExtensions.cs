@@ -13,7 +13,7 @@ public static class WaybillHealthChecksBuilderExtensions
     /// in a row; Degraded when the broker is unreachable (the outbox keeps accepting events); Healthy otherwise. The
     /// entry's data carries <c>oldest_pending_age_seconds</c>.
     /// </summary>
-    public static IHealthChecksBuilder AddWaybillDispatcher(
+    public static IHealthChecksBuilder AddWaybillDispatcherCheck(
         this IHealthChecksBuilder builder, string name = "waybill-dispatcher", IEnumerable<string>? tags = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
