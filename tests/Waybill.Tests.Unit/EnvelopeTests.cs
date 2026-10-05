@@ -10,9 +10,16 @@ public sealed record NotRegistered(int Value);
 
 public sealed record Blob(string Content);
 
+// A getter that throws stands for any serialization failure (unsupported value, converter bug).
+public sealed record Unserializable(int Value)
+{
+    public int Broken => throw new InvalidOperationException("broken getter");
+}
+
 [JsonSerializable(typeof(InvoicePaid))]
 [JsonSerializable(typeof(NotRegistered))]
 [JsonSerializable(typeof(Blob))]
+[JsonSerializable(typeof(Unserializable))]
 internal sealed partial class TestJson : JsonSerializerContext;
 
 public sealed class EnvelopeTests
@@ -20,7 +27,8 @@ public sealed class EnvelopeTests
     private static WaybillOptions Options(int maxPayloadBytes = 1024) =>
         new WaybillOptions { MaxPayloadBytes = maxPayloadBytes }
             .AddMessage("billing.invoice-paid.v1", TestJson.Default.InvoicePaid)
-            .AddMessage("test.blob.v1", TestJson.Default.Blob);
+            .AddMessage("test.blob.v1", TestJson.Default.Blob)
+            .AddMessage("test.unserializable.v1", TestJson.Default.Unserializable);
 
     [Fact]
     public void Envelope_FixaMessageIdUuidV7NoEnqueue()
@@ -51,6 +59,17 @@ public sealed class EnvelopeTests
             () => EnvelopeFactory.Create(Options(), new NotRegistered(1), null, null, null));
 
         Assert.Contains("is not registered", error.Message);
+    }
+
+    // Serialization runs inside Enqueue, before the outbox row is added to the change tracker, so the failure
+    // reaches whoever enqueued and nothing is written.
+    [Fact]
+    public void Envelope_FalhaDeSerializacao_FalhaNoEnqueue()
+    {
+        var error = Assert.Throws<InvalidOperationException>(
+            () => EnvelopeFactory.Create(Options(), new Unserializable(1), null, null, null));
+
+        Assert.Equal("broken getter", error.Message);
     }
 
     [Fact]
