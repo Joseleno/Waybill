@@ -25,7 +25,7 @@ public sealed class InvoicePaidHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task EmitirRecibo_PrimeiraEntrega_GravaReciboEEnfileira()
+    public async Task IssueReceipt_FirstDelivery_SavesReceiptAndEnqueues()
     {
         var paid = new InvoicePaid(Guid.NewGuid(), "INV-1001", 99.90m, DateTimeOffset.UtcNow);
         var messageId = Guid.CreateVersion7();
@@ -41,7 +41,7 @@ public sealed class InvoicePaidHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task EmitirRecibo_EntregaRepetida_UmRecibo()
+    public async Task IssueReceipt_RepeatedDelivery_OneReceipt()
     {
         var paid = new InvoicePaid(Guid.NewGuid(), "INV-1002", 10m, DateTimeOffset.UtcNow);
         var messageId = Guid.CreateVersion7();

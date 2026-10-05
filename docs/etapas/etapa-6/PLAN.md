@@ -16,11 +16,11 @@
 
 | Teste | Cenário | Resultado esperado | Onde roda |
 | --- | --- | --- | --- |
-| `Pagar_FaturaAberta_EnfileiraInvoicePaid` | Caso de uso com `FakeOutbox` | Um `billing.invoice-paid.v1` com o id e o valor da fatura, key = id | Billing.Tests (PR) |
-| `Pagar_FaturaJaPaga_NaoEnfileiraDeNovo` | Segundo pagamento | 409; nenhum evento novo | Billing.Tests (PR) |
-| `Enfileirar_TipoNaoRegistrado_ErroDizOQueFazer` | Mensagem sem `AddMessage` | A exceção cita o tipo e `AddMessage`, tanto no fake quanto no real | Billing.Tests (PR) |
-| `EmitirRecibo_PrimeiraEntrega_GravaReciboEEnfileira` | Handler com `FakeInbox` | Um recibo e um `receipts.receipt-issued.v1` | Receipts.Tests (PR) |
-| `EmitirRecibo_EntregaRepetida_UmRecibo` | Mesma mensagem duas vezes | `Duplicate` na segunda; um recibo | Receipts.Tests (PR) |
+| `Pay_OpenInvoice_EnqueuesInvoicePaid` | Caso de uso com `FakeOutbox` | Um `billing.invoice-paid.v1` com o id e o valor da fatura, key = id | Billing.Tests (PR) |
+| `Pay_AlreadyPaidInvoice_DoesNotEnqueueAgain` | Segundo pagamento | 409; nenhum evento novo | Billing.Tests (PR) |
+| `Enqueue_UnregisteredType_ErrorSaysWhatToDo` | Mensagem sem `AddMessage` | A exceção cita o tipo e `AddMessage` (a validação é a mesma no fake e no real: `WaybillOptions`) | Billing.Tests (PR) |
+| `IssueReceipt_FirstDelivery_SavesReceiptAndEnqueues` | Handler com `FakeInbox` | Um recibo e um `receipts.receipt-issued.v1` | Receipts.Tests (PR) |
+| `IssueReceipt_RepeatedDelivery_OneReceipt` | Mesma mensagem duas vezes | `Duplicate` na segunda; um recibo | Receipts.Tests (PR) |
 | Smoke do compose | `docker compose up --wait` + `smoke.sh` | Recibo gravado; as duas mensagens na `audit` em até 60 s | Job `sample` (PR) |
 | Falha do broker | `broker-outage.sh` no compose | Pendentes > 0 e `Degraded` com o broker parado; 0 pendentes e `Healthy` depois de religar | Job `sample` (PR) |
 | Estranho com o README | Agente sem contexto recebe só `samples/README.md` | Sobe o exemplo e publica o primeiro evento; cada fricção registrada | Manual, antes do PR |

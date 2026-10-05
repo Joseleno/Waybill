@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `AddWaybillDispatcher<TContext>()` and `AddWaybillRetention<TContext>()`: take the connection string from the registered `DbContext`; an explicit `ConnectionString` still wins.
+- Runnable sample (`samples/`): a billing API and a receipts consumer on plain RabbitMQ.Client with the inbox, `docker compose up --wait`, tests with the fakes, and broker outage scripts (bash and PowerShell), all run in CI.
 - Retention (`AddWaybillRetention`, `WaybillRetentionOptions`): hosted service that deletes published outbox rows past `OutboxRetention` (7 days, counted from publication) and inbox rows past `InboxRetention` (30 days, counted from processing), in batches with `FOR UPDATE SKIP LOCKED`; pending, claimed and dead-lettered rows are never deleted. Any number of instances may run it. New migration: index `ix_inbox_processed_at`. ADR 0004.
 - Gauge `waybill.outbox.oldest_pending.age` (meter `Waybill`, seconds), sampled in the background every `WaybillDispatcherOptions.MetricsInterval` (15 s) on the database clock; a failed sample keeps the last value.
 - Dispatcher health check (`AddHealthChecks().AddWaybillDispatcherCheck()`): `Degraded` while the broker is unreachable, `Unhealthy` when the loop is not running or stalled or the database failed three cycles in a row. `Waybill.EntityFrameworkCore.PostgreSql` now depends on `Microsoft.Extensions.Diagnostics.HealthChecks`.
@@ -31,3 +33,10 @@ All notable changes to this project are documented here. The format follows
 - Project skeleton: `Waybill`, `Waybill.EntityFrameworkCore.PostgreSql` and `Waybill.RabbitMQ` packages targeting .NET 10, with unit, integration and chaos test projects.
 - CI on pull requests (PostgreSQL 15 and 18), scheduled workflow for long scenarios, and tag-based release pipeline.
 - ADR 0001: row claim with `FOR UPDATE SKIP LOCKED`, per-row lease and fencing token, with the stage 0 spike results.
+
+### Changed
+
+- Registration ergonomics (ADR 0005), before the first release:
+  - `AddHealthChecks().AddWaybillDispatcher()` is now `AddWaybillDispatcherCheck()`.
+  - `modelBuilder.AddWaybillOutbox()` is now `modelBuilder.MapWaybillOutbox()`.
+  - The `AddWaybill*` registration methods live in `Microsoft.Extensions.DependencyInjection`, and `MapWaybillOutbox` in `Microsoft.EntityFrameworkCore`, so setup needs no `using Waybill...`.

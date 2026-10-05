@@ -21,7 +21,7 @@ public sealed class InvoicePaymentsTests : IDisposable
     }
 
     [Fact]
-    public async Task Pagar_FaturaAberta_EnfileiraInvoicePaid()
+    public async Task Pay_OpenInvoice_EnqueuesInvoicePaid()
     {
         var invoice = await OpenInvoiceAsync(150.25m);
 
@@ -35,7 +35,7 @@ public sealed class InvoicePaymentsTests : IDisposable
     }
 
     [Fact]
-    public async Task Pagar_FaturaJaPaga_NaoEnfileiraDeNovo()
+    public async Task Pay_AlreadyPaidInvoice_DoesNotEnqueueAgain()
     {
         var invoice = await OpenInvoiceAsync(10m);
         var payments = new InvoicePayments(_db, _outbox);
@@ -48,7 +48,7 @@ public sealed class InvoicePaymentsTests : IDisposable
     }
 
     [Fact]
-    public async Task Pagar_FaturaInexistente_NaoEnfileira()
+    public async Task Pay_MissingInvoice_EnqueuesNothing()
     {
         var result = await new InvoicePayments(_db, _outbox).PayAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
 
@@ -58,7 +58,7 @@ public sealed class InvoicePaymentsTests : IDisposable
 
     // Forgetting to register a message type must say what to do, not fail somewhere in serialization.
     [Fact]
-    public void Enfileirar_TipoNaoRegistrado_ErroDizOQueFazer()
+    public void Enqueue_UnregisteredType_ErrorSaysWhatToDo()
     {
         using var outbox = new FakeOutbox<BillingDbContext>(_db, new WaybillOptions { MaxPayloadBytes = 16 * 1024 }); // no AddMessage
 

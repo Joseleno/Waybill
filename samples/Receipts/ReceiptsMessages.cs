@@ -23,6 +23,8 @@ public static class ReceiptsMessages
 
     public static void Register(WaybillOptions options)
     {
+        // Required: the largest payload this service may enqueue. Enqueue refuses anything bigger, before it reaches
+        // the table or the broker. Size it to your messages and below the broker's own limit.
         options.MaxPayloadBytes = 16 * 1024;
         options.AddMessage(ReceiptIssued, ReceiptsJson.Default.ReceiptIssued);
     }

@@ -66,7 +66,8 @@ internal sealed partial class InvoicePaidConsumer(
         }
         catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
         {
-            // Nothing was committed (the inbox rolled back): the broker delivers it again.
+            // Nothing was committed (the inbox rolled back): the broker delivers it again. The queue's x-delivery-limit
+            // (rabbitmq/definitions.json) bounds the retries and then dead-letters the message.
             LogFailed(logger, messageId, exception);
             await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
             await channel.BasicNackAsync(delivery.DeliveryTag, multiple: false, requeue: true, stoppingToken);

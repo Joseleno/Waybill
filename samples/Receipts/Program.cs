@@ -1,10 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Receipts;
-using Waybill;
 using Waybill.EntityFrameworkCore;
-using Waybill.EntityFrameworkCore.Dispatching;
-using Waybill.EntityFrameworkCore.Retention;
-using Waybill.RabbitMQ;
 
 var builder = WebApplication.CreateBuilder(args);
 var database = builder.Configuration.GetConnectionString("Receipts")
@@ -27,8 +23,8 @@ builder.Services.AddWaybillRabbitMQ(o =>
     o.Uri = broker;
     o.Exchange = "events";
 });
-builder.Services.AddWaybillDispatcher(o => o.ConnectionString = database);
-builder.Services.AddWaybillRetention(o => o.ConnectionString = database);
+builder.Services.AddWaybillDispatcher<ReceiptsDbContext>();
+builder.Services.AddWaybillRetention<ReceiptsDbContext>();
 builder.Services.AddHealthChecks().AddWaybillDispatcherCheck();
 
 var app = builder.Build();

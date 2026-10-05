@@ -10,7 +10,9 @@ public sealed class ReceiptIssuer(IOutbox<ReceiptsDbContext> outbox)
         var receipt = new Receipt { InvoiceId = paid.InvoiceId, Amount = paid.Amount, IssuedAt = DateTimeOffset.UtcNow };
         db.Receipts.Add(receipt);
         outbox.Enqueue(new ReceiptIssued(receipt.Id, receipt.InvoiceId, receipt.Amount, receipt.IssuedAt), key: paid.InvoiceId.ToString());
-        return Task.CompletedTask; // the inbox saves and commits: the receipt, the event and the inbox row together
+        // No SaveChanges here: the inbox saves and commits once this returns, so the receipt, the event and the inbox
+        // record commit together. `db` is the scope's context, the same instance the injected outbox enqueues into.
+        return Task.CompletedTask;
     }
 }
 
