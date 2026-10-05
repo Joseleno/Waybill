@@ -13,7 +13,7 @@ Fonte: um agente sem contexto recebeu só o `README.md` da release e um feed loc
 | 5 | O consumo com o inbox não dizia o formato do corpo | irritante | README: o corpo é o JSON do `JsonTypeInfo` registrado, o `type` AMQP traz o nome, e há link para o consumidor do exemplo |
 | 6 | `--prerelease` e `--version` juntos falham no `dotnet add package` | sem efeito | Só aconteceu pelo desvio permitido (feed local com versão fixa); no nuget.org, o README está certo |
 | 7 | De onde vêm `services` e o `AddDbContext` | menor | README: `services` é o `builder.Services`, e o comentário cita o `AddDbContext` |
-| 8 | O pacote `Waybill.EntityFrameworkCore.PostgreSql` leva um `runtimeconfig.json` em `lib/net10.0` | menor | Registrado. Vem do `Microsoft.EntityFrameworkCore.Design`, usado para gerar as migrations do pacote. Inofensivo; decidir antes da release se vale excluí-lo do pack |
+| 8 | O pacote `Waybill.EntityFrameworkCore.PostgreSql` leva um `runtimeconfig.json` em `lib/net10.0` | menor | Mantido. Vem do `Microsoft.EntityFrameworkCore.Design`, que liga `GenerateRuntimeConfigurationFiles` para o `dotnet ef` gerar as migrations do pacote. Tirá-lo do pack dependeria de um target interno do NuGet, por um arquivo inofensivo de 411 bytes |
 
 O trecho da API cresceu de 10 para 14 linhas de código, mas as linhas do Waybill continuam dez. O teste `Readme_ApiEmDezLinhas_Compila` não conta chaves, `using` e o `JsonSerializerContext` das mensagens.
 
