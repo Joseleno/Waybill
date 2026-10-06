@@ -12,12 +12,12 @@
 
 ## 8b — lease por partição
 
-- [ ] Schema: `settings`, `outbox_partitions` e `outbox_instances` na migration da v0.2, refeita
-- [ ] Opções `OrderByKey`, `Partitions` e `PartitionLease`, validadas; API pública declarada
-- [ ] Store de partições: configuração global, heartbeat, renovação, aquisição, devolução e coleta
-- [ ] Dispatcher: manutenção das partições a cada ciclo, claim com o `EXISTS` de posse, verificação da configuração e parada crítica, devolução no shutdown
-- [ ] Cenários `G4_*` da 8b, um commit por cenário; oráculo de mandatos no caos
-- [ ] `OPERATIONS.md` (opções, ligar e desligar a ordenação, mudar P), escopo, ADR 0007, CHANGELOG
+- [x] Schema: `settings`, `outbox_partitions` e `outbox_instances` na migration da v0.2, refeita
+- [x] Opções `OrderByKey`, `Partitions` e `PartitionLease`, validadas; API pública declarada
+- [x] Store de partições: configuração global, heartbeat, renovação, aquisição, devolução e coleta
+- [x] Dispatcher: manutenção das partições a cada ciclo, claim com o `EXISTS` de posse, verificação da configuração e parada crítica, devolução no shutdown
+- [x] Cenários `G4_*` da 8b, um commit por cenário; oráculos de mandato e de claim fora do mandato no caos; mutações
+- [x] `OPERATIONS.md` (opções, ligar e desligar a ordenação, mudar P, com o SQL testado), escopo, ADR 0007, CHANGELOG
 - [ ] Revisão de código independente antes da PR
 
 ## 8c — cabeça por chave
