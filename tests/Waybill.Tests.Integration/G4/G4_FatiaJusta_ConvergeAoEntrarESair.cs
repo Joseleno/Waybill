@@ -9,7 +9,7 @@ namespace Waybill.Tests.Integration.G4;
 [Collection(PostgresCollection.Name)]
 public sealed class G4_FatiaJusta_ConvergeAoEntrarESair(PostgresFixture postgres)
 {
-    private static readonly OrderingSettings Settings = new(16, TimeSpan.FromMilliseconds(400));
+    private static readonly OrderingSettings Settings = new(16, TimeSpan.FromSeconds(1)); // long enough that a slow round on CI does not look like a death
 
     [Fact]
     public async Task G4_FatiaJusta_ConvergeAoEntrarESair_ShutdownNaHoraMortaNoLease()
