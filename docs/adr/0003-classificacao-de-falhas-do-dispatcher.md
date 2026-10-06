@@ -21,10 +21,11 @@ Cada mensagem de um lote termina num de quatro resultados (`PublishStatus`), e c
 | Conexão ou canal | Broker fora, rede, canal fechado | `Retry` / `Connection` | Devolve sem gastar tentativa; **abre o circuit breaker** |
 | Confirmação que não chega no `PublishTimeout` | Broker lento | `Retry` / `ConfirmTimeout` | Devolve sem gastar tentativa; **lote cai à metade**; breaker fechado |
 | Nack, ou `Retry` sem causa (`Unspecified`) | Back-pressure do broker; transporte que não diz a causa | `Retry` / `Nacked` ou `Unspecified` | Igual ao timeout |
-| Timeouts seguidos com o lote já em 1 (`SilentOutageThreshold` = 3) | Rede que descarta pacotes em silêncio, sem erro de conexão | Queda | **Abre o circuit breaker** |
-| Resultado inválido do transporte (`default`, status desconhecido) | Bug no transporte | `Retry` | Nunca conta como confirmado |
+| Pressão seguida com o lote já em 1 (timeout, nack ou `Retry` sem causa; `SilentOutageThreshold` = 3) | Rede que descarta pacotes em silêncio, sem erro de conexão | Queda | **Abre o circuit breaker** |
+| Resultado inválido do transporte (`default`, status desconhecido) | Bug no transporte | `Retry` | Nunca conta como confirmado; conta como pressão |
+| Exceção do transporte, ou número de resultados diferente do lote | Bug no transporte, ou falha que ele não classificou | `Retry` / `Connection` | Igual à falha de conexão: **abre o circuit breaker** |
 
-**Circuit breaker.** Só falha de conexão ou de canal abre, e também a queda silenciosa (três timeouts seguidos com lote 1). Aberto, o dispatcher não reivindica nada: o backlog fica intacto na tabela, em vez de ciclar por claims e devoluções. Passado o período, fica meio aberto e sonda com uma mensagem; se ela passa, fecha; se falha, reabre pelo dobro do tempo, de `PollingInterval` até 30 s. Um ciclo que não chegou ao broker (só defeitos locais) não fecha nem abre o breaker, nem mexe no lote.
+**Circuit breaker.** Só falha de conexão ou de canal abre, e também a queda silenciosa (três ciclos seguidos de pressão com lote 1). Aberto, o dispatcher não reivindica nada: o backlog fica intacto na tabela, em vez de ciclar por claims e devoluções. Passado o período, fica meio aberto e sonda com uma mensagem; se ela passa, fecha; se falha, por conexão, timeout ou nack, reabre pelo dobro do tempo, de `PollingInterval` até 30 s. Um ciclo que não chegou ao broker (só defeitos locais) não fecha nem abre o breaker, nem mexe no lote.
 
 **Redução de lote.** Timeout de confirmação, nack e `Retry` sem causa são pressão, não queda: o lote cai à metade (até 1) sem abrir o breaker, e dobra de volta a cada lote saudável até o `BatchSize`. Assim um broker lento nunca faz o breaker oscilar.
 
@@ -40,7 +41,7 @@ Cada mensagem de um lote termina num de quatro resultados (`PublishStatus`), e c
 
 ## Testes que provam
 
-`Breaker_*`, `Lote_*` (unidade, relógio falso); `G2_FalhaDeTransporte_ReabreSemGastarTentativa`, `G2_TimeoutDeConfirmacaoOuNack_ReduzLoteSemAbrirBreaker`, `G2_ResultadoInvalidoDoTransporte_NuncaContaComoConfirmado`, `G2_PayloadAcimaDoLimiteAtual_SoElaVaiParaDlq`, `G2_Returned_OrcamentoProprioDepoisDlq`, `G2_RabbitMq_SemRota_ReturnedAteDlq`, `G2_RabbitMq_MensagemInexprimivelEmAmqp_VaiParaDlq`, `G2_MensagemAcimaDoMaxMessageSizeDoBroker_IsoladaUmAUm`, `G2_SondaSoComDefeitoLocal_NaoFechaOBreaker`, `G2_QuedaSilenciosa_TimeoutsComLoteDe1AbremOBreaker` (integração); `G2_BrokerParado_NadaNaDlqEDrenaSozinho`, `G2_LatenciaAlta_BreakerFechadoLoteReduzido`, `G2_ConexaoDerrubadaNoMeioDaPublicacao_NadaSePerde`, `G2_BuracoNegro_TimeoutsAbremOBreakerSemDlq` (caos).
+`Breaker_*`, `Lote_*` (unidade, relógio falso); `G2_FalhaDeTransporte_ReabreSemGastarTentativa`, `G2_TimeoutDeConfirmacaoOuNack_ReduzLoteSemAbrirBreaker`, `G2_ResultadoInvalidoDoTransporte_NuncaContaComoConfirmado`, `G2_PayloadAcimaDoLimiteAtual_SoElaVaiParaDlq`, `G2_Returned_OrcamentoProprioDepoisDlq`, `G2_RabbitMq_SemRota_ReturnedAteDlq`, `G2_RabbitMq_MensagemInexprimivelEmAmqp_VaiParaDlq`, `G2_MensagemAcimaDoMaxMessageSizeDoBroker_IsoladaUmAUm`, `G2_SondaSoComDefeitoLocal_NaoFechaOBreaker`, `G2_QuedaSilenciosa_TimeoutsComLoteDe1AbremOBreaker`, `G2_QuedaSilenciosa_SondaQueEstouraOTimeout_ReabrePeloDobro` (integração); `G2_PublicacaoQueFalhaComConexaoECanalDePe_EhDefeito_ComCanalFechado_EhRetry` (unidade, canal falso); `G2_BrokerParado_NadaNaDlqEDrenaSozinho`, `G2_LatenciaAlta_BreakerFechadoLoteReduzido`, `G2_ConexaoDerrubadaNoMeioDaPublicacao_NadaSePerde`, `G2_BuracoNegro_TimeoutsAbremOBreakerSemDlq` (caos).
 
 ## Revisão (2026-10-04)
 
@@ -50,3 +51,10 @@ A revisão de código independente desta etapa encontrou e motivou:
 - **Breaker fechado sem falar com o broker** num ciclo só de defeitos locais: corrigido (o ciclo não mexe no breaker).
 - **Queda silenciosa** nunca abria o breaker: regra dos três timeouts com lote 1, provada com o toxic de buraco negro do Toxiproxy.
 - **`Retry` sem causa** abria o breaker sem aviso: passou a ser pressão; só `Connection` explícito abre.
+
+## Revisão da etapa 7 (2026-10-05)
+
+Revisado contra o código final.
+
+- **Sonda que falhava por timeout fechava o breaker.** Numa queda silenciosa, a sonda meio aberta dava timeout e o dispatcher chamava `RecordSuccess`: o breaker fechava, o período nunca dobrava e o backlog voltava a ciclar por claims e devoluções a cada três timeouts. Corrigido: qualquer `Retry` da sonda reabre pelo dobro. Teste: `G2_QuedaSilenciosa_SondaQueEstouraOTimeout_ReabrePeloDobro`.
+- **Texto:** a queda silenciosa conta qualquer pressão com lote 1, não só timeout; exceção do transporte e contagem errada de resultados abrem o breaker como falha de conexão.

@@ -13,7 +13,7 @@ issue to discuss a change before writing code saves everyone time.
   a transport or persistence package. A unit test enforces this.
 - **The public API is tracked.** New public members must be listed in the project's `PublicAPI.Unshipped.txt`; the
   build fails otherwise.
-- Avoid marketing words such as "production-ready", "exactly-once" or "blazing fast" in code, docs and commits.
+- Avoid marketing claims in code, docs and commits: no promise of production readiness, of each message delivered only once, or of speed, unless a test proves it.
 
 ## Development
 

@@ -128,13 +128,17 @@ internal sealed partial class OutboxDispatcher
 
         if (retries.Count > 0)
         {
+            // The probe failed, by timeout or nack rather than by connection: still a failed probe, so reopen for
+            // twice as long instead of closing and cycling the backlog through claims at the base period.
+            if (_breaker.IsHalfOpen)
+                return OpenBreaker();
+
             // A network that silently drops packets never raises a connection error: every publish just times out.
             // Once the batch is down to one and keeps timing out, treat it as the outage it is.
             _pressureAtOne = _batchSizer.Current == 1 ? _pressureAtOne + 1 : 0;
             if (_pressureAtOne >= SilentOutageThreshold)
                 return OpenBreaker();
 
-            _breaker.RecordSuccess();
             _batchSizer.OnPressure();
             LogBatchReduced(_logger, _batchSizer.Current);
             return DispatchOutcome.Pressure;
@@ -193,6 +197,8 @@ internal sealed partial class OutboxDispatcher
     }
 
     public Task<int> ReleaseOwnedAsync(CancellationToken cancellationToken) => _store.ReleaseOwnedAsync(Owner, cancellationToken);
+
+    public Task<string> DefaultIsolationAsync(CancellationToken cancellationToken) => _store.DefaultIsolationAsync(cancellationToken);
 
     [LoggerMessage(EventId = 10, Level = LogLevel.Warning,
         Message = "Publishing a batch of {Count} message(s) failed (timed out: {TimedOut}); the batch is handed back to be published again.")]

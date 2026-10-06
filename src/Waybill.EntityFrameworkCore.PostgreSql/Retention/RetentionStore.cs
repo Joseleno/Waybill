@@ -47,6 +47,10 @@ internal sealed class RetentionStore(NpgsqlDataSource dataSource)
     public Task<int> DeleteInboxBatchAsync(TimeSpan retention, int batchSize, CancellationToken cancellationToken) =>
         ExecuteAsync(InboxSql, retention, batchSize, cancellationToken);
 
+    /// <summary>The isolation level the deletes run under: the session default (<see cref="IsolationLevelCheck"/>).</summary>
+    public Task<string> DefaultIsolationAsync(CancellationToken cancellationToken) =>
+        IsolationLevelCheck.DefaultAsync(dataSource, cancellationToken);
+
     private async Task<int> ExecuteAsync(string sql, TimeSpan retention, int batchSize, CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand(sql);

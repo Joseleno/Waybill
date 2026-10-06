@@ -24,6 +24,15 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
     private IChannel? _channel;
     private bool _disposed;
 
+    /// <summary>Starts with a connection and a channel already open: lets tests stand in for the client library.</summary>
+    internal RabbitMqTransport(
+        IOptions<WaybillRabbitMqOptions> options, ILogger<RabbitMqTransport> logger, IConnection connection, IChannel channel)
+        : this(options, logger)
+    {
+        _connection = connection;
+        _channel = channel;
+    }
+
     public async Task<IReadOnlyList<PublishResult>> PublishAsync(IReadOnlyList<OutgoingMessage> batch, CancellationToken cancellationToken)
     {
         IChannel channel;
