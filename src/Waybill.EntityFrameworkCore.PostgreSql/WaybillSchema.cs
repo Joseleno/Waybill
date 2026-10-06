@@ -9,6 +9,9 @@ public static class WaybillSchema
     internal const string Name = "waybill";
     internal const string OutboxTable = "outbox";
     internal const string InboxTable = "inbox";
+    internal const string SettingsTable = "settings";
+    internal const string PartitionsTable = "outbox_partitions";
+    internal const string InstancesTable = "outbox_instances";
     internal const string MigrationsHistoryTable = "__waybill_migrations";
 
     /// <summary>

@@ -48,6 +48,22 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     b.ToTable("inbox", "waybill");
                 });
 
+            modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.InstanceRow", b =>
+                {
+                    b.Property<string>("Owner")
+                        .HasColumnType("text")
+                        .HasColumnName("owner");
+
+                    b.Property<DateTimeOffset>("HeartbeatAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("heartbeat_at");
+
+                    b.HasKey("Owner")
+                        .HasName("pk_outbox_instances");
+
+                    b.ToTable("outbox_instances", "waybill");
+                });
+
             modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.OutboxRow", b =>
                 {
                     b.Property<Guid>("Id")
@@ -140,6 +156,61 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     b.ToTable("outbox", "waybill", t =>
                         {
                             t.HasCheckConstraint("ck_outbox_status", "status IN ('pending', 'claimed', 'published', 'dlq')");
+                        });
+                });
+
+            modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.PartitionRow", b =>
+                {
+                    b.Property<int>("Partition")
+                        .HasColumnType("integer")
+                        .HasColumnName("partition");
+
+                    b.Property<long>("Epoch")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("epoch");
+
+                    b.Property<DateTimeOffset?>("LeaseUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_until");
+
+                    b.Property<string>("Owner")
+                        .HasColumnType("text")
+                        .HasColumnName("owner");
+
+                    b.HasKey("Partition")
+                        .HasName("pk_outbox_partitions");
+
+                    b.ToTable("outbox_partitions", "waybill");
+                });
+
+            modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.SettingsRow", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("clock_timestamp()");
+
+                    b.Property<TimeSpan>("PartitionLease")
+                        .HasColumnType("interval")
+                        .HasColumnName("partition_lease");
+
+                    b.Property<int>("Partitions")
+                        .HasColumnType("integer")
+                        .HasColumnName("partitions");
+
+                    b.HasKey("Id")
+                        .HasName("pk_settings");
+
+                    b.ToTable("settings", "waybill", t =>
+                        {
+                            t.HasCheckConstraint("ck_settings_single_row", "id = 1");
                         });
                 });
 #pragma warning restore 612, 618

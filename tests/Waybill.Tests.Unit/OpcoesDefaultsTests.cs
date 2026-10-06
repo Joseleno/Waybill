@@ -21,6 +21,9 @@ public sealed class OpcoesDefaultsTests
         Assert.Equal(5, dispatcher.MaxReturns);
         Assert.Equal(TimeSpan.FromMinutes(1), dispatcher.ReturnBackoff);
         Assert.Equal(TimeSpan.FromMinutes(10), dispatcher.MaxReturnBackoff);
+        Assert.Equal(16, dispatcher.Partitions);
+        Assert.Equal(TimeSpan.FromSeconds(60), dispatcher.PartitionLease);
+        Assert.False(new WaybillOptions().OrderByKey);
         Assert.Equal(TimeSpan.FromSeconds(15), dispatcher.MetricsInterval);
         Assert.Equal(TimeSpan.FromDays(7), retention.OutboxRetention);
         Assert.Equal(TimeSpan.FromDays(30), retention.InboxRetention);

@@ -17,6 +17,9 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
 {
     public DbSet<OutboxRow> Outbox => Set<OutboxRow>();
     public DbSet<InboxRow> Inbox => Set<InboxRow>();
+    public DbSet<SettingsRow> Settings => Set<SettingsRow>();
+    public DbSet<PartitionRow> Partitions => Set<PartitionRow>();
+    public DbSet<InstanceRow> Instances => Set<InstanceRow>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -47,6 +50,38 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
 
             // The dispatcher's claim walks this index in id (UUIDv7) order; it only holds rows still in flight.
             outbox.HasIndex(m => m.Id).HasDatabaseName("ix_outbox_claimable").HasFilter("status IN ('pending', 'claimed')");
+        });
+
+        // Ordering by key (v0.2, ADR 0007). One row while ordering is on: P and the partition lease, shared by every
+        // dispatcher and checked at startup.
+        modelBuilder.Entity<SettingsRow>(settings =>
+        {
+            settings.ToTable(WaybillSchema.SettingsTable, table => table.HasCheckConstraint("ck_settings_single_row", "id = 1"));
+            settings.HasKey(s => s.Id).HasName("pk_settings");
+            settings.Property(s => s.Id).HasColumnName("id").ValueGeneratedNever();
+            settings.Property(s => s.Partitions).HasColumnName("partitions");
+            settings.Property(s => s.PartitionLease).HasColumnName("partition_lease");
+            settings.Property(s => s.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("clock_timestamp()");
+        });
+
+        // Who holds each partition key_hash % P, for how long, and in which tenure (epoch, raised on every change of owner).
+        modelBuilder.Entity<PartitionRow>(partition =>
+        {
+            partition.ToTable(WaybillSchema.PartitionsTable);
+            partition.HasKey(p => p.Partition).HasName("pk_outbox_partitions");
+            partition.Property(p => p.Partition).HasColumnName("partition").ValueGeneratedNever();
+            partition.Property(p => p.Owner).HasColumnName("owner");
+            partition.Property(p => p.Epoch).HasColumnName("epoch").HasDefaultValue(0L);
+            partition.Property(p => p.LeaseUntil).HasColumnName("lease_until");
+        });
+
+        // Live dispatchers, for the fair share of partitions; a row is collected long after its heartbeat stops.
+        modelBuilder.Entity<InstanceRow>(instance =>
+        {
+            instance.ToTable(WaybillSchema.InstancesTable);
+            instance.HasKey(i => i.Owner).HasName("pk_outbox_instances");
+            instance.Property(i => i.Owner).HasColumnName("owner");
+            instance.Property(i => i.HeartbeatAt).HasColumnName("heartbeat_at");
         });
 
         modelBuilder.Entity<InboxRow>(inbox =>
@@ -87,6 +122,28 @@ internal sealed class OutboxRow
     public DateTimeOffset? PublishedAt { get; set; }
     public string? DlqReason { get; set; }
     public DateTimeOffset? NextAttemptAt { get; set; }
+}
+
+internal sealed class SettingsRow
+{
+    public int Id { get; set; }
+    public int Partitions { get; set; }
+    public TimeSpan PartitionLease { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+internal sealed class PartitionRow
+{
+    public int Partition { get; set; }
+    public string? Owner { get; set; }
+    public long Epoch { get; set; }
+    public DateTimeOffset? LeaseUntil { get; set; }
+}
+
+internal sealed class InstanceRow
+{
+    public required string Owner { get; set; }
+    public DateTimeOffset HeartbeatAt { get; set; }
 }
 
 internal sealed class InboxRow

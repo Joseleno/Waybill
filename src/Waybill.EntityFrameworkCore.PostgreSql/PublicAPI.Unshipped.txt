@@ -3,3 +3,7 @@ Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxReturnBackof
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxReturnBackoff.set -> void
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.ReturnBackoff.get -> System.TimeSpan
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.ReturnBackoff.set -> void
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.PartitionLease.get -> System.TimeSpan
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.PartitionLease.set -> void
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.Partitions.get -> int
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.Partitions.set -> void

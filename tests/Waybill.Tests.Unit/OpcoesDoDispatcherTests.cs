@@ -17,6 +17,8 @@ public sealed class OpcoesDoDispatcherTests
         { "ReturnBackoff", o => o.ReturnBackoff = TimeSpan.FromSeconds(-1) },
         { "MaxReturnBackoff", o => o.MaxReturnBackoff = TimeSpan.FromSeconds(30) }, // below the 1 min ReturnBackoff
         { "MaxReturnBackoff", o => o.MaxReturnBackoff = TimeSpan.FromDays(2) },
+        { "Partitions", o => o.Partitions = 0 },
+        { "Partitions", o => o.Partitions = 1025 },
     };
 
     [Theory]
@@ -58,5 +60,37 @@ public sealed class OpcoesDoDispatcherTests
 
         Assert.NotNull(services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
         Assert.False(string.IsNullOrEmpty(why));
+    }
+
+    // The partition lease is checked only when ordering is on: a dispatcher that does not order must not fail because
+    // PublishTimeout grew past half of a lease it never uses.
+    [Theory]
+    [InlineData(false, 59, true)]
+    [InlineData(true, 60, true)]   // exactly twice the default 30 s lease
+    [InlineData(true, 59, false)]
+    [InlineData(true, 86_401, false)]
+    public void Dispatcher_PartitionLease_SoValidadoComOrdenacao(bool orderByKey, int partitionLeaseSeconds, bool valid)
+    {
+        using var services = new ServiceCollection()
+            .AddLogging()
+            .AddWaybill(o =>
+            {
+                o.MaxPayloadBytes = 1024;
+                o.OrderByKey = orderByKey;
+            })
+            .AddWaybillDispatcher(o =>
+            {
+                o.ConnectionString = "Host=localhost";
+                o.PartitionLease = TimeSpan.FromSeconds(partitionLeaseSeconds);
+            })
+            .BuildServiceProvider();
+
+        if (valid)
+        {
+            Assert.NotNull(services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+            return;
+        }
+        var error = Assert.Throws<OptionsValidationException>(() => services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+        Assert.Contains("WaybillDispatcherOptions.PartitionLease", error.Message);
     }
 }
