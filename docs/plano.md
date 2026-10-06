@@ -17,7 +17,7 @@ Cada etapa termina num conjunto de testes, não numa data. A duração é estima
 | 2. Núcleo e gravação atômica | 1 semana | Concluído em Oct 4, 2026: G1 provada; fake do outbox |
 | 3. Dispatcher e RabbitMQ | 2 semanas | Concluído em Oct 4, 2026 (PRs 3a, 3b, 3c): G2 provada, com o claim por linha provado no spike |
 | 4. Inbox | 1 semana | Concluído em Oct 4, 2026: G3 provada, incluindo consumidor que também produz; fake do inbox. A limpeza do inbox foi para a etapa 5, junto da do outbox |
-| 5. Limpeza e observabilidade | 3 a 4 dias | Entregue em Oct 4, 2026 (PR #8): retenção, métrica e health check. Falta a carga longa verde: o run de 5 h achou latência residual depois da recuperação, em investigação |
+| 5. Limpeza e observabilidade | 3 a 4 dias | Concluído em Oct 5, 2026: retenção, métrica e health check (PR #8); carga longa verde em 5 h, depois de achar que o índice do claim fica inchado após uma transação longa e documentar a reconstrução (ADR 0004) |
 | 6. Exemplo executável | 1 semana | Concluído em Oct 5, 2026 (PR #9): exemplo validado por um estranho, ergonomia do registro revista (ADR 0005) |
 | 7. Documentação e release | 3 a 4 dias | v0.1.0-alpha publicada |
 

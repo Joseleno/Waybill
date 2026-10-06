@@ -58,3 +58,18 @@ A revisão de código independente desta etapa encontrou e motivou:
 - **Intervalos sem teto.** `Task.Delay` lança acima de ~49 dias e derrubaria o host; `PollingInterval`, `MetricsInterval` e `Interval` passaram a aceitar no máximo um dia.
 - **CI que tolerava zero testes.** `--ignore-exit-code 8` saiu dos passos que agora sempre têm testes.
 - **"Not running" logo depois da partida.** No .NET 10 o `BackgroundService` roda o `ExecuteAsync` inteiro numa tarefa à parte, então um health check logo depois do `StartAsync` lia `Unhealthy`. O status passou a ser marcado no `StartAsync` (e a parada também no `StopAsync`). Achado ao investigar um teste instável.
+
+## Achado da carga longa (2026-10-05)
+
+O primeiro run agendado de 5 h falhou no critério de latência: depois da transação longa, o p95 do claim voltava à linha de base, mas um terço dos minutos tinha rajadas de ~8 ms até o fim, horas depois. Autovacuum, dead tuples e tamanho da tabela estavam normais. O autor decidiu investigar a causa em vez de afrouxar o critério.
+
+Dois pares de runs, sem e com `REINDEX INDEX CONCURRENTLY waybill.ix_outbox_claimable` depois do primeiro autovacuum pós-fechamento, mostraram a causa:
+
+- **Sem reindex (5 h):** o índice parcial do claim ficou em ~85 MB (contra menos de 1 MB na linha de base) até o fim. 28 dos 106 minutos da recuperação tiveram p95 acima de 5 ms. Nos minutos lentos, a varredura leu as mesmas ~29 tuplas que nos normais, mas 2,4 vezes mais páginas do índice (40,8 contra 16,8 por varredura).
+- **Com reindex (5 h):** o índice voltou a 16 KB, e só os 2 minutos antes da reconstrução passaram de 5 ms.
+
+O autovacuum limpa as entradas mortas, mas não devolve as páginas do índice. Depois de um episódio de transação longa, o claim percorre páginas quase vazias. Nada no pacote muda:
+- o `OPERATIONS.md` passa a mandar reconstruir o índice depois de um episódio desses, com o comando e como medir;
+- o cenário da carga longa faz o mesmo e continua sujeito ao mesmo critério de latência (`WAYBILL_LONG_REINDEX=0` desliga a reconstrução, para reproduzir as rajadas).
+
+Fazer o próprio pacote detectar o inchaço e reindexar ficou fora: exige privilégio de dono do índice e decisão de janela, que são do operador.

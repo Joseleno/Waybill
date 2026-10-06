@@ -12,9 +12,9 @@ on:
         description: 'Duration of the long load scenario (hh:mm:ss)'
         default: '05:00:00'
       long_reindex:
-        description: 'Rebuild the claim index once autovacuum ran after the long transaction (diagnosis)'
+        description: 'Rebuild the claim index once autovacuum ran after the long transaction (the OPERATIONS.md procedure); off shows the bursts'
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -54,7 +54,7 @@ jobs:
       - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build --filter-trait "Category=Long" --filter-class "*CargaLonga*"
         env:
           WAYBILL_LONG_DURATION: ${{ inputs.long_duration || '05:00:00' }}
-          WAYBILL_LONG_REINDEX: ${{ inputs.long_reindex && '1' || '' }}
+          WAYBILL_LONG_REINDEX: ${{ github.event_name == 'workflow_dispatch' && !inputs.long_reindex && '0' || '' }}
           WAYBILL_LONG_OUTPUT: ${{ github.workspace }}/carga-longa.csv
       - uses: actions/upload-artifact@v4
         if: always()

@@ -9,4 +9,4 @@
 - [x] Caos curto `BrokerParadoEReligado_MetricaEHealthCheckAcompanham` (Toxiproxy)
 - [x] `CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza`; input de duração e artefato CSV no `scheduled.yml`; uma execução local curta antes do commit
 - [x] `docs/OPERATIONS.md`; README, CHANGELOG, API pública; ressalva da G3 no HANDOFF
-- [ ] Revisão de código independente; CI verde; execução verde da carga longa no job agendado
+- [x] Revisão de código independente; CI verde; execução verde da carga longa no job agendado (run 37332613380, 5 h, com a reconstrução do índice do claim que o OPERATIONS.md passou a recomendar)

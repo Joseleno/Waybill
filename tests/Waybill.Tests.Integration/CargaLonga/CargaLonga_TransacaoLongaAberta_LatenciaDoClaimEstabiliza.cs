@@ -12,6 +12,9 @@ namespace Waybill.Tests.Integration.CargaLonga;
 // update is HOT and each message leaves dead index entries behind. A long transaction pins the vacuum horizon and the
 // claim slows down while the table looks stable. This scenario holds one open for 40% of the run under constant load,
 // closes it, and requires the claim latency to come back once autovacuum has run; it measures time, not only bytes.
+// Autovacuum does not shrink the claim index, and the bloated index slows the claim in bursts for hours: once it has
+// run, the scenario rebuilds the index, as OPERATIONS.md tells operators to (WAYBILL_LONG_REINDEX=0 skips it, to see
+// the bursts).
 // Duration: WAYBILL_LONG_DURATION (default 05:00:00, the scheduled job); rate: WAYBILL_LONG_RATE messages/s (200).
 // A CSV with one line per sample goes to WAYBILL_LONG_OUTPUT (default carga-longa.csv next to the test assembly).
 [Collection(PostgresCollection.Name)]
@@ -26,8 +29,8 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
         var rate = Setting("WAYBILL_LONG_RATE", int.Parse, 200);
         var output = Setting("WAYBILL_LONG_OUTPUT", s => s, Path.Combine(AppContext.BaseDirectory, "carga-longa.csv"));
         var plan = Plan.For(duration);
-        // Diagnosis of the residual latency seen after recovery: rebuild the claim index once autovacuum has run.
-        var reindexAfterRecovery = Setting("WAYBILL_LONG_REINDEX", s => s == "1", false);
+        // The procedure OPERATIONS.md documents after a long transaction: rebuild the claim index once autovacuum has run.
+        var reindexAfterRecovery = Setting("WAYBILL_LONG_REINDEX", s => s != "0", true);
         var reindexed = false;
         var database = await TestDatabase.CreateAsync(postgres);
         await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
@@ -116,6 +119,7 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
         Assert.True(vacuumed is not null, $"no autovacuum of waybill.outbox after the long transaction closed at {closedAt:O}; see {output}");
         var window = samples.Where(s => s.Elapsed >= vacuumed.Elapsed && s.Elapsed >= duration - plan.FinalWindow).ToList();
         Assert.True(window.Count >= 3, $"autovacuum ran too late ({vacuumed.Elapsed}) to leave a final window to measure; see {output}");
+        Assert.True(reindexed || !reindexAfterRecovery, $"the claim index was never rebuilt; see {output}");
         var baselineP95 = Percentile95(baseline.SelectMany(s => s.ClaimMs));
         var finalP95 = Percentile95(window.SelectMany(s => s.ClaimMs));
         var allowed = Math.Max(2 * baselineP95, baselineP95 + 5);
