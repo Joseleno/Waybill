@@ -35,4 +35,28 @@ public sealed class OpcoesDoDispatcherTests
         var error = Assert.Throws<OptionsValidationException>(() => services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
         Assert.Contains($"WaybillDispatcherOptions.{option}", error.Message);
     }
+
+    public static TheoryData<string, Action<WaybillDispatcherOptions>> ValidasNaFronteira => new()
+    {
+        { "no wait after a return, as in 0.1", o => { o.ReturnBackoff = TimeSpan.Zero; o.MaxReturnBackoff = TimeSpan.Zero; } },
+        { "a one-day ceiling", o => o.MaxReturnBackoff = TimeSpan.FromDays(1) },
+        { "wait equal to its ceiling", o => { o.ReturnBackoff = TimeSpan.FromDays(1); o.MaxReturnBackoff = TimeSpan.FromDays(1); } },
+    };
+
+    [Theory]
+    [MemberData(nameof(ValidasNaFronteira))]
+    public void Dispatcher_EsperaEntreRetornosNaFronteira_SobeNormalmente(string why, Action<WaybillDispatcherOptions> configure)
+    {
+        using var services = new ServiceCollection()
+            .AddLogging()
+            .AddWaybillDispatcher(o =>
+            {
+                o.ConnectionString = "Host=localhost";
+                configure(o);
+            })
+            .BuildServiceProvider();
+
+        Assert.NotNull(services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+        Assert.False(string.IsNullOrEmpty(why));
+    }
 }
