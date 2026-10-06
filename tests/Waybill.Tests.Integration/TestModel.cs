@@ -2,12 +2,14 @@ using System.Collections.Concurrent;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure;
 using Waybill.EntityFrameworkCore;
+using Waybill.EntityFrameworkCore.Schema;
 
 namespace Waybill.Tests.Integration;
 
@@ -65,10 +67,20 @@ public sealed class TestDatabase
 
     public string ConnectionString { get; }
 
-    public static async Task<TestDatabase> CreateAsync(PostgresFixture postgres)
+    /// <param name="postgres">The server.</param>
+    /// <param name="untilMigration">Stop the Waybill schema at this migration (an older release's schema); null applies all.</param>
+    public static async Task<TestDatabase> CreateAsync(PostgresFixture postgres, string? untilMigration = null)
     {
         var database = new TestDatabase(await postgres.CreateDatabaseAsync());
-        await WaybillSchema.MigrateAsync(database.ConnectionString);
+        if (untilMigration is null)
+        {
+            await WaybillSchema.MigrateAsync(database.ConnectionString);
+        }
+        else
+        {
+            await using var schema = new WaybillSchemaContext(WaybillSchemaContext.Options(database.ConnectionString));
+            await schema.GetService<IMigrator>().MigrateAsync(untilMigration);
+        }
 
         await using var services = database.Services();
         await using var scope = services.CreateAsyncScope();
