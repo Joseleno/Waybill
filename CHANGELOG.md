@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A message returned as unroutable (`basic.return`) now waits a growing interval before it is published again: `ReturnBackoff` (1 minute by default) after the first return, doubling with each return up to `MaxReturnBackoff` (10 minutes). With the defaults it reaches the outbox DLQ after 15 minutes of waiting instead of about 5 seconds, time to create the missing binding. Set `ReturnBackoff` to zero for the 0.1 behavior (ADR 0006).
+- The `waybill` schema gains the `outbox.next_attempt_at` column. Run `WaybillSchema.MigrateAsync` before upgrading the dispatcher; the migration only adds the column, and pending rows stay claimable.
+
 ## [0.1.0-alpha] - 2026-10-06
 
 First release. What each guarantee covers, and the test that proves it, is in [GUARANTEES.md](GUARANTEES.md).

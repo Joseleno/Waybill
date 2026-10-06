@@ -73,8 +73,8 @@ nothing when the database already has any table.
 - **Waybill does not create topology.** Declare the exchange (a topic exchange fits, since the routing key is the
   registered name) and bind your queues yourself, before you publish. Until the exchange exists, messages wait in the
   outbox without spending attempts. Once it exists, a message no queue is bound to comes back unroutable
-  (`basic.return`); after `MaxReturns` returns (5 by default) it goes to the outbox DLQ
-  with the reason `312 NO_ROUTE`. [OPERATIONS.md](https://github.com/Joseleno/Waybill/blob/main/docs/OPERATIONS.md)
+  (`basic.return`). It waits a growing interval between returns, and after `MaxReturns` returns (5 by default,
+  15 minutes of waiting in all) it goes to the outbox DLQ with the reason `312 NO_ROUTE`. [OPERATIONS.md](https://github.com/Joseleno/Waybill/blob/main/docs/OPERATIONS.md)
   shows how to send it back once the binding exists.
 
 The [sample](https://github.com/Joseleno/Waybill/tree/main/samples) runs the whole flow with
