@@ -79,7 +79,10 @@ internal sealed class PartitionStore(NpgsqlDataSource dataSource)
         await using var command = dataSource.CreateCommand(EnsureSettingsSql);
         command.Parameters.Add(new NpgsqlParameter { Value = wanted.Partitions });
         command.Parameters.Add(new NpgsqlParameter { Value = wanted.PartitionLease, NpgsqlDbType = NpgsqlDbType.Interval });
+        // Started together with another instance: its INSERT won, ours waited for its commit and did nothing, but our
+        // statement's snapshot predates that commit. A new statement takes a new snapshot and sees the row.
         return await ReadSettingsAsync(command, cancellationToken).ConfigureAwait(false)
+            ?? await ReadSettingsAsync(cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("waybill.settings was neither created nor found.");
     }
 
