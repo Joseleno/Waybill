@@ -15,10 +15,19 @@ internal sealed class PartitionOptionsValidation(IOptions<WaybillOptions> waybil
         if (options.Partitions is < 1 or > MaxPartitions)
             return ValidateOptionsResult.Fail($"WaybillDispatcherOptions.Partitions must be from 1 to {MaxPartitions}.");
 
+        // Also the period of the settings check when ordering is off (ADR 0007): zero would read them every cycle.
+        if (options.PartitionLease <= TimeSpan.Zero || options.PartitionLease > TimeSpan.FromDays(1))
+            return ValidateOptionsResult.Fail("WaybillDispatcherOptions.PartitionLease must be positive and at most one day.");
+
         // A claim needs the partition held for longer than the row lease it takes, measured from the claim itself.
-        if (waybill.Value.OrderByKey && (options.PartitionLease < options.Lease * 2 || options.PartitionLease > TimeSpan.FromDays(1)))
+        if (waybill.Value.OrderByKey && options.PartitionLease < options.Lease * 2)
             return ValidateOptionsResult.Fail(
-                $"WaybillDispatcherOptions.PartitionLease must be at least twice the lease ({options.Lease * 2}: PublishTimeout plus LeaseMargin, doubled) and at most one day.");
+                $"WaybillDispatcherOptions.PartitionLease must be at least twice the lease ({options.Lease * 2}: PublishTimeout plus LeaseMargin, doubled).");
+
+        // Stored as a PostgreSQL interval and compared on every check: a fraction of a millisecond could come back
+        // different and stop every dispatcher.
+        if (waybill.Value.OrderByKey && options.PartitionLease.Ticks % TimeSpan.TicksPerMillisecond != 0)
+            return ValidateOptionsResult.Fail("WaybillDispatcherOptions.PartitionLease must be a whole number of milliseconds.");
 
         return ValidateOptionsResult.Success;
     }

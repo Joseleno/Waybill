@@ -69,6 +69,7 @@ public sealed class OpcoesDoDispatcherTests
     [InlineData(true, 60, true)]   // exactly twice the default 30 s lease
     [InlineData(true, 59, false)]
     [InlineData(true, 86_401, false)]
+    [InlineData(false, 0, false)]  // also the period of the settings check when ordering is off
     public void Dispatcher_PartitionLease_SoValidadoComOrdenacao(bool orderByKey, int partitionLeaseSeconds, bool valid)
     {
         using var services = new ServiceCollection()
@@ -92,5 +93,26 @@ public sealed class OpcoesDoDispatcherTests
         }
         var error = Assert.Throws<OptionsValidationException>(() => services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
         Assert.Contains("WaybillDispatcherOptions.PartitionLease", error.Message);
+    }
+
+    [Fact]
+    public void Dispatcher_PartitionLeaseComFracaoDeMilissegundo_FalhaComOrdenacao()
+    {
+        using var services = new ServiceCollection()
+            .AddLogging()
+            .AddWaybill(o =>
+            {
+                o.MaxPayloadBytes = 1024;
+                o.OrderByKey = true;
+            })
+            .AddWaybillDispatcher(o =>
+            {
+                o.ConnectionString = "Host=localhost";
+                o.PartitionLease = TimeSpan.FromSeconds(60) + TimeSpan.FromTicks(1);
+            })
+            .BuildServiceProvider();
+
+        var error = Assert.Throws<OptionsValidationException>(() => services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+        Assert.Contains("whole number of milliseconds", error.Message);
     }
 }
