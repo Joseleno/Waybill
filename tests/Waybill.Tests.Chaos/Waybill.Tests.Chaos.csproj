@@ -21,6 +21,7 @@
     <Compile Include="..\Waybill.Tests.Integration\PostgresFixture.cs" Link="Shared\PostgresFixture.cs" />
     <Compile Include="..\Waybill.Tests.Integration\TestModel.cs" Link="Shared\TestModel.cs" />
     <Compile Include="..\Waybill.Tests.Integration\G2\DispatcherHarness.cs" Link="Shared\DispatcherHarness.cs" />
+    <Compile Include="..\Waybill.Tests.Integration\G4\OrderingHarness.cs" Link="Shared\OrderingHarness.cs" />
     <Compile Include="..\Waybill.Tests.Integration\Observabilidade\GaugeReader.cs" Link="Shared\GaugeReader.cs" />
   </ItemGroup>
 
