@@ -50,6 +50,9 @@
 | `G4_FatiaJusta_ConvergeAoEntrarESair` | P = 16; três instâncias entram, uma sai com shutdown, outra morre | Cada uma com no máximo `ceil(P / N)` e todas as P com dono (6/6/4); depois 8/8 já no ciclo seguinte ao shutdown; as partições da morta voltam depois do `PartitionLease`; a morta sai de `outbox_instances` pela coleta | PR |
 | `G4_EntradaESaidaSobCarga_NenhumaParticaoComDoisDonos` | Oito instâncias entrando, saindo e morrendo durante a carga, lease curto | Oráculo por trigger em `outbox_partitions`: nenhum par de mandatos válidos sobrepostos na mesma partição; nada perdido | PR: 20 s; agendado: 10 min (caos) |
 | `Operacao_ReiniciarOrdenacao` | O SQL de limpeza do `OPERATIONS.md`, executado como está escrito | Depois dele, sobem uma instância com outro P e uma sem ordenação | PR |
+| `G4_InstanciasSobemJuntas_TodasLeemAConfiguracao` (da revisão) | Dezesseis instâncias criam a configuração ao mesmo tempo, cinco rodadas | Todas leem a mesma configuração; nenhuma falha | PR |
+| `G4_EsperaEntreCiclosMaiorQueOLease_NaoPerdeParticoes` (da revisão) | `PollingInterval` de 5 s com `PartitionLease` de 700 ms, ocioso | As partições seguem no primeiro mandato | PR |
+| `G4_LotesCheiosEmSequencia_ManutencaoEspacada` (da revisão) | Dez lotes cheios em sequência | Uma manutenção só | PR |
 | `Dispatcher_PartitionLease_SoValidadoComOrdenacao`, `Dispatcher_IntervaloForaDoLimite_*` (unidade) | P fora de 1 a 1024; `PartitionLease` menor que o dobro do lease da linha, só com a ordenação ligada | O host não sobe, com mensagem que diz o que mudar | PR |
 
 **Fora da 8b:** filtro de cabeça, contador, `sequence`, M, liberação de chave e o teste de propriedade de ordem (8c). Com a ordenação ligada e só a 8b, as partições já valem, mas a ordem ainda não é garantida; nada disso sai em release antes da 8c.

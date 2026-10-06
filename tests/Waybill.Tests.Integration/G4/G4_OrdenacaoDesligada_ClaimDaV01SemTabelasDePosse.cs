@@ -3,8 +3,9 @@ using Waybill.Tests.Integration.G2;
 
 namespace Waybill.Tests.Integration.G4;
 
-// Ordering is off by default, and then nothing of it runs: no settings, no partitions, no heartbeat, and the claim of
-// v0.1. Who does not ask for ordering does not pay for it (ADR 0007).
+// Ordering is off by default, and then nothing of it is written: no settings, no partitions, no heartbeat, and the claim
+// of v0.1. The only cost is reading the settings row at startup and every PartitionLease, to notice an instance that
+// orders (ADR 0007).
 [Collection(PostgresCollection.Name)]
 public sealed class G4_OrdenacaoDesligada_ClaimDaV01SemTabelasDePosse(PostgresFixture postgres)
 {

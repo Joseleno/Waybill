@@ -18,7 +18,7 @@
 - [x] Dispatcher: manutenção das partições a cada ciclo, claim com o `EXISTS` de posse, verificação da configuração e parada crítica, devolução no shutdown
 - [x] Cenários `G4_*` da 8b, um commit por cenário; oráculos de mandato e de claim fora do mandato no caos; mutações
 - [x] `OPERATIONS.md` (opções, ligar e desligar a ordenação, mudar P, com o SQL testado), escopo, ADR 0007, CHANGELOG
-- [ ] Revisão de código independente antes da PR
+- [x] Revisão de código independente antes da PR: nenhum caminho para dois donos ou claim fora do mandato; três falhas de vivacidade (startup simultâneo, espera entre ciclos maior que o lease, manutenção a cada lote) e duas de validação, cada uma com teste antes da correção
 
 ## 8c — cabeça por chave
 

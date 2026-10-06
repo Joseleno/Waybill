@@ -33,7 +33,7 @@ Any number of instances may run either service against the same database.
 | `WaybillDispatcherOptions.MaxReturnBackoff` | 10 minutes | The longest single wait after a return. At most one day. |
 | `WaybillOptions.OrderByKey` | off | Ordering by key, being built for v0.2. See [Ordering by key](#ordering-by-key). |
 | `WaybillDispatcherOptions.Partitions` | 16 | With `OrderByKey`: how many partitions (P) keys are spread over. From 1 to 1024; the same on every dispatcher. |
-| `WaybillDispatcherOptions.PartitionLease` | 60 seconds | With `OrderByKey`: how long a dispatcher holds a partition without renewing it, so how long the keys of a crashed dispatcher wait. At least twice the claim lease, at most one day; the same on every dispatcher. |
+| `WaybillDispatcherOptions.PartitionLease` | 60 seconds | With `OrderByKey`: how long a dispatcher holds a partition without renewing it, so how long the keys of a crashed dispatcher wait. At least twice the claim lease, a whole number of milliseconds, and the same on every dispatcher. Without `OrderByKey`: how often the dispatcher checks that no other one orders. Always positive and at most one day. |
 | `WaybillDispatcherOptions.MetricsInterval` | 15 seconds | How often the pending-age gauge is sampled. |
 
 All options are validated at startup; a zero or negative retention fails the host instead of deleting everything.
@@ -105,7 +105,7 @@ until the rest lands, turning `OrderByKey` on spreads keys over partitions but d
 
 With `OrderByKey` on, each key belongs to a partition, `key_hash % Partitions`, and each partition is held by one
 dispatcher at a time. Dispatchers share the partitions evenly (at most `ceil(Partitions / live dispatchers)` each),
-renew them every cycle, and hand them back on shutdown. A crashed dispatcher's partitions move to the others after
+renew them every `(PartitionLease − claim lease) / 4` (7.5 seconds with the defaults), and hand them back on shutdown. With ordering on, no wait between cycles is longer than a quarter of `PartitionLease`. A crashed dispatcher's partitions move to the others after
 `PartitionLease`. Messages without a key are not ordered and are published by any dispatcher. Dispatchers beyond
 `Partitions` publish only messages without a key.
 
