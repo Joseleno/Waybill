@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0-alpha] - 2026-10-06
+
 First release. What each guarantee covers, and the test that proves it, is in [GUARANTEES.md](GUARANTEES.md).
 
 ### Added
@@ -52,3 +54,6 @@ First release. What each guarantee covers, and the test that proves it, is in [G
 - CI on pull requests (PostgreSQL 15 and 18, short chaos tests, the sample), a scheduled workflow for the long scenarios, and a tag-based release with Trusted Publishing that validates Source Link and symbols before publishing.
 - `GUARANTEES.md`, with a test that fails the build when a cited test disappears.
 - Design documents and ADRs 0001 to 0005 in `docs/` (in Portuguese).
+
+[Unreleased]: https://github.com/Joseleno/Waybill/compare/v0.1.0-alpha...HEAD
+[0.1.0-alpha]: https://github.com/Joseleno/Waybill/releases/tag/v0.1.0-alpha
