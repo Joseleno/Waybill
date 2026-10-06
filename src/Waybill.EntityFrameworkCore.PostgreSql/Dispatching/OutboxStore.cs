@@ -35,12 +35,12 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     // the UPDATE: when FOR UPDATE meets a row another transaction changed and committed, PostgreSQL re-checks only the
     // predicates on the locked table (EvalPlanQual). A row waiting after a basic.return is not claimable until its
     // next_attempt_at (ADR 0006); the index cannot filter on the clock, so waiting rows are read and passed over.
-    private const string ClaimSql = """
+    private static string Claim(string candidateFilter = "", string rowFilter = "") => $"""
         WITH candidates AS MATERIALIZED (
             SELECT id FROM waybill.outbox
             WHERE status IN ('pending', 'claimed')
               AND (status = 'pending' OR lease_until < clock_timestamp())
-              AND (next_attempt_at IS NULL OR next_attempt_at <= clock_timestamp())
+              AND (next_attempt_at IS NULL OR next_attempt_at <= clock_timestamp()){candidateFilter}
             ORDER BY id
             LIMIT $3
             FOR UPDATE SKIP LOCKED)
@@ -49,9 +49,30 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         FROM candidates c
         WHERE o.id = c.id
           AND (o.status = 'pending' OR (o.status = 'claimed' AND o.lease_until < clock_timestamp()))
-          AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= clock_timestamp())
+          AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= clock_timestamp()){rowFilter}
         RETURNING o.id, o.type, o.key, o.payload, o.content_type, o.headers, o.created_at, o.fence
         """;
+
+    private static readonly string ClaimSql = Claim();
+
+    // Ordering by key (ADR 0007): a keyed row is claimable only by the instance that holds its partition key_hash % $4,
+    // and only while that partition stays held for longer than the row lease it is about to take. The ownership is read
+    // in the statement's snapshot, not taken from the instance's memory, so an instance that paused after renewing and
+    // lost the partition meanwhile claims nothing of it. EvalPlanQual re-checks this subquery against the old snapshot,
+    // which is safe: nobody can take the partition before lease_until, and lease_until outlives the claim by a row lease.
+    private static readonly string ClaimOrderedSql = Claim(
+        candidateFilter: """
+
+              AND (key IS NULL OR EXISTS (
+                    SELECT 1 FROM waybill.outbox_partitions p
+                    WHERE p.partition = key_hash % $4 AND p.owner = $1 AND p.lease_until > clock_timestamp() + $2))
+            """,
+        rowFilter: """
+
+          AND (o.key IS NULL OR EXISTS (
+                SELECT 1 FROM waybill.outbox_partitions p
+                WHERE p.partition = o.key_hash % $4 AND p.owner = $1 AND p.lease_until > clock_timestamp() + $2))
+        """);
 
     // Every finishing statement is fenced (still claimed by this owner, with this fence) and returns what it changed.
     private const string Fenced = "o.id = m.id AND o.fence = m.fence AND o.owner = $1 AND o.status = 'claimed'";
@@ -64,7 +85,7 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         $"UPDATE waybill.outbox o SET status = 'pending', lease_until = NULL FROM unnest($2::uuid[], $3::bigint[]) AS m(id, fence) WHERE {Fenced} {Returning}";
 
     // The k-th return waits min($6 × 2^(k−1), $7) by the database clock (ADR 0006); next_attempt_at is set only while a row
-    // waits, never on a DLQ row, so requeueing from the DLQ needs nothing more. The exponent stops at 
+    // waits, never on a DLQ row, so requeueing from the DLQ needs nothing more. The exponent stops at $8
     // (ReturnPolicy.MaxExponent) before the multiplication: with MaxReturns in the hundreds, 2^k would overflow the
     // interval long before the ceiling applies.
     private const string ReturnedSql = $"""
@@ -100,12 +121,16 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         LIMIT 1
         """;
 
-    public async Task<List<ClaimedMessage>> ClaimAsync(string owner, int batchSize, TimeSpan lease, CancellationToken cancellationToken)
+    /// <summary>Claims up to a batch. With <c>partitions</c> (P, ordering by key), only keyed rows of partitions this owner holds (ADR 0007).</summary>
+    public async Task<List<ClaimedMessage>> ClaimAsync(
+        string owner, int batchSize, TimeSpan lease, CancellationToken cancellationToken, int? partitions = null)
     {
-        await using var command = dataSource.CreateCommand(ClaimSql);
+        await using var command = dataSource.CreateCommand(partitions is null ? ClaimSql : ClaimOrderedSql);
         command.Parameters.Add(new NpgsqlParameter { Value = owner });
         command.Parameters.Add(new NpgsqlParameter { Value = lease, NpgsqlDbType = NpgsqlDbType.Interval });
         command.Parameters.Add(new NpgsqlParameter { Value = batchSize });
+        if (partitions is not null)
+            command.Parameters.Add(new NpgsqlParameter { Value = partitions.Value });
 
         var claimed = new List<ClaimedMessage>(batchSize);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);

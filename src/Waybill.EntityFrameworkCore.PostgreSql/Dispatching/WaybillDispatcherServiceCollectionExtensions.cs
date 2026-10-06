@@ -57,6 +57,7 @@ public static class WaybillDispatcherServiceCollectionExtensions
         services.TryAddSingleton(sp => new DispatcherDataSource(
             NpgsqlDataSource.Create(sp.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value.ConnectionString!)));
         services.TryAddSingleton(sp => new OutboxStore(sp.GetRequiredService<DispatcherDataSource>().Value));
+        services.TryAddSingleton(sp => new PartitionStore(sp.GetRequiredService<DispatcherDataSource>().Value));
         services.TryAddSingleton<OutboxDispatcher>();
         services.TryAddSingleton(_ => new DispatcherStatus(TimeProvider.System));
         services.AddHostedService<WaybillDispatcherService>();
