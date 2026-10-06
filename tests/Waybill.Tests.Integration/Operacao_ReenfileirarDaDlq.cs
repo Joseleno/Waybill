@@ -22,6 +22,7 @@ public sealed partial class Operacao_ReenfileirarDaDlq(PostgresFixture postgres)
             : Task.FromResult<IReadOnlyList<PublishResult>>(batch.Select(_ => new PublishResult(PublishStatus.Returned, "312 NO_ROUTE")).ToList()));
         var dispatcher = DispatcherHarness.Create(dataSource, transport, DispatcherHarness.Options(database, o => o.MaxReturns = 2));
         await dispatcher.RunOnceAsync(ct);
+        Assert.Equal(1, await database.SkipReturnWaitsAsync()); // the wait after a return (ADR 0006)
         await dispatcher.RunOnceAsync(ct);
         Assert.Equal(1, await database.CountAsync("dlq"));
 

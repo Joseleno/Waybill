@@ -100,7 +100,7 @@ internal sealed partial class OutboxDispatcher
         }
 
         // Recording the outcome is not cancelled by shutdown: the batch was published, its rows must say so.
-        var finish = await _store.FinishAsync(Owner, outcomes, _options.MaxReturns, CancellationToken.None).ConfigureAwait(false);
+        var finish = await _store.FinishAsync(Owner, outcomes, ReturnPolicy.From(_options), CancellationToken.None).ConfigureAwait(false);
         if (finish.Fenced > 0)
             LogFenced(_logger, finish.Fenced);
         foreach (var (id, reason) in finish.DeadLettered)

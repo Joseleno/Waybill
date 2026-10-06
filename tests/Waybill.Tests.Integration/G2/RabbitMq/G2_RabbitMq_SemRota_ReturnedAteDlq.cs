@@ -3,7 +3,8 @@ using Npgsql;
 namespace Waybill.Tests.Integration.G2.RabbitMq;
 
 // mandatory + no matching binding: the broker returns the message (basic.return). Each return spends one of
-// MaxReturns; the last one sends it to the outbox DLQ with the broker's reply text.
+// MaxReturns and makes it wait ReturnBackoff (skipped here); the last one sends it to the outbox DLQ with the broker's
+// reply text.
 [Collection(BrokerCollection.Name)]
 public sealed class G2_RabbitMq_SemRota_ReturnedAteDlq(PostgresFixture postgres, RabbitMqFixture rabbit)
 {
@@ -20,6 +21,7 @@ public sealed class G2_RabbitMq_SemRota_ReturnedAteDlq(PostgresFixture postgres,
 
         await dispatcher.RunOnceAsync(ct);
         Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE status = 'pending' AND attempts = 1"));
+        Assert.Equal(1, await database.SkipReturnWaitsAsync());
 
         await dispatcher.RunOnceAsync(ct);
         Assert.Equal(1, await database.ScalarAsync(

@@ -227,7 +227,7 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
                 await Task.Delay(50, ct);
                 continue;
             }
-            await store.FinishAsync(owner, claimed.Select(c => (c, PublishResult.Confirmed)).ToList(), 5, ct);
+            await store.FinishAsync(owner, claimed.Select(c => (c, PublishResult.Confirmed)).ToList(), ReturnPolicy.Immediate(5), ct);
         }
     }
 
