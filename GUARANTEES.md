@@ -90,7 +90,9 @@ that says what to change, instead of running a claim whose concurrency rules no 
   fail the same way and block the queue behind it. If the channel goes down with the error, it is a transport
   failure instead.
   [`G2_PublicacaoQueFalhaComConexaoECanalDePe_EhDefeito_ComCanalFechado_EhRetry`](tests/Waybill.Tests.Unit/G2_PublicacaoQueFalhaComCanalDePeTests.cs)
-- **An unroutable message (`basic.return`), after its own retry budget (`MaxReturns`).**
+- **An unroutable message (`basic.return`), after its own retry budget (`MaxReturns`), with a growing wait between
+  returns (`ReturnBackoff`, capped by `MaxReturnBackoff`), so a binding created meanwhile still lets it through.**
+  [`G2_Returned_EspacamentoCrescenteAteOTeto_DepoisDlq`](tests/Waybill.Tests.Integration/G2/G2_Returned_EspacamentoCrescenteAteOTeto.cs),
   [`G2_Returned_OrcamentoProprioDepoisDlq_ComMotivo`](tests/Waybill.Tests.Integration/G2/G2_Returned_OrcamentoProprioDepoisDlq.cs),
   [`G2_RabbitMq_SemRota_ReturnedAteDlq_ComNoRoute`](tests/Waybill.Tests.Integration/G2/RabbitMq/G2_RabbitMq_SemRota_ReturnedAteDlq.cs)
 

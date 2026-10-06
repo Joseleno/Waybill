@@ -67,4 +67,17 @@ public static class DispatcherHarness
 
     public static Task<long> CountAsync(this TestDatabase database, string status) =>
         database.ScalarAsync($"SELECT count(*) FROM waybill.outbox WHERE status = '{status}'");
+
+    /// <summary>Ends every wait after a basic.return now, instead of waiting for the database clock; returns how many.</summary>
+    public static Task<long> SkipReturnWaitsAsync(this TestDatabase database) =>
+        database.ScalarAsync("""
+            WITH skipped AS (
+                UPDATE waybill.outbox SET next_attempt_at = clock_timestamp()
+                WHERE next_attempt_at > clock_timestamp() RETURNING 1)
+            SELECT count(*) FROM skipped
+            """);
+
+    /// <summary>Whole seconds left in the wait of message <paramref name="id"/> after a basic.return, by the database clock.</summary>
+    public static Task<long> ReturnWaitSecondsAsync(this TestDatabase database, Guid id) =>
+        database.ScalarAsync($"SELECT ceil(extract(epoch FROM next_attempt_at - clock_timestamp()))::bigint FROM waybill.outbox WHERE id = '{id}'");
 }

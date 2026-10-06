@@ -49,6 +49,27 @@ public sealed class SchemaTests(PostgresFixture postgres)
         Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox"));
     }
 
+    // A database left by 0.1.0-alpha, with messages still pending, takes the v0.2 migration: it only adds, rewrites no
+    // pending row, and the backlog drains as before.
+    [Fact]
+    public async Task Schema_UpgradeDaV01ComBacklog_LinhasContinuamReivindicaveis()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres, untilMigration: LastV01Migration);
+        await G2.DispatcherHarness.EnqueueAsync(database, 20);
+
+        await WaybillSchema.MigrateAsync(database.ConnectionString, ct);
+
+        Assert.Equal(20, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE status = 'pending' AND next_attempt_at IS NULL AND attempts = 0 AND fence = 0"));
+        await using var dataSource = Npgsql.NpgsqlDataSource.Create(database.ConnectionString);
+        var transport = new G2.FakeTransport();
+        var dispatcher = G2.DispatcherHarness.Create(dataSource, transport, G2.DispatcherHarness.Options(database));
+        await dispatcher.RunOnceAsync(ct);
+        Assert.Equal(20, await G2.DispatcherHarness.CountAsync(database, "published"));
+    }
+
+    private const string LastV01Migration = "20261004233339_InboxProcessedAtIndex";
+
     [Fact]
     public async Task Schema_ModeloDoUsuarioNaoGeraMigrationDaOutbox()
     {

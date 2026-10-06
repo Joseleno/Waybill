@@ -29,6 +29,8 @@ Any number of instances may run either service against the same database.
 | `WaybillDispatcherOptions.PublishTimeout` | 20 seconds | How long the dispatcher waits for the broker to confirm a batch. Past it, the batch is handed back and published again: a duplicate is possible, a loss is not. |
 | `WaybillDispatcherOptions.LeaseMargin` | 10 seconds | Added to `PublishTimeout` to form the claim lease (30 seconds by default), so the lease always outlives the publish wait. A crashed instance's rows become claimable again after the lease. |
 | `WaybillDispatcherOptions.MaxReturns` | 5 | How many times a message may come back unroutable (`basic.return`) before it goes to the DLQ. |
+| `WaybillDispatcherOptions.ReturnBackoff` | 1 minute | How long a message waits after its first return before it is published again. The wait doubles with each return, up to `MaxReturnBackoff`. With the defaults a message waits 1 + 2 + 4 + 8 = 15 minutes in all before its fifth return sends it to the DLQ: time to create the missing binding. Zero publishes it again on the next cycle, as in 0.1. |
+| `WaybillDispatcherOptions.MaxReturnBackoff` | 10 minutes | The longest single wait after a return. At most one day. |
 | `WaybillDispatcherOptions.MetricsInterval` | 15 seconds | How often the pending-age gauge is sampled. |
 
 All options are validated at startup; a zero or negative retention fails the host instead of deleting everything.
@@ -63,7 +65,9 @@ never deletes them. Watch their count:
 SELECT count(*) FROM waybill.outbox WHERE status = 'dlq';
 ```
 
-Reprocessing them is a manual operation until the operations API (planned for v1.0). Fix the cause first (for
+A message that comes back unroutable does not reach the DLQ at once: it waits a growing interval between returns
+(`ReturnBackoff`, 15 minutes in all by default), and a binding created meanwhile lets it through with no manual step.
+Reprocessing dead-lettered messages is a manual operation until the operations API (planned for v1.0). Fix the cause first (for
 `312 NO_ROUTE`, the missing binding), then hand the messages back to the dispatcher, which publishes them with the
 same message id:
 

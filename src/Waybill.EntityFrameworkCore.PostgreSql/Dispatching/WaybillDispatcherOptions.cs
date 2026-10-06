@@ -28,6 +28,16 @@ public sealed class WaybillDispatcherOptions
     public int MaxReturns { get; set; } = 5;
 
     /// <summary>
+    /// How long a message returned as unroutable waits before it is published again; the wait doubles with each return,
+    /// up to <see cref="MaxReturnBackoff"/>. With the defaults, a message spends 15 minutes waiting before it goes to
+    /// the DLQ, time to create the missing binding. Zero publishes it again on the next cycle. Default 1 minute.
+    /// </summary>
+    public TimeSpan ReturnBackoff { get; set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>The longest single wait after a return (see <see cref="ReturnBackoff"/>). Default 10 minutes.</summary>
+    public TimeSpan MaxReturnBackoff { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// How often the age of the oldest message not yet published is sampled for the
     /// <c>waybill.outbox.oldest_pending.age</c> gauge (meter <c>Waybill</c>). Default 15 seconds.
     /// </summary>

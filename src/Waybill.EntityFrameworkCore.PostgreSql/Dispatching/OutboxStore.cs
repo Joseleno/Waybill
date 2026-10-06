@@ -6,6 +6,24 @@ namespace Waybill.EntityFrameworkCore.Dispatching;
 
 internal sealed record ClaimedMessage(OutgoingMessage Message, long Fence);
 
+/// <summary>The basic.return budget and the growing wait between returns (ADR 0006).</summary>
+internal sealed record ReturnPolicy(int MaxReturns, TimeSpan Backoff, TimeSpan MaxBackoff)
+{
+    /// <summary>
+    /// The smallest exponent at which the doubling wait reaches <see cref="MaxBackoff"/>. Bounding the exponent there keeps
+    /// Backoff × 2^k below twice the ceiling, so it never overflows an interval, and never stops short of the ceiling.
+    /// </summary>
+    public int MaxExponent { get; } = Backoff <= TimeSpan.Zero || MaxBackoff <= Backoff
+        ? 0
+        : (int)Math.Ceiling(Math.Log2(MaxBackoff.Ticks / (double)Backoff.Ticks));
+
+    public static ReturnPolicy From(WaybillDispatcherOptions options) =>
+        new(options.MaxReturns, options.ReturnBackoff, options.MaxReturnBackoff);
+
+    /// <summary>A returned message is claimable again at once, as in v0.1.</summary>
+    public static ReturnPolicy Immediate(int maxReturns) => new(maxReturns, TimeSpan.Zero, TimeSpan.Zero);
+}
+
 /// <summary>What recording a batch's outcome did: rows fenced off, and rows that went to the DLQ with their reason.</summary>
 internal sealed record FinishResult(int Fenced, IReadOnlyList<(Guid Id, string Reason)> DeadLettered);
 
@@ -15,12 +33,14 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     // Row claim in one short statement (READ COMMITTED, autocommit). The candidates are locked in a MATERIALIZED CTE,
     // so the planner cannot re-run the LIMIT … SKIP LOCKED subquery per row. The "claimable" condition is repeated on
     // the UPDATE: when FOR UPDATE meets a row another transaction changed and committed, PostgreSQL re-checks only the
-    // predicates on the locked table (EvalPlanQual).
+    // predicates on the locked table (EvalPlanQual). A row waiting after a basic.return is not claimable until its
+    // next_attempt_at (ADR 0006); the index cannot filter on the clock, so waiting rows are read and passed over.
     private const string ClaimSql = """
         WITH candidates AS MATERIALIZED (
             SELECT id FROM waybill.outbox
             WHERE status IN ('pending', 'claimed')
               AND (status = 'pending' OR lease_until < clock_timestamp())
+              AND (next_attempt_at IS NULL OR next_attempt_at <= clock_timestamp())
             ORDER BY id
             LIMIT $3
             FOR UPDATE SKIP LOCKED)
@@ -29,6 +49,7 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         FROM candidates c
         WHERE o.id = c.id
           AND (o.status = 'pending' OR (o.status = 'claimed' AND o.lease_until < clock_timestamp()))
+          AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= clock_timestamp())
         RETURNING o.id, o.type, o.key, o.payload, o.content_type, o.headers, o.created_at, o.fence
         """;
 
@@ -42,11 +63,17 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     private const string RetrySql =
         $"UPDATE waybill.outbox o SET status = 'pending', lease_until = NULL FROM unnest($2::uuid[], $3::bigint[]) AS m(id, fence) WHERE {Fenced} {Returning}";
 
+    // The k-th return waits min($6 × 2^(k−1), $7) by the database clock (ADR 0006); next_attempt_at is set only while a row
+    // waits, never on a DLQ row, so requeueing from the DLQ needs nothing more. The exponent stops at 
+    // (ReturnPolicy.MaxExponent) before the multiplication: with MaxReturns in the hundreds, 2^k would overflow the
+    // interval long before the ceiling applies.
     private const string ReturnedSql = $"""
         UPDATE waybill.outbox o
         SET attempts = o.attempts + 1,
             status = CASE WHEN o.attempts + 1 >= $5 THEN 'dlq' ELSE 'pending' END,
             dlq_reason = CASE WHEN o.attempts + 1 >= $5 THEN m.reason ELSE o.dlq_reason END,
+            next_attempt_at = CASE WHEN o.attempts + 1 >= $5 THEN NULL
+                                   ELSE clock_timestamp() + least($6 * power(2, least(o.attempts, $8)), $7) END,
             lease_until = NULL
         FROM unnest($2::uuid[], $3::bigint[], $4::text[]) AS m(id, fence, reason)
         WHERE {Fenced}
@@ -55,7 +82,7 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
 
     private const string DlqSql = $"""
         UPDATE waybill.outbox o
-        SET status = 'dlq', dlq_reason = m.reason, attempts = o.attempts + 1, lease_until = NULL
+        SET status = 'dlq', dlq_reason = m.reason, attempts = o.attempts + 1, lease_until = NULL, next_attempt_at = NULL
         FROM unnest($2::uuid[], $3::bigint[], $4::text[]) AS m(id, fence, reason)
         WHERE {Fenced}
         {Returning}
@@ -105,7 +132,7 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
 
     /// <summary>Applies the outcome of a batch in one transaction.</summary>
     public async Task<FinishResult> FinishAsync(
-        string owner, IReadOnlyList<(ClaimedMessage Claim, PublishResult Result)> outcomes, int maxReturns, CancellationToken cancellationToken)
+        string owner, IReadOnlyList<(ClaimedMessage Claim, PublishResult Result)> outcomes, ReturnPolicy returns, CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var batch = connection.CreateBatch();
@@ -122,7 +149,12 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
             if (withReason)
                 command.Parameters.Add(new NpgsqlParameter { Value = rows.Select(r => r.Result.Reason ?? status.ToString()).ToArray() });
             if (withBudget)
-                command.Parameters.Add(new NpgsqlParameter { Value = maxReturns });
+            {
+                command.Parameters.Add(new NpgsqlParameter { Value = returns.MaxReturns });
+                command.Parameters.Add(new NpgsqlParameter { Value = returns.Backoff, NpgsqlDbType = NpgsqlDbType.Interval });
+                command.Parameters.Add(new NpgsqlParameter { Value = returns.MaxBackoff, NpgsqlDbType = NpgsqlDbType.Interval });
+                command.Parameters.Add(new NpgsqlParameter { Value = returns.MaxExponent });
+            }
             batch.BatchCommands.Add(command);
         }
 

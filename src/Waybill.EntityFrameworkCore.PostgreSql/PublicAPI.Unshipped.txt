@@ -1,1 +1,5 @@
 #nullable enable
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxReturnBackoff.get -> System.TimeSpan
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxReturnBackoff.set -> void
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.ReturnBackoff.get -> System.TimeSpan
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.ReturnBackoff.set -> void

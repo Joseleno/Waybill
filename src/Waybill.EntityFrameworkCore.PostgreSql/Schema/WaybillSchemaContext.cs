@@ -43,6 +43,7 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
             outbox.Property(m => m.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("clock_timestamp()");
             outbox.Property(m => m.PublishedAt).HasColumnName("published_at");
             outbox.Property(m => m.DlqReason).HasColumnName("dlq_reason");
+            outbox.Property(m => m.NextAttemptAt).HasColumnName("next_attempt_at"); // after a basic.return (ADR 0006)
 
             // The dispatcher's claim walks this index in id (UUIDv7) order; it only holds rows still in flight.
             outbox.HasIndex(m => m.Id).HasDatabaseName("ix_outbox_claimable").HasFilter("status IN ('pending', 'claimed')");
@@ -85,6 +86,7 @@ internal sealed class OutboxRow
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? PublishedAt { get; set; }
     public string? DlqReason { get; set; }
+    public DateTimeOffset? NextAttemptAt { get; set; }
 }
 
 internal sealed class InboxRow

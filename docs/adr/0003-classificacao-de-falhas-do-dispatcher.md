@@ -17,7 +17,7 @@ Cada mensagem de um lote termina num de quatro resultados (`PublishStatus`), e c
 | Tipo não registrado, serialização, payload acima do `MaxPayloadBytes`, nome, `correlation_id`, chave de agregado ou `tenant_id` acima de 255 bytes | Erro de programação ou de configuração | Recusada no `Enqueue` | Nunca chega à tabela (ADR 0002) |
 | Linha gravada sob um limite maior que o atual | Limite reduzido depois | Defeito (`Defect`) | DLQ com motivo, sem tocar o broker |
 | Mensagem que o broker não consegue carregar | Propriedade AMQP impossível; mensagem que, sozinha e num canal só dela, faz o broker fechar o canal com 406 (`max_message_size`); publicação que falha com a conexão e o canal ainda de pé | Defeito (`Defect`) | DLQ com motivo |
-| `basic.return` (sem rota, com `mandatory`) | Binding ausente | `Returned` | Gasta uma de `MaxReturns`; na última, DLQ com o `ReplyText` |
+| `basic.return` (sem rota, com `mandatory`) | Binding ausente | `Returned` | Gasta uma de `MaxReturns` e espera antes da próxima tentativa, em intervalo crescente com teto (ADR 0006); na última, DLQ com o `ReplyText` |
 | Conexão ou canal | Broker fora, rede, canal fechado | `Retry` / `Connection` | Devolve sem gastar tentativa; **abre o circuit breaker** |
 | Confirmação que não chega no `PublishTimeout` | Broker lento | `Retry` / `ConfirmTimeout` | Devolve sem gastar tentativa; **lote cai à metade**; breaker fechado |
 | Nack, ou `Retry` sem causa (`Unspecified`) | Back-pressure do broker; transporte que não diz a causa | `Retry` / `Nacked` ou `Unspecified` | Igual ao timeout |
