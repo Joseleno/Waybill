@@ -101,6 +101,7 @@ internal sealed partial class WaybillDispatcherService(
                 wait = Wait(options.Value.PollingInterval, ++databaseFailures);
             }
 
+            wait = CapForPartitions(wait, dispatcher.OrdersByKey, options.Value.PartitionLease);
             try
             {
                 await Task.Delay(wait, stoppingToken).ConfigureAwait(false);
@@ -111,6 +112,13 @@ internal sealed partial class WaybillDispatcherService(
             }
         }
     }
+
+    /// <summary>
+    /// With ordering, no wait between cycles (polling, breaker, database backoff) outlasts a quarter of the partition
+    /// lease: the partitions are renewed at the start of each cycle, and must not expire between two of them (ADR 0007).
+    /// </summary>
+    internal static TimeSpan CapForPartitions(TimeSpan wait, bool ordered, TimeSpan partitionLease) =>
+        ordered && wait > partitionLease / 4 ? partitionLease / 4 : wait;
 
     internal static TimeSpan Wait(TimeSpan pollingInterval, int consecutiveFailures) =>
         CircuitBreaker.Delay(pollingInterval, MaxBackoff, consecutiveFailures);

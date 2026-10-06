@@ -72,6 +72,9 @@ internal sealed partial class OutboxDispatcher
 
     internal int CurrentBatchSize => _batchSizer.Current;
 
+    /// <summary>Whether this instance orders by key, and so holds partitions it must renew.</summary>
+    public bool OrdersByKey => _ordered;
+
     /// <summary>With <c>OrderByKey</c>: the partitions this instance held after its last upkeep, with their epochs.</summary>
     public IReadOnlyDictionary<int, long> HeldPartitions { get; private set; } = new SortedDictionary<int, long>();
 
