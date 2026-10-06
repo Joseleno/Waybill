@@ -8,7 +8,7 @@
 - [x] Cenários `G2_*` da 8a, um commit por cenário; ajuste dos testes de `Returned` existentes; oráculo de caos ampliado; mutação no predicado do claim
 - [x] Dez mil linhas em espera: p50 de 3,7 ms, sem índice próprio (ADR 0006)
 - [x] `OPERATIONS.md` (opções, tempo até a DLQ; o SQL de reenvio não muda), escopo, ADR 0003, `GUARANTEES.md`, ADR 0006, CHANGELOG
-- [ ] Revisão de código independente antes da PR
+- [x] Revisão de código independente antes da PR: sem defeito de confiança alta; o limite fixo do expoente (20) impedia um `ReturnBackoff` abaixo de um segundo de chegar ao teto, agora calculado das opções
 
 ## 8b — lease por partição
 
