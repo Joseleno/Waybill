@@ -22,9 +22,40 @@
 - A espera vem do relógio do banco, como o lease. Os testes não esperam o relógio passar: avançam a linha por SQL (`UPDATE … SET next_attempt_at = clock_timestamp()`).
 - O predicado novo vai nos dois níveis do claim. Verificado por mutação: tirar só do CTE é pego pelo teste de dez mil linhas em espera; tirar dos dois níveis, pelo oráculo de caos; tirar só do `UPDATE` externo não tem teste determinístico (janela de corrida), como o predicado de status (ADR 0006).
 
-## 8b e 8c
+## 8b — lease por partição
 
-Detalhados no início de cada PR, a partir de `docs/plano-v0.2.md`, Etapa 8, e das decisões do `SPEC.md`.
+**Desenho**
+
+| Tema | Decisão |
+| --- | --- |
+| Opções | `WaybillOptions.OrderByKey` (desligada por padrão), lida pelo dispatcher nesta PR e pelo enfileiramento na 8c. `WaybillDispatcherOptions.Partitions` (P, default 16, de 1 a 1024) e `PartitionLease` (default 60 s, pelo menos o dobro do lease da linha, no máximo um dia) |
+| Configuração global | Tabela `waybill.settings`, de uma linha, que existe só enquanto a ordenação está ligada: P e `PartitionLease`. A primeira instância com a ordenação ligada cria a linha e as P linhas de `outbox_partitions` num comando só (`INSERT … ON CONFLICT DO NOTHING`); as outras comparam. Divergência é erro crítico, como a verificação de `READ COMMITTED`: o laço para e o health check acusa. Uma instância com a ordenação desligada que encontra a linha também para, no startup e a cada `PartitionLease`, porque reivindicaria sem filtro de partição ao lado de quem ordena. Ligar, desligar ou mudar P exige parar todos os dispatchers; o SQL fica no `OPERATIONS.md` |
+| Tabelas | `outbox_partitions (partition, owner, epoch, lease_until)` e `outbox_instances (owner, heartbeat_at)` |
+| Ciclo | No início de cada ciclo, inclusive com o breaker aberto: heartbeat da instância; renovação das partições que ainda são dela (`owner = eu`, lease não vencido); cálculo da fatia justa, `ceil(P / instâncias vivas)`; aquisição de partições livres ou vencidas até a fatia (`FOR UPDATE SKIP LOCKED`, condição repetida no `UPDATE` externo, `epoch + 1`); devolução das que passam da fatia. Instância viva = heartbeat mais novo que `PartitionLease`; a coleta apaga as mais velhas que dez vezes isso. A devolução só acontece entre lotes, sem nada em voo |
+| Claim | Ganha `key IS NULL OR EXISTS (posse válida da partição key_hash % P por esta instância, com lease_until > clock_timestamp() + lease da linha)`. Mensagem sem chave não é ordenada e não espera partição |
+| Por que um `EXISTS` na tabela de posse | O SPEC previa só `key_hash % P = ANY(@minhas)`, sem tocar a tabela de posse. Não basta: uma instância pausada (GC, VM congelada) depois de renovar pode acordar com `@minhas` velho, depois de outra ter assumido a partição, e as duas reivindicariam a mesma chave ao mesmo tempo, que é a inversão do spike com M ≥ 2. O `EXISTS` lê a posse no snapshot do comando. A armadilha do ADR 0001 (a reavaliação do `FOR UPDATE` usa a tupla antiga das outras tabelas) não morde aqui: nenhuma outra instância pode assumir a partição antes do `lease_until`, e o claim exige que ele dure mais que o lease da linha a partir do relógio do próprio comando |
+| `epoch` | Identifica um mandato: sobe a cada troca de dono. Não entra no fencing da linha, porque o fencing da linha (`owner`, `fence`) e o `EXISTS` acima já impedem claim fora do mandato e marcação atrasada. Serve ao transporte (o producer por partição da etapa 9 é recriado quando o `epoch` muda) e ao diagnóstico. Vai para o ADR 0007 com essa prova |
+| Shutdown | Devolve as partições e apaga a própria linha de instância depois de devolver as linhas; a fatia é redistribuída no ciclo seguinte de quem fica, sem esperar o lease |
+
+**Testes que provam**
+
+| Teste | Cenário | Resultado esperado | Onde roda |
+| --- | --- | --- | --- |
+| `G4_OrdenacaoDesligada_ClaimDaV01SemTabelasDePosse` | Ordenação desligada | Nenhuma linha em `settings`, `outbox_partitions` ou `outbox_instances`; claim como antes | PR |
+| `G4_PrimeiraInstancia_CriaConfiguracaoEParticoes` | Primeira instância com a ordenação ligada | `settings` com P e lease; P partições; a instância fica com todas | PR |
+| `G4_PDiferenteDoBanco_ErroCriticoENaoReivindica` | Segunda instância com P ou `PartitionLease` diferente | Erro crítico que diz o que mudar; nenhuma linha reivindicada; health check `Unhealthy` | PR |
+| `G4_OrdenacaoDesligadaComConfiguracaoNoBanco_Para` | Instância sem ordenação diante de `settings` existente, no startup e depois de criada com ela rodando | Para com erro crítico nos dois casos | PR |
+| `G4_ClaimSoDasParticoesDaInstancia` | Duas instâncias, chaves espalhadas, mais mensagens sem chave | Cada uma publica só as chaves das próprias partições; as sem chave saem por qualquer uma | PR |
+| `G4_DonoAntigoDaParticao_NaoReivindica` | A instância renova, a partição vence por SQL, outra a assume, e a primeira reivindica com a lista velha | Nenhuma linha daquela partição vai para a primeira | PR |
+| `G4_FatiaJusta_ConvergeAoEntrarESair` | P = 16; três instâncias entram, uma sai com shutdown, outra morre | Cada uma com no máximo `ceil(P / N)` e todas as P com dono (6/6/4); depois 8/8 já no ciclo seguinte ao shutdown; as partições da morta voltam depois do `PartitionLease`; a morta sai de `outbox_instances` pela coleta | PR |
+| `G4_EntradaESaidaSobCarga_NenhumaParticaoComDoisDonos` | Oito instâncias entrando, saindo e morrendo durante a carga, lease curto | Oráculo por trigger em `outbox_partitions`: nenhum par de mandatos válidos sobrepostos na mesma partição; nada perdido | PR: 20 s; agendado: 10 min (caos) |
+| `Opcoes_*` (unidade) | P fora de 1 a 1024; `PartitionLease` menor que o dobro do lease da linha | O host não sobe, com mensagem que diz o que mudar | PR |
+
+**Fora da 8b:** filtro de cabeça, contador, `sequence`, M, liberação de chave e o teste de propriedade de ordem (8c). Com a ordenação ligada e só a 8b, as partições já valem, mas a ordem ainda não é garantida; nada disso sai em release antes da 8c.
+
+## 8c
+
+Detalhado no início do PR, a partir de `docs/plano-v0.2.md`, Etapa 8, e das decisões do `SPEC.md`.
 
 ## Pronto quando (8a)
 
