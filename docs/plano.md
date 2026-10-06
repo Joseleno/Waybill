@@ -14,11 +14,11 @@ Cada etapa termina num conjunto de testes, não numa data. A duração é estima
 | --- | --- | --- |
 | 0. Spike do claim | 3 a 5 dias | Concluído em Oct 4, 2026: certeza sobre o mecanismo de claim, lease e fencing; ADR 0001 escrito |
 | 1. Repositório, solution e CI | 2 dias | Concluído em Oct 4, 2026: esqueleto que empacota e roda testes, CI e release validados |
-| 2. Núcleo e gravação atômica | 1 semana | G1 provada; fake do outbox |
+| 2. Núcleo e gravação atômica | 1 semana | Concluído em Oct 4, 2026: G1 provada; fake do outbox |
 | 3. Dispatcher e RabbitMQ | 2 semanas | Concluído em Oct 4, 2026 (PRs 3a, 3b, 3c): G2 provada, com o claim por linha provado no spike |
 | 4. Inbox | 1 semana | Concluído em Oct 4, 2026: G3 provada, incluindo consumidor que também produz; fake do inbox. A limpeza do inbox foi para a etapa 5, junto da do outbox |
-| 5. Limpeza e observabilidade | 3 a 4 dias | Operação sustentável |
-| 6. Exemplo executável | 1 semana | A API vista de fora |
+| 5. Limpeza e observabilidade | 3 a 4 dias | Concluído em Oct 5, 2026: retenção, métrica e health check (PR #8); carga longa verde em 5 h, depois de achar que o índice do claim fica inchado após uma transação longa e documentar a reconstrução (ADR 0004) |
+| 6. Exemplo executável | 1 semana | Concluído em Oct 5, 2026 (PR #9): exemplo validado por um estranho, ergonomia do registro revista (ADR 0005) |
 | 7. Documentação e release | 3 a 4 dias | v0.1.0-alpha publicada |
 
 Das quatro decisões que estavam abertas, três foram fechadas em Oct 4, 2026: a licença é Apache-2.0; a matriz é só .NET 10 e EF Core 10, com PostgreSQL 15+; e a ordenação fica na v0.2, porque o spike mediu o custo e ele não passou nos critérios escritos antes da medição. Falta a métrica mínima da v0.1, necessária só na etapa 5.

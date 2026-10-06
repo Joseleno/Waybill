@@ -12,6 +12,9 @@ namespace Waybill.Tests.Integration.CargaLonga;
 // update is HOT and each message leaves dead index entries behind. A long transaction pins the vacuum horizon and the
 // claim slows down while the table looks stable. This scenario holds one open for 40% of the run under constant load,
 // closes it, and requires the claim latency to come back once autovacuum has run; it measures time, not only bytes.
+// Autovacuum does not shrink the claim index, and the bloated index slows the claim in bursts for hours: once it has
+// run, the scenario rebuilds the index, as OPERATIONS.md tells operators to (WAYBILL_LONG_REINDEX=0 skips it, to see
+// the bursts).
 // Duration: WAYBILL_LONG_DURATION (default 05:00:00, the scheduled job); rate: WAYBILL_LONG_RATE messages/s (200).
 // A CSV with one line per sample goes to WAYBILL_LONG_OUTPUT (default carga-longa.csv next to the test assembly).
 [Collection(PostgresCollection.Name)]
@@ -26,6 +29,9 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
         var rate = Setting("WAYBILL_LONG_RATE", int.Parse, 200);
         var output = Setting("WAYBILL_LONG_OUTPUT", s => s, Path.Combine(AppContext.BaseDirectory, "carga-longa.csv"));
         var plan = Plan.For(duration);
+        // The procedure OPERATIONS.md documents after a long transaction: rebuild the claim index once autovacuum has run.
+        var reindexAfterRecovery = Setting("WAYBILL_LONG_REINDEX", s => s != "0", true);
+        var reindexed = false;
         var database = await TestDatabase.CreateAsync(postgres);
         await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
         // The autovacuum settings OPERATIONS.md recommends for the outbox.
@@ -42,7 +48,7 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
         var workers = Task.WhenAll(running);
         var samples = new List<Sample>();
         await using var csv = new StreamWriter(output) { AutoFlush = true };
-        await csv.WriteLineAsync("elapsed_s,phase,claims,claim_p95_ms,outbox_bytes,dead_tuples,rows,last_autovacuum");
+        await csv.WriteLineAsync("elapsed_s,phase,claims,claim_p95_ms,outbox_bytes,dead_tuples,rows,last_autovacuum,claim_p50_ms,claim_max_ms,claimable_index_bytes,pk_bytes,claimable_idx_scan,claimable_idx_tup_read,autovacuum_count,vacuum_running,claimable_idx_blks,pk_idx_blks,heap_blks");
 
         var started = Stopwatch.StartNew();
         NpgsqlConnection? holder = null;
@@ -75,6 +81,13 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
                 var sample = await SampleAsync(dataSource, started.Elapsed, phase, claims.TakeWindow(), ct);
                 samples.Add(sample);
                 await csv.WriteLineAsync(sample.ToCsv());
+
+                if (reindexAfterRecovery && !reindexed && sample.LastAutovacuum > closedAt)
+                {
+                    await ExecuteAsync(dataSource, "REINDEX INDEX CONCURRENTLY waybill.ix_outbox_claimable", ct);
+                    reindexed = true;
+                    Console.WriteLine($"reindexed ix_outbox_claimable at {started.Elapsed}");
+                }
             }
         }
         finally
@@ -106,6 +119,7 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
         Assert.True(vacuumed is not null, $"no autovacuum of waybill.outbox after the long transaction closed at {closedAt:O}; see {output}");
         var window = samples.Where(s => s.Elapsed >= vacuumed.Elapsed && s.Elapsed >= duration - plan.FinalWindow).ToList();
         Assert.True(window.Count >= 3, $"autovacuum ran too late ({vacuumed.Elapsed}) to leave a final window to measure; see {output}");
+        Assert.True(reindexed || !reindexAfterRecovery, $"the claim index was never rebuilt; see {output}");
         var baselineP95 = Percentile95(baseline.SelectMany(s => s.ClaimMs));
         var finalP95 = Percentile95(window.SelectMany(s => s.ClaimMs));
         var allowed = Math.Max(2 * baselineP95, baselineP95 + 5);
@@ -141,7 +155,8 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
     }
 
     private sealed record Sample(
-        TimeSpan Elapsed, Phase Phase, IReadOnlyList<double> ClaimMs, long OutboxBytes, long DeadTuples, long Rows, DateTimeOffset? LastAutovacuum)
+        TimeSpan Elapsed, Phase Phase, IReadOnlyList<double> ClaimMs, long OutboxBytes, long DeadTuples, long Rows, DateTimeOffset? LastAutovacuum,
+        string Diagnostics)
     {
         public string ToCsv() => string.Join(',',
             ((long)Elapsed.TotalSeconds).ToString(CultureInfo.InvariantCulture),
@@ -151,7 +166,10 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
             OutboxBytes.ToString(CultureInfo.InvariantCulture),
             DeadTuples.ToString(CultureInfo.InvariantCulture),
             Rows.ToString(CultureInfo.InvariantCulture),
-            LastAutovacuum?.ToString("O", CultureInfo.InvariantCulture) ?? "");
+            LastAutovacuum?.ToString("O", CultureInfo.InvariantCulture) ?? "",
+            Percentile(ClaimMs, 0.50).ToString("0.00", CultureInfo.InvariantCulture),
+            (ClaimMs.Count == 0 ? 0 : ClaimMs.Max()).ToString("0.00", CultureInfo.InvariantCulture),
+            Diagnostics);
     }
 
     /// <summary>Claim durations since the last sample, recorded by the dispatch loop.</summary>
@@ -227,13 +245,24 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
     private static async Task<Sample> SampleAsync(NpgsqlDataSource dataSource, TimeSpan elapsed, Phase phase, IReadOnlyList<double> claims, CancellationToken ct)
     {
         await using var command = dataSource.CreateCommand("""
-            SELECT pg_total_relation_size('waybill.outbox'), n_dead_tup, n_live_tup, last_autovacuum
-            FROM pg_stat_user_tables WHERE schemaname = 'waybill' AND relname = 'outbox'
+            SELECT pg_total_relation_size('waybill.outbox'), t.n_dead_tup, t.n_live_tup, t.last_autovacuum,
+                   pg_relation_size('waybill.ix_outbox_claimable'), pg_relation_size('waybill.pk_outbox'),
+                   i.idx_scan, i.idx_tup_read, t.autovacuum_count,
+                   (SELECT count(*) FROM pg_stat_progress_vacuum p WHERE p.relid = t.relid),
+                   ci.idx_blks_hit + ci.idx_blks_read, pk.idx_blks_hit + pk.idx_blks_read,
+                   h.heap_blks_hit + h.heap_blks_read
+            FROM pg_stat_user_tables t
+            JOIN pg_stat_user_indexes i ON i.relid = t.relid AND i.indexrelname = 'ix_outbox_claimable'
+            JOIN pg_statio_user_indexes ci ON ci.relid = t.relid AND ci.indexrelname = 'ix_outbox_claimable'
+            JOIN pg_statio_user_indexes pk ON pk.relid = t.relid AND pk.indexrelname = 'pk_outbox'
+            JOIN pg_statio_user_tables h ON h.relid = t.relid
+            WHERE t.schemaname = 'waybill' AND t.relname = 'outbox'
             """);
         await using var reader = await command.ExecuteReaderAsync(ct);
         await reader.ReadAsync(ct);
         DateTimeOffset? lastAutovacuum = reader.IsDBNull(3) ? null : new DateTimeOffset(reader.GetDateTime(3), TimeSpan.Zero);
-        return new Sample(elapsed, phase, claims, reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), lastAutovacuum);
+        var diagnostics = string.Join(',', Enumerable.Range(4, 9).Select(c => Convert.ToInt64(reader.GetValue(c), CultureInfo.InvariantCulture)));
+        return new Sample(elapsed, phase, claims, reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), lastAutovacuum, diagnostics);
     }
 
     private static async Task ExecuteAsync(NpgsqlDataSource dataSource, string sql, CancellationToken ct)
@@ -242,10 +271,12 @@ public sealed class CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza(Po
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    private static double Percentile95(IEnumerable<double> values)
+    private static double Percentile95(IEnumerable<double> values) => Percentile(values, 0.95);
+
+    private static double Percentile(IEnumerable<double> values, double rank)
     {
         var sorted = values.Order().ToArray();
-        return sorted.Length == 0 ? 0 : sorted[(int)Math.Ceiling(0.95 * sorted.Length) - 1];
+        return sorted.Length == 0 ? 0 : sorted[(int)Math.Ceiling(rank * sorted.Length) - 1];
     }
 
     private static T Setting<T>(string name, Func<string, T> parse, T fallback) =>

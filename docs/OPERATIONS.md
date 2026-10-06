@@ -87,10 +87,26 @@ the claim can get slower, even if the table size looks stable. The table file do
 (plain `VACUUM` makes the space reusable, it does not return it). Watch for long transactions with
 `pg_stat_activity` (`xact_start`, `state = 'idle in transaction'`) and set `idle_in_transaction_session_timeout`.
 
+**After such an episode, rebuild the claim index.** Autovacuum cleans the dead entries, but it does not shrink the
+partial index the claim walks (`waybill.ix_outbox_claimable`), which holds only pending and claimed rows and so stays
+small in steady state. Once bloated, the claim reads more of its pages for the same rows, and latency comes back in
+bursts for hours. Check its size once the long transaction is gone and autovacuum has run, and rebuild it online:
+
+```sql
+SELECT pg_size_pretty(pg_relation_size('waybill.ix_outbox_claimable'));  -- a few hundred kB in steady state
+REINDEX INDEX CONCURRENTLY waybill.ix_outbox_claimable;
+```
+
+`REINDEX ... CONCURRENTLY` does not block the claim. In the long load scenario below, two hours of an open
+transaction left the index at about 85 MB. Without the rebuild, 28 of the following 106 minutes had a claim p95 above
+5 ms, and those minutes read 2.4 times as many index pages per scan for the same rows. With it, 2 did (both before the
+rebuild), and the index went back to under 1 MB.
+
 The long load scenario (`CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza`) holds such a transaction open
 under constant load with the autovacuum settings above. It checks that dead tuples pile up while it is open and that,
-once it closes and autovacuum runs, the claim latency comes back near the baseline and the table stops growing. It
-runs for 5 hours in the scheduled CI workflow and writes one CSV line per minute (claim p95, table size, dead tuples).
+once it closes, autovacuum runs and the claim index is rebuilt as above, the claim latency comes back near the baseline
+and the table stops growing. It runs for 5 hours in the scheduled CI workflow and writes one CSV line per minute (claim
+latency, table and index sizes, dead tuples, index scans and blocks read).
 
 ## Retention after a long broker outage
 
