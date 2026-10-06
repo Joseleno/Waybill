@@ -59,7 +59,7 @@ Os gatilhos que levam esse time a procurar uma solução:
 
 **Posicionamento proposto:** “Outbox e inbox transacionais para PostgreSQL e EF Core, sem framework. Garantias escritas, provadas por testes de caos.”
 
-O pacote não pretende ser substituto do MassTransit, framework de mensageria nem solução exactly-once. Para quem usa consumidores, roteamento ou sagas do MassTransit, migrar para o Waybill não compensa; o público é quem usa o MassTransit só pelo outbox. O README deve ter uma seção “quando não usar” apontando Wolverine e CAP para quem quer um framework completo.
+O pacote não pretende ser substituto do MassTransit, framework de mensageria nem solução que entregue cada mensagem uma única vez. Para quem usa consumidores, roteamento ou sagas do MassTransit, migrar para o Waybill não compensa; o público é quem usa o MassTransit só pelo outbox. O README deve ter uma seção “quando não usar” apontando Wolverine e CAP para quem quer um framework completo.
 
 ## Panorama de mercado
 
@@ -136,7 +136,7 @@ O pacote vale a pena sob uma condição: cada garantia prometida precisa de um t
 | PgBouncer em modo transaction quebra LISTEN/NOTIFY | Polling como padrão, NOTIFY só como otimização |
 | `Type.GetType(nome)` quebra com trimming e abre desserialização insegura | Registro explícito de tipos e System.Text.Json com source generation |
 
-**Risco de portfolio.** Um avaliador vê como negativo: repositório parado, README com “production-ready” ou “exactly-once”, roadmap cheio sem nada entregue e nenhum teste de concorrência. O timebox impede que o projeto concorra com outras prioridades.
+**Risco de portfolio.** Um avaliador vê como negativo: repositório parado, README que se diz pronto para produção ou que promete entrega única, roadmap cheio sem nada entregue e nenhum teste de concorrência. O timebox impede que o projeto concorra com outras prioridades.
 
 ## Nome, licença e sinais de confiança
 
@@ -183,7 +183,7 @@ Downloads medem mal: o CI os infla e, num pacote de nicho, o número absoluto fi
 
 **Como vira ativo de carreira**
 
-- **ADRs no repositório**, como “por que `SKIP LOCKED` e não advisory lock” e “por que não prometemos exactly-once”. São respostas prontas para entrevistas de system design.
+- **ADRs no repositório**, como “por que `SKIP LOCKED` e não advisory lock” e “por que não prometemos entrega única de ponta a ponta”. São respostas prontas para entrevistas de system design.
 - **Um artigo técnico** sobre `SKIP LOCKED` com ordenação e ordem de commit. Em entrevista, esse texto pode valer mais que o próprio pacote.
 - **Uma série no LinkedIn e Dev.to** no tom já usado na divulgação do CleanStart: sintoma verificável, não propaganda.
 - **Palestra** em comunidade local ou TDC.

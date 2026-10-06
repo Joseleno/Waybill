@@ -71,7 +71,7 @@ Na v0.1, o Waybill promete três coisas; a quarta, a ordem por chave de agregado
 
 | Não promete | Por quê |
 | --- | --- |
-| Exactly-once de ponta a ponta | A publicação é at-least-once; só o efeito gravado junto com o inbox acontece uma vez |
+| Entrega única de ponta a ponta (cada mensagem processada uma só vez) | A publicação é at-least-once; só o efeito gravado junto com o inbox acontece uma vez |
 | Ordem estrita de ponta a ponta no RabbitMQ | Sem fencing de produtor, uma publicação atrasada de uma instância com lease vencido pode chegar depois da mensagem seguinte. O consumidor detecta e envia à DLX; não há como impedir no broker |
 | Reordenar no consumidor | O consumidor que assina só alguns tipos de evento vê gaps legítimos na sequência da chave; estacionar a mensagem seguinte esperaria para sempre. Por isso o inbox detecta regressão, mas não reordena |
 | Ordem no consumo sem configuração do broker | No consumo, a ordem exige single active consumer ou consistent-hash (RabbitMQ), ou uma partição por chave sem mudar o número de partições (Kafka) |
