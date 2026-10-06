@@ -1,0 +1,20 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/Billing.Tests/Billing.Tests.csproj" />
+    <Project Path="samples/Billing/Billing.csproj" />
+    <Project Path="samples/Receipts.Tests/Receipts.Tests.csproj" />
+    <Project Path="samples/Receipts/Receipts.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Waybill.EntityFrameworkCore.PostgreSql/Waybill.EntityFrameworkCore.PostgreSql.csproj" />
+    <Project Path="src/Waybill.RabbitMQ/Waybill.RabbitMQ.csproj" />
+    <Project Path="src/Waybill.Testing/Waybill.Testing.csproj" />
+    <Project Path="src/Waybill/Waybill.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Waybill.Tests.Chaos/Waybill.Tests.Chaos.csproj" />
+    <Project Path="tests/Waybill.Tests.ChaosHost/Waybill.Tests.ChaosHost.csproj" />
+    <Project Path="tests/Waybill.Tests.Integration/Waybill.Tests.Integration.csproj" />
+    <Project Path="tests/Waybill.Tests.Unit/Waybill.Tests.Unit.csproj" />
+  </Folder>
+</Solution>

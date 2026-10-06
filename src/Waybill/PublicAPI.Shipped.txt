@@ -1,0 +1,61 @@
+#nullable enable
+Waybill.IOutbox
+Waybill.IOutbox.Enqueue<TMessage>(TMessage message, string? key = null, string? correlationId = null, string? tenantId = null) -> System.Guid
+Waybill.ITransport
+Waybill.ITransport.PublishAsync(System.Collections.Generic.IReadOnlyList<Waybill.OutgoingMessage!>! batch, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Waybill.PublishResult>!>!
+Waybill.OutgoingMessage
+Waybill.OutgoingMessage.ContentType.get -> string!
+Waybill.OutgoingMessage.ContentType.init -> void
+Waybill.OutgoingMessage.CreatedAt.get -> System.DateTimeOffset
+Waybill.OutgoingMessage.CreatedAt.init -> void
+Waybill.OutgoingMessage.Headers.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>!
+Waybill.OutgoingMessage.Headers.init -> void
+Waybill.OutgoingMessage.Key.get -> string?
+Waybill.OutgoingMessage.Key.init -> void
+Waybill.OutgoingMessage.MessageId.get -> System.Guid
+Waybill.OutgoingMessage.MessageId.init -> void
+Waybill.OutgoingMessage.Name.get -> string!
+Waybill.OutgoingMessage.Name.init -> void
+Waybill.OutgoingMessage.OutgoingMessage() -> void
+Waybill.OutgoingMessage.Payload.get -> System.ReadOnlyMemory<byte>
+Waybill.OutgoingMessage.Payload.init -> void
+Waybill.PublishResult
+Waybill.PublishResult.Deconstruct(out Waybill.PublishStatus Status, out string? Reason) -> void
+Waybill.PublishResult.Equals(Waybill.PublishResult other) -> bool
+Waybill.PublishResult.Failure.get -> Waybill.TransportFailure
+Waybill.PublishResult.Failure.init -> void
+Waybill.PublishResult.PublishResult() -> void
+Waybill.PublishResult.PublishResult(Waybill.PublishStatus Status, string? Reason = null) -> void
+Waybill.PublishResult.Reason.get -> string?
+Waybill.PublishResult.Reason.init -> void
+Waybill.PublishResult.Status.get -> Waybill.PublishStatus
+Waybill.PublishResult.Status.init -> void
+Waybill.PublishStatus
+Waybill.PublishStatus.Confirmed = 1 -> Waybill.PublishStatus
+Waybill.PublishStatus.Defect = 4 -> Waybill.PublishStatus
+Waybill.PublishStatus.Retry = 2 -> Waybill.PublishStatus
+Waybill.PublishStatus.Returned = 3 -> Waybill.PublishStatus
+Waybill.TransportFailure
+Waybill.TransportFailure.ConfirmTimeout = 2 -> Waybill.TransportFailure
+Waybill.TransportFailure.Connection = 1 -> Waybill.TransportFailure
+Waybill.TransportFailure.Nacked = 3 -> Waybill.TransportFailure
+Waybill.TransportFailure.Unspecified = 0 -> Waybill.TransportFailure
+Waybill.WaybillOptions
+Waybill.WaybillOptions.AddMessage<TMessage>(string! name, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage>! typeInfo) -> Waybill.WaybillOptions!
+Waybill.WaybillOptions.MaxPayloadBytes.get -> int
+Waybill.WaybillOptions.MaxPayloadBytes.set -> void
+Waybill.WaybillOptions.ThrowOnPendingMessagesAtDispose.get -> bool
+Waybill.WaybillOptions.ThrowOnPendingMessagesAtDispose.set -> void
+Waybill.WaybillOptions.WaybillOptions() -> void
+Microsoft.Extensions.DependencyInjection.WaybillServiceCollectionExtensions
+override Waybill.PublishResult.GetHashCode() -> int
+static Waybill.PublishResult.Confirmed.get -> Waybill.PublishResult
+static Waybill.PublishResult.Defect(string! reason) -> Waybill.PublishResult
+static Waybill.PublishResult.Retry.get -> Waybill.PublishResult
+static Waybill.PublishResult.RetryAfter(Waybill.TransportFailure failure, string? reason = null) -> Waybill.PublishResult
+static Waybill.PublishResult.Returned(string! reason) -> Waybill.PublishResult
+static Waybill.PublishResult.operator !=(Waybill.PublishResult left, Waybill.PublishResult right) -> bool
+static Waybill.PublishResult.operator ==(Waybill.PublishResult left, Waybill.PublishResult right) -> bool
+static Microsoft.Extensions.DependencyInjection.WaybillServiceCollectionExtensions.AddWaybill(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.WaybillOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+~override Waybill.PublishResult.Equals(object obj) -> bool
+~override Waybill.PublishResult.ToString() -> string

@@ -1,0 +1,28 @@
+{
+  "users": [
+    {
+      "name": "waybill",
+      "password_hash": "GgR9d5BJ51mgLXRndobOhBCU7iUv7Dky6I9VpHNt6AzCjQDr",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": ["administrator"]
+    }
+  ],
+  "vhosts": [{ "name": "/" }],
+  "permissions": [
+    { "user": "waybill", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*" }
+  ],
+  "exchanges": [
+    { "name": "events", "vhost": "/", "type": "topic", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
+    { "name": "receipts.dead-letter", "vhost": "/", "type": "fanout", "durable": true, "auto_delete": false, "internal": false, "arguments": {} }
+  ],
+  "queues": [
+    { "name": "receipts.invoice-paid", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum", "x-delivery-limit": 20, "x-dead-letter-exchange": "receipts.dead-letter" } },
+    { "name": "receipts.invoice-paid.dead", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum", "x-max-length": 10000 } },
+    { "name": "audit", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum", "x-max-length": 10000 } }
+  ],
+  "bindings": [
+    { "source": "events", "vhost": "/", "destination": "receipts.invoice-paid", "destination_type": "queue", "routing_key": "billing.invoice-paid.v1", "arguments": {} },
+    { "source": "events", "vhost": "/", "destination": "audit", "destination_type": "queue", "routing_key": "#", "arguments": {} },
+    { "source": "receipts.dead-letter", "vhost": "/", "destination": "receipts.invoice-paid.dead", "destination_type": "queue", "routing_key": "", "arguments": {} }
+  ]
+}

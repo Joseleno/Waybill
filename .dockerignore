@@ -1,0 +1,11 @@
+# The samples build from the repository root (they reference src/ by project). Keep the context small.
+**/bin/
+**/obj/
+.git/
+.github/
+artifacts/
+TestResults/
+**/TestResults/
+spike/
+docs/
+**/*.md

@@ -1,0 +1,89 @@
+name: ci
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  test:
+    name: test (postgres ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Supported floor and newest. Keep in sync with docs/escopo-e-fronteiras.md (Matriz de suporte).
+        postgres: ['15', '18']
+    env:
+      WAYBILL_POSTGRES_IMAGE: postgres:${{ matrix.postgres }}-alpine
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # MinVer reads the version from tags
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - run: dotnet build -c Release
+      - run: dotnet test --project tests/Waybill.Tests.Unit -c Release --no-build
+      - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build --filter-not-trait "Category=Long"
+      - run: dotnet test --project samples/Billing.Tests -c Release --no-build
+      - run: dotnet test --project samples/Receipts.Tests -c Release --no-build
+
+  chaos:
+    name: chaos (short)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - run: dotnet build -c Release
+      - run: dotnet test --project tests/Waybill.Tests.Chaos -c Release --no-build --filter-not-trait "Category=Long"
+
+  # The sample as a newcomer runs it: compose up, the happy path, then a broker outage.
+  sample:
+    name: sample (compose)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: samples
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker compose up --build --wait --wait-timeout 300
+      - run: ./scripts/smoke.sh
+      - run: ./scripts/broker-outage.sh
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down -v
+
+  pack:
+    needs: [test, chaos, sample]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - run: dotnet pack -c Release -o artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: artifacts/
+          if-no-files-found: error
