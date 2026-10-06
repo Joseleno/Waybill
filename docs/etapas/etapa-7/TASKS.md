@@ -7,5 +7,5 @@
 - [ ] CHANGELOG `[0.1.0-alpha]`; descrição do `Waybill.Testing`; PublicAPI Shipped
 - [x] Tag `v0.1.0-alpha-test.1` verde; validação por agente sem contexto com feed local; `FRICCAO.md`
 - [ ] Revisão de código independente; CI verde; validação do autor; PR
-- [ ] Linha "Operação sustentável" no `GUARANTEES.md`, só depois da carga longa verde (etapa 5)
+- [x] Linha "Operação sustentável" no `GUARANTEES.md`, só depois da carga longa verde (etapa 5)
 - [ ] Com ok do autor: tag assinada `v0.1.0-alpha`, publicação no NuGet, Source Link conferido do nuget.org; pedido do prefixo `Waybill.*`

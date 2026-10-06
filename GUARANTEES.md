@@ -182,4 +182,14 @@ Holds when:
 | Atomicity with anything outside the `DbContext`'s database | A write to Redis, another database or a file is still a dual write |
 | An event that matches its data after a PostgreSQL failover with asynchronous replication | The failover can lose a commit whose event was already published. Synchronous replication closes this gap where the business requires it |
 
-How to run Waybill over time (retention, autovacuum, what to monitor) is in [OPERATIONS.md](docs/OPERATIONS.md).
+## Operating over time
+
+Not a guarantee, but a condition of use that a test checks. Under constant load, with the autovacuum settings
+OPERATIONS.md recommends, a transaction held open for hours elsewhere in the database lets dead rows pile up and slows
+the claim. Once it closes, autovacuum runs and the claim index is rebuilt as OPERATIONS.md describes, the claim latency
+comes back within twice the baseline (or the baseline plus 5 ms) and the outbox stops growing. The scenario runs for
+5 hours in a scheduled CI job.
+[`CargaLonga_DepoisQueATransacaoLongaFecha_LatenciaDoClaimVoltaETamanhoParaDeCrescer`](tests/Waybill.Tests.Integration/CargaLonga/CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza.cs)
+
+How to run Waybill over time (retention, autovacuum, the claim index, what to monitor) is in
+[OPERATIONS.md](docs/OPERATIONS.md).
