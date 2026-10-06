@@ -12,17 +12,24 @@ public sealed class HealthHarness : IAsyncDisposable
 {
     private readonly ServiceProvider _services;
 
-    public HealthHarness(TestDatabase database, ITransport transport, LogSink? logs = null)
+    public HealthHarness(
+        TestDatabase database, ITransport transport, LogSink? logs = null,
+        Action<WaybillOptions>? waybill = null, Action<WaybillDispatcherOptions>? dispatcher = null)
     {
         _services = new ServiceCollection()
             .AddLogging(logging => logging.AddProvider(logs ?? new LogSink()))
             .AddMetrics()
-            .AddWaybill(o => o.MaxPayloadBytes = 64 * 1024)
+            .AddWaybill(o =>
+            {
+                o.MaxPayloadBytes = 64 * 1024;
+                waybill?.Invoke(o);
+            })
             .AddSingleton(transport)
             .AddWaybillDispatcher(o =>
             {
                 o.ConnectionString = database.ConnectionString;
                 o.PollingInterval = TimeSpan.FromMilliseconds(100);
+                dispatcher?.Invoke(o);
             })
             .AddHealthChecks().AddWaybillDispatcherCheck().Services
             .BuildServiceProvider();
