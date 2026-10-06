@@ -43,6 +43,8 @@ internal sealed partial class OutboxDispatcher
     private readonly BatchSizer _batchSizer;
     private readonly PartitionStore? _partitions;
     private readonly bool _ordered;
+    private readonly TimeProvider _time;
+    private long? _lastUpkeep; // TimeProvider timestamp of the last partition upkeep that succeeded
 
     public OutboxDispatcher(
         OutboxStore store,
@@ -60,6 +62,7 @@ internal sealed partial class OutboxDispatcher
         _waybillOptions = waybillOptions;
         _options = dispatcherOptions.Value;
         _logger = logger;
+        _time = timeProvider ?? TimeProvider.System;
         _breaker = new CircuitBreaker(timeProvider ?? TimeProvider.System, _options.PollingInterval, WaybillDispatcherService.MaxBackoff);
         _batchSizer = new BatchSizer(_options.BatchSize);
     }
@@ -79,6 +82,13 @@ internal sealed partial class OutboxDispatcher
     public IReadOnlyDictionary<int, long> HeldPartitions { get; private set; } = new SortedDictionary<int, long>();
 
     private OrderingSettings Ordering => new(_options.Partitions, _options.PartitionLease);
+
+    // Upkeep is several round trips, too many for every full batch of a backlog. Every (PartitionLease − lease) / 4 is
+    // enough: a partition renewed then is still held for longer than a row lease when the claim checks it, three
+    // intervals later. Without partitions (just started, or all lost) the instance has nothing to claim, so it upkeeps.
+    private bool UpkeepDue() =>
+        _lastUpkeep is null || HeldPartitions.Count == 0
+        || _time.GetElapsedTime(_lastUpkeep.Value) >= (_options.PartitionLease - _options.Lease) / 4;
 
     private PartitionStore Partitions => _partitions ?? throw new InvalidOperationException("Ordering by key needs the partition store.");
 
@@ -118,8 +128,11 @@ internal sealed partial class OutboxDispatcher
     {
         // Partition upkeep runs every cycle, with the breaker open too: a broker outage must not cost the partitions.
         // Nothing is in flight here, so handing back partitions above the fair share is safe.
-        if (_ordered)
+        if (_ordered && UpkeepDue())
+        {
             HeldPartitions = await Partitions.MaintainAsync(Owner, Ordering, cancellationToken).ConfigureAwait(false);
+            _lastUpkeep = _time.GetTimestamp();
+        }
 
         if (_breaker.IsOpen)
             return new DispatchCycle(0, DispatchOutcome.BreakerOpen, 0);

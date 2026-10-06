@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 using Npgsql;
 using Waybill.Tests.Integration.G2;
 
@@ -18,15 +19,17 @@ public sealed class G4_ClaimSoDasParticoesDaInstancia(PostgresFixture postgres)
         await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
         var options = OrderingHarness.Options(database, P);
         var (transportA, transportB) = (new FakeTransport(), new FakeTransport());
-        var a = OrderingHarness.Create(dataSource, transportA, options);
-        var b = OrderingHarness.Create(dataSource, transportB, options);
+        var time = new FakeTimeProvider(); // each round below is due for partition upkeep
+        var a = OrderingHarness.Create(dataSource, transportA, options, time);
+        var b = OrderingHarness.Create(dataSource, transportB, options, time);
         Assert.Null(await a.CheckOrderingAsync(atStartup: true, ct));
 
         // A takes all four alone; with B alive the share drops to two: A hands two back, B takes them.
-        await a.RunOnceAsync(ct);
-        await b.RunOnceAsync(ct);
-        await a.RunOnceAsync(ct);
-        await b.RunOnceAsync(ct);
+        foreach (var dispatcher in new[] { a, b, a, b })
+        {
+            await dispatcher.RunOnceAsync(ct);
+            time.Advance(TimeSpan.FromMinutes(1));
+        }
         Assert.Equal(2, a.HeldPartitions.Count);
         Assert.Equal(2, b.HeldPartitions.Count);
         Assert.Empty(a.HeldPartitions.Keys.Intersect(b.HeldPartitions.Keys));
