@@ -14,6 +14,9 @@ public sealed class OpcoesDoDispatcherTests
         { "MetricsInterval", o => o.MetricsInterval = TimeSpan.FromSeconds(-1) },
         { "MetricsInterval", o => o.MetricsInterval = TimeSpan.FromDays(2) },
         { "PollingInterval", o => o.PollingInterval = TimeSpan.FromDays(2) },
+        { "ReturnBackoff", o => o.ReturnBackoff = TimeSpan.FromSeconds(-1) },
+        { "MaxReturnBackoff", o => o.MaxReturnBackoff = TimeSpan.FromSeconds(30) }, // below the 1 min ReturnBackoff
+        { "MaxReturnBackoff", o => o.MaxReturnBackoff = TimeSpan.FromDays(2) },
     };
 
     [Theory]

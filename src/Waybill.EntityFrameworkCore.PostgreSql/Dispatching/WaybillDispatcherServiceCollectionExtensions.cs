@@ -47,6 +47,9 @@ public static class WaybillDispatcherServiceCollectionExtensions
             .Validate(o => o.PublishTimeout > TimeSpan.Zero, "WaybillDispatcherOptions.PublishTimeout must be positive.")
             .Validate(o => o.LeaseMargin > TimeSpan.Zero, "WaybillDispatcherOptions.LeaseMargin must be positive.")
             .Validate(o => o.MaxReturns > 0, "WaybillDispatcherOptions.MaxReturns must be positive.")
+            .Validate(o => o.ReturnBackoff >= TimeSpan.Zero, "WaybillDispatcherOptions.ReturnBackoff must be zero or positive.")
+            .Validate(o => o.MaxReturnBackoff >= o.ReturnBackoff && o.MaxReturnBackoff <= TimeSpan.FromDays(1),
+                "WaybillDispatcherOptions.MaxReturnBackoff must be at least ReturnBackoff and at most one day.")
             .Validate(o => o.MetricsInterval > TimeSpan.Zero && o.MetricsInterval <= TimeSpan.FromDays(1), "WaybillDispatcherOptions.MetricsInterval must be positive and at most one day.")
             .ValidateOnStart();
 
