@@ -86,6 +86,10 @@ that says what to change, instead of running a claim whose concurrency rules no 
   [`G2_MensagemAcimaDoMaxMessageSizeDoBroker_IsoladaUmAUm_SoElaVaiParaDlq`](tests/Waybill.Tests.Integration/G2/RabbitMq/G2_MensagemAcimaDoMaxMessageSizeDoBroker_IsoladaUmAUm.cs)
 - **A message that cannot be expressed in AMQP.**
   [`G2_RabbitMq_MensagemInexprimivelEmAmqp_VaiParaDlqEORestoPublica`](tests/Waybill.Tests.Integration/G2/RabbitMq/G2_RabbitMq_MensagemInexprimivelEmAmqp_VaiParaDlq.cs)
+- **A publish that throws while the connection and the channel stay up.** Not a network failure, so a retry would
+  fail the same way and block the queue behind it. If the channel goes down with the error, it is a transport
+  failure instead.
+  [`G2_PublicacaoQueFalhaComConexaoECanalDePe_EhDefeito_ComCanalFechado_EhRetry`](tests/Waybill.Tests.Unit/G2_PublicacaoQueFalhaComCanalDePeTests.cs)
 - **An unroutable message (`basic.return`), after its own retry budget (`MaxReturns`).**
   [`G2_Returned_OrcamentoProprioDepoisDlq_ComMotivo`](tests/Waybill.Tests.Integration/G2/G2_Returned_OrcamentoProprioDepoisDlq.cs),
   [`G2_RabbitMq_SemRota_ReturnedAteDlq_ComNoRoute`](tests/Waybill.Tests.Integration/G2/RabbitMq/G2_RabbitMq_SemRota_ReturnedAteDlq.cs)
