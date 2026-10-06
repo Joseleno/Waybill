@@ -190,7 +190,7 @@ Ao travar uma linha que outra transação alterou e commitou, o PostgreSQL só r
 
 ## Ordenação — primeiro item do plano da v0.2
 
-Esta era a etapa 3b, condicional. O spike da etapa 0 disse que o custo não compensa na v0.1, então ela não entra no cronograma de oito semanas e vira o primeiro item do plano da v0.2. Fica aqui como insumo, com o que o spike deixou em aberto.
+Esta era a etapa 3b, condicional. O spike da etapa 0 disse que o custo não compensa na v0.1, então ela não entra no cronograma de oito semanas e vira o primeiro item do plano da v0.2. Fica aqui como insumo, com o que o spike deixou em aberto. As entregas e os cenários agora vivem na etapa 8 do `docs/plano-v0.2.md`, que vence esta seção.
 
 **Entregas**
 
