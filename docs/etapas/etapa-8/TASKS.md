@@ -2,12 +2,12 @@
 
 ## 8a — espaçamento do `basic.return`
 
-- [ ] Schema: migration da v0.2 com `next_attempt_at`; teste de upgrade de um banco da `0.1.0-alpha` com backlog
-- [ ] Opções `ReturnBackoff` e `MaxReturnBackoff`, validadas no startup; API pública declarada
-- [ ] Store: `ReturnedSql` grava `next_attempt_at` com expoente limitado; claim com o predicado nos dois níveis
-- [ ] Cenários `G2_*` da 8a, um commit por cenário; ajuste dos dois testes de `Returned` existentes; mutação no predicado do claim
-- [ ] Dez mil linhas em espera: medição e decisão sobre índice próprio
-- [ ] `OPERATIONS.md` (opções, tempo até a DLQ, SQL de reenvio zerando `next_attempt_at`), escopo, ADR 0003, `GUARANTEES.md`, ADR 0006, CHANGELOG
+- [x] Schema: migration da v0.2 com `next_attempt_at`; teste de upgrade de um banco da `0.1.0-alpha` com backlog
+- [x] Opções `ReturnBackoff` e `MaxReturnBackoff`, validadas no startup; API pública declarada
+- [x] Store: `ReturnedSql` grava `next_attempt_at` com expoente limitado; claim com o predicado nos dois níveis
+- [x] Cenários `G2_*` da 8a, um commit por cenário; ajuste dos testes de `Returned` existentes; oráculo de caos ampliado; mutação no predicado do claim
+- [x] Dez mil linhas em espera: p50 de 3,7 ms, sem índice próprio (ADR 0006)
+- [x] `OPERATIONS.md` (opções, tempo até a DLQ; o SQL de reenvio não muda), escopo, ADR 0003, `GUARANTEES.md`, ADR 0006, CHANGELOG
 - [ ] Revisão de código independente antes da PR
 
 ## 8b — lease por partição
