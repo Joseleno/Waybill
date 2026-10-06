@@ -4,12 +4,14 @@ namespace Waybill.Tests.Integration.G2;
 
 // With a large MaxReturns, ReturnBackoff × 2^k would overflow PostgreSQL's interval long before the ceiling applies.
 // The exponent is bounded first, so a message deep into its budget still gets a wait at the ceiling, not an error that
-// would fail the whole batch's bookkeeping.
+// would fail the whole batch's bookkeeping; and the bound is never below the exponent the ceiling needs.
 [Collection(PostgresCollection.Name)]
 public sealed class G2_Returned_MuitasTentativas_IntervaloNaoEstoura(PostgresFixture postgres)
 {
-    [Fact]
-    public async Task G2_Returned_MuitasTentativas_IntervaloNaoEstoura_EsperaNoTeto()
+    [Theory]
+    [InlineData(86_400_000)] // a one-day ReturnBackoff: 2^998 days would overflow
+    [InlineData(1)]          // a 1 ms ReturnBackoff: the ceiling sits 2^26 times higher, so the exponent must reach it
+    public async Task G2_Returned_MuitasTentativas_IntervaloNaoEstoura_EsperaNoTeto(int backoffMilliseconds)
     {
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);
@@ -21,7 +23,7 @@ public sealed class G2_Returned_MuitasTentativas_IntervaloNaoEstoura(PostgresFix
         var dispatcher = DispatcherHarness.Create(dataSource, transport, DispatcherHarness.Options(database, o =>
         {
             o.MaxReturns = 1000;
-            o.ReturnBackoff = TimeSpan.FromDays(1);
+            o.ReturnBackoff = TimeSpan.FromMilliseconds(backoffMilliseconds);
             o.MaxReturnBackoff = TimeSpan.FromDays(1);
         }));
 

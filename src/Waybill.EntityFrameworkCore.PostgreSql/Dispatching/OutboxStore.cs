@@ -9,6 +9,14 @@ internal sealed record ClaimedMessage(OutgoingMessage Message, long Fence);
 /// <summary>The basic.return budget and the growing wait between returns (ADR 0006).</summary>
 internal sealed record ReturnPolicy(int MaxReturns, TimeSpan Backoff, TimeSpan MaxBackoff)
 {
+    /// <summary>
+    /// The smallest exponent at which the doubling wait reaches <see cref="MaxBackoff"/>. Bounding the exponent there keeps
+    /// Backoff × 2^k below twice the ceiling, so it never overflows an interval, and never stops short of the ceiling.
+    /// </summary>
+    public int MaxExponent { get; } = Backoff <= TimeSpan.Zero || MaxBackoff <= Backoff
+        ? 0
+        : (int)Math.Ceiling(Math.Log2(MaxBackoff.Ticks / (double)Backoff.Ticks));
+
     public static ReturnPolicy From(WaybillDispatcherOptions options) =>
         new(options.MaxReturns, options.ReturnBackoff, options.MaxReturnBackoff);
 
@@ -56,16 +64,16 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         $"UPDATE waybill.outbox o SET status = 'pending', lease_until = NULL FROM unnest($2::uuid[], $3::bigint[]) AS m(id, fence) WHERE {Fenced} {Returning}";
 
     // The k-th return waits min($6 × 2^(k−1), $7) by the database clock (ADR 0006); next_attempt_at is set only while a row
-    // waits, never on a DLQ row, so requeueing from the DLQ needs nothing more. The exponent stops at 20 before the
-    // multiplication: with MaxReturns in the hundreds, 2^k would overflow the interval (ReturnBackoff ≤ one day, so
-    // 2^20 days still fits).
+    // waits, never on a DLQ row, so requeueing from the DLQ needs nothing more. The exponent stops at 
+    // (ReturnPolicy.MaxExponent) before the multiplication: with MaxReturns in the hundreds, 2^k would overflow the
+    // interval long before the ceiling applies.
     private const string ReturnedSql = $"""
         UPDATE waybill.outbox o
         SET attempts = o.attempts + 1,
             status = CASE WHEN o.attempts + 1 >= $5 THEN 'dlq' ELSE 'pending' END,
             dlq_reason = CASE WHEN o.attempts + 1 >= $5 THEN m.reason ELSE o.dlq_reason END,
             next_attempt_at = CASE WHEN o.attempts + 1 >= $5 THEN NULL
-                                   ELSE clock_timestamp() + least($6 * power(2, least(o.attempts, 20)), $7) END,
+                                   ELSE clock_timestamp() + least($6 * power(2, least(o.attempts, $8)), $7) END,
             lease_until = NULL
         FROM unnest($2::uuid[], $3::bigint[], $4::text[]) AS m(id, fence, reason)
         WHERE {Fenced}
@@ -145,6 +153,7 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
                 command.Parameters.Add(new NpgsqlParameter { Value = returns.MaxReturns });
                 command.Parameters.Add(new NpgsqlParameter { Value = returns.Backoff, NpgsqlDbType = NpgsqlDbType.Interval });
                 command.Parameters.Add(new NpgsqlParameter { Value = returns.MaxBackoff, NpgsqlDbType = NpgsqlDbType.Interval });
+                command.Parameters.Add(new NpgsqlParameter { Value = returns.MaxExponent });
             }
             batch.BatchCommands.Add(command);
         }
