@@ -41,6 +41,10 @@ internal sealed partial class OutboxDispatcher
     private readonly ILogger<OutboxDispatcher> _logger;
     private readonly CircuitBreaker _breaker;
     private readonly BatchSizer _batchSizer;
+    private readonly PartitionStore? _partitions;
+    private readonly bool _ordered;
+    private readonly TimeProvider _time;
+    private long? _lastUpkeep; // TimeProvider timestamp of the last partition upkeep that succeeded
 
     public OutboxDispatcher(
         OutboxStore store,
@@ -48,13 +52,17 @@ internal sealed partial class OutboxDispatcher
         IOptions<WaybillOptions> waybillOptions,
         IOptions<WaybillDispatcherOptions> dispatcherOptions,
         ILogger<OutboxDispatcher> logger,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        PartitionStore? partitions = null)
     {
         _store = store;
+        _partitions = partitions;
+        _ordered = waybillOptions.Value.OrderByKey;
         _transport = transport;
         _waybillOptions = waybillOptions;
         _options = dispatcherOptions.Value;
         _logger = logger;
+        _time = timeProvider ?? TimeProvider.System;
         _breaker = new CircuitBreaker(timeProvider ?? TimeProvider.System, _options.PollingInterval, WaybillDispatcherService.MaxBackoff);
         _batchSizer = new BatchSizer(_options.BatchSize);
     }
@@ -67,14 +75,71 @@ internal sealed partial class OutboxDispatcher
 
     internal int CurrentBatchSize => _batchSizer.Current;
 
+    /// <summary>Whether this instance orders by key, and so holds partitions it must renew.</summary>
+    public bool OrdersByKey => _ordered;
+
+    /// <summary>With <c>OrderByKey</c>: the partitions this instance held after its last upkeep, with their epochs.</summary>
+    public IReadOnlyDictionary<int, long> HeldPartitions { get; private set; } = new SortedDictionary<int, long>();
+
+    private OrderingSettings Ordering => new(_options.Partitions, _options.PartitionLease);
+
+    // Upkeep is several round trips, too many for every full batch of a backlog. Every (PartitionLease − lease) / 4 is
+    // enough: a partition renewed then is still held for longer than a row lease when the claim checks it, three
+    // intervals later. Without partitions (just started, or all lost) the instance has nothing to claim, so it upkeeps.
+    private bool UpkeepDue() =>
+        _lastUpkeep is null || HeldPartitions.Count == 0
+        || _time.GetElapsedTime(_lastUpkeep.Value) >= (_options.PartitionLease - _options.Lease) / 4;
+
+    private PartitionStore Partitions => _partitions ?? throw new InvalidOperationException("Ordering by key needs the partition store.");
+
+    /// <summary>
+    /// Checks that this instance agrees with the others on ordering (ADR 0007): with <c>OrderByKey</c>, the stored P and
+    /// partition lease (created by the first instance, at startup); without it, that no instance orders. A disagreement
+    /// is a configuration error no retry fixes.
+    /// </summary>
+    /// <returns>What is wrong and how to fix it, or null when this instance may claim.</returns>
+    public async Task<string?> CheckOrderingAsync(bool atStartup, CancellationToken cancellationToken)
+    {
+        if (_partitions is null)
+            return null;
+
+        if (!_ordered)
+        {
+            return await _partitions.ReadSettingsAsync(cancellationToken).ConfigureAwait(false) is null
+                ? null
+                : "another dispatcher orders by key (waybill.settings exists) and this one does not, so it would claim keyed rows "
+                    + "outside any partition. Set OrderByKey on every instance, or stop them all and turn ordering off as OPERATIONS.md shows";
+        }
+
+        var stored = atStartup
+            ? await _partitions.EnsureSettingsAsync(Ordering, cancellationToken).ConfigureAwait(false)
+            : await _partitions.ReadSettingsAsync(cancellationToken).ConfigureAwait(false);
+        if (stored is null)
+            return "waybill.settings was removed while this dispatcher orders by key. Stop every dispatcher before turning ordering off";
+        return stored == Ordering
+            ? null
+            : $"the database holds Partitions = {stored.Value.Partitions} and PartitionLease = {stored.Value.PartitionLease}, and this instance "
+                + $"has {Ordering.Partitions} and {Ordering.PartitionLease}. Every dispatcher must use the same values; change them with all "
+                + "dispatchers stopped, as OPERATIONS.md shows";
+    }
+
     /// <summary>Runs one cycle.</summary>
     public async Task<DispatchCycle> RunOnceAsync(CancellationToken cancellationToken)
     {
+        // Partition upkeep runs every cycle, with the breaker open too: a broker outage must not cost the partitions.
+        // Nothing is in flight here, so handing back partitions above the fair share is safe.
+        if (_ordered && UpkeepDue())
+        {
+            HeldPartitions = await Partitions.MaintainAsync(Owner, Ordering, cancellationToken).ConfigureAwait(false);
+            _lastUpkeep = _time.GetTimestamp();
+        }
+
         if (_breaker.IsOpen)
             return new DispatchCycle(0, DispatchOutcome.BreakerOpen, 0);
 
         var batchSize = _breaker.IsHalfOpen ? 1 : _batchSizer.Current; // half-open: probe with a single message
-        var claimed = await _store.ClaimAsync(Owner, batchSize, _options.Lease, cancellationToken).ConfigureAwait(false);
+        var claimed = await _store.ClaimAsync(
+            Owner, batchSize, _options.Lease, cancellationToken, _ordered ? _options.Partitions : null).ConfigureAwait(false);
         if (claimed.Count == 0)
             return new DispatchCycle(0, DispatchOutcome.Idle, batchSize);
 
@@ -196,7 +261,14 @@ internal sealed partial class OutboxDispatcher
         }
     }
 
-    public Task<int> ReleaseOwnedAsync(CancellationToken cancellationToken) => _store.ReleaseOwnedAsync(Owner, cancellationToken);
+    /// <summary>Hands back the rows this instance holds, then its partitions, so the others take them without waiting.</summary>
+    public async Task<int> ReleaseOwnedAsync(CancellationToken cancellationToken)
+    {
+        var released = await _store.ReleaseOwnedAsync(Owner, cancellationToken).ConfigureAwait(false);
+        if (_ordered)
+            await Partitions.LeaveAsync(Owner, cancellationToken).ConfigureAwait(false);
+        return released;
+    }
 
     public Task<string> DefaultIsolationAsync(CancellationToken cancellationToken) => _store.DefaultIsolationAsync(cancellationToken);
 

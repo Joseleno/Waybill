@@ -31,6 +31,9 @@ Any number of instances may run either service against the same database.
 | `WaybillDispatcherOptions.MaxReturns` | 5 | How many times a message may come back unroutable (`basic.return`) before it goes to the DLQ. |
 | `WaybillDispatcherOptions.ReturnBackoff` | 1 minute | How long a message waits after its first return before it is published again. The wait doubles with each return, up to `MaxReturnBackoff`. With the defaults a message waits 1 + 2 + 4 + 8 = 15 minutes in all before its fifth return sends it to the DLQ: time to create the missing binding. Zero publishes it again on the next cycle, as in 0.1. |
 | `WaybillDispatcherOptions.MaxReturnBackoff` | 10 minutes | The longest single wait after a return. At most one day. |
+| `WaybillOptions.OrderByKey` | off | Ordering by key, being built for v0.2. See [Ordering by key](#ordering-by-key). |
+| `WaybillDispatcherOptions.Partitions` | 16 | With `OrderByKey`: how many partitions (P) keys are spread over. From 1 to 1024; the same on every dispatcher. |
+| `WaybillDispatcherOptions.PartitionLease` | 60 seconds | With `OrderByKey`: how long a dispatcher holds a partition without renewing it, so how long the keys of a crashed dispatcher wait. At least twice the claim lease, a whole number of milliseconds, and the same on every dispatcher. Without `OrderByKey`: how often the dispatcher checks that no other one orders. Always positive and at most one day. |
 | `WaybillDispatcherOptions.MetricsInterval` | 15 seconds | How often the pending-age gauge is sampled. |
 
 All options are validated at startup; a zero or negative retention fails the host instead of deleting everything.
@@ -94,6 +97,32 @@ Keep `InboxRetention` above the longest delay between enqueueing a message and i
 - the window in which you might reprocess dead-lettered messages or replay a queue.
 
 Replaying a queue or an offset older than the inbox retention is not covered.
+
+## Ordering by key
+
+Ordering by key is being built for v0.2 and is off by default. What exists today is the partition lease it rests on;
+until the rest lands, turning `OrderByKey` on spreads keys over partitions but does **not** yet guarantee order.
+
+With `OrderByKey` on, each key belongs to a partition, `key_hash % Partitions`, and each partition is held by one
+dispatcher at a time. Dispatchers share the partitions evenly (at most `ceil(Partitions / live dispatchers)` each),
+renew them every `(PartitionLease − claim lease) / 4` (7.5 seconds with the defaults), and hand them back on shutdown. With ordering on, no wait between cycles is longer than a quarter of `PartitionLease`. A crashed dispatcher's partitions move to the others after
+`PartitionLease`. Messages without a key are not ordered and are published by any dispatcher. Dispatchers beyond
+`Partitions` publish only messages without a key.
+
+`Partitions` and `PartitionLease` are stored in `waybill.settings` by the first dispatcher that orders, and every
+dispatcher checks them at startup and every `PartitionLease`. A dispatcher whose values differ, or one without
+`OrderByKey` while the settings exist, stops with a critical log, and its health check reports `Unhealthy`.
+
+To turn ordering on, stop every dispatcher, set `OrderByKey` everywhere, and start them. To turn it off, or to change
+`Partitions` or `PartitionLease`, stop every dispatcher, clear the ordering state, and start them with the new
+configuration:
+
+<!-- ordering-reset -->
+```sql
+DELETE FROM waybill.outbox_partitions;
+DELETE FROM waybill.outbox_instances;
+DELETE FROM waybill.settings;
+```
 
 ## PostgreSQL: isolation level
 

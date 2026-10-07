@@ -52,10 +52,12 @@ public static class WaybillDispatcherServiceCollectionExtensions
                 "WaybillDispatcherOptions.MaxReturnBackoff must be at least ReturnBackoff and at most one day.")
             .Validate(o => o.MetricsInterval > TimeSpan.Zero && o.MetricsInterval <= TimeSpan.FromDays(1), "WaybillDispatcherOptions.MetricsInterval must be positive and at most one day.")
             .ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<WaybillDispatcherOptions>, PartitionOptionsValidation>());
 
         services.TryAddSingleton(sp => new DispatcherDataSource(
             NpgsqlDataSource.Create(sp.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value.ConnectionString!)));
         services.TryAddSingleton(sp => new OutboxStore(sp.GetRequiredService<DispatcherDataSource>().Value));
+        services.TryAddSingleton(sp => new PartitionStore(sp.GetRequiredService<DispatcherDataSource>().Value));
         services.TryAddSingleton<OutboxDispatcher>();
         services.TryAddSingleton(_ => new DispatcherStatus(TimeProvider.System));
         services.AddHostedService<WaybillDispatcherService>();

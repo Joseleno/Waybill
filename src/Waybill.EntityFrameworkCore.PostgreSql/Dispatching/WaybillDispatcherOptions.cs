@@ -38,6 +38,20 @@ public sealed class WaybillDispatcherOptions
     public TimeSpan MaxReturnBackoff { get; set; } = TimeSpan.FromMinutes(10);
 
     /// <summary>
+    /// With <c>OrderByKey</c>: how many partitions (P) the keys are spread over, as <c>key_hash % P</c>. Each partition is
+    /// held by one dispatcher at a time; more dispatchers than P leave the extra ones idle for keyed messages. Every
+    /// dispatcher must use the same value. Default 16, from 1 to 1024.
+    /// </summary>
+    public int Partitions { get; set; } = 16;
+
+    /// <summary>
+    /// With <c>OrderByKey</c>: how long a dispatcher holds a partition without renewing it. A crashed dispatcher's keys
+    /// move to another one after this. At least twice <see cref="Lease"/> and at most one day; every dispatcher must use
+    /// the same value. Default 60 seconds.
+    /// </summary>
+    public TimeSpan PartitionLease { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// How often the age of the oldest message not yet published is sampled for the
     /// <c>waybill.outbox.oldest_pending.age</c> gauge (meter <c>Waybill</c>). Default 15 seconds.
     /// </summary>

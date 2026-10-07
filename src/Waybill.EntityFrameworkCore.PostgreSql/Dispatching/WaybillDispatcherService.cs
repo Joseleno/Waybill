@@ -44,6 +44,7 @@ internal sealed partial class WaybillDispatcherService(
     {
         var databaseFailures = 0;
         var isolationVerified = false;
+        long? orderingCheckedAt = null; // Environment.TickCount64 of the last ordering check
         while (!stoppingToken.IsCancellationRequested)
         {
             TimeSpan wait;
@@ -60,6 +61,19 @@ internal sealed partial class WaybillDispatcherService(
                         return;
                     }
                     isolationVerified = true;
+                }
+
+                // Ordering is agreed at startup and checked again every partition lease (ADR 0007): an instance that does
+                // not order next to one that does would claim keyed rows outside any partition.
+                if (orderingCheckedAt is null || Environment.TickCount64 - orderingCheckedAt >= options.Value.PartitionLease.TotalMilliseconds)
+                {
+                    var problem = await dispatcher.CheckOrderingAsync(atStartup: orderingCheckedAt is null, stoppingToken).ConfigureAwait(false);
+                    if (problem is not null)
+                    {
+                        LogOrderingMismatch(logger, problem);
+                        return;
+                    }
+                    orderingCheckedAt = Environment.TickCount64;
                 }
 
                 var cycle = await dispatcher.RunOnceAsync(stoppingToken).ConfigureAwait(false);
@@ -87,6 +101,7 @@ internal sealed partial class WaybillDispatcherService(
                 wait = Wait(options.Value.PollingInterval, ++databaseFailures);
             }
 
+            wait = CapForPartitions(wait, dispatcher.OrdersByKey, options.Value.PartitionLease);
             try
             {
                 await Task.Delay(wait, stoppingToken).ConfigureAwait(false);
@@ -97,6 +112,13 @@ internal sealed partial class WaybillDispatcherService(
             }
         }
     }
+
+    /// <summary>
+    /// With ordering, no wait between cycles (polling, breaker, database backoff) outlasts a quarter of the partition
+    /// lease: the partitions are renewed at the start of each cycle, and must not expire between two of them (ADR 0007).
+    /// </summary>
+    internal static TimeSpan CapForPartitions(TimeSpan wait, bool ordered, TimeSpan partitionLease) =>
+        ordered && wait > partitionLease / 4 ? partitionLease / 4 : wait;
 
     internal static TimeSpan Wait(TimeSpan pollingInterval, int consecutiveFailures) =>
         CircuitBreaker.Delay(pollingInterval, MaxBackoff, consecutiveFailures);
@@ -139,4 +161,8 @@ internal sealed partial class WaybillDispatcherService(
         Message = "The Waybill dispatcher stopped: default_transaction_isolation is '{Isolation}', and the claim needs 'read committed'. " +
             "Set it for the role or the database (ALTER ROLE ... SET default_transaction_isolation = 'read committed') and restart.")]
     private static partial void LogWrongIsolation(ILogger logger, string isolation);
+
+    [LoggerMessage(EventId = 26, Level = LogLevel.Critical,
+        Message = "The Waybill dispatcher stopped: ordering by key is not agreed between dispatchers: {Problem}.")]
+    private static partial void LogOrderingMismatch(ILogger logger, string problem);
 }

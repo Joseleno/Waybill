@@ -21,6 +21,8 @@ public sealed class SchemaTests(PostgresFixture postgres)
 
         Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'waybill' AND table_name = 'outbox'"));
         Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'waybill' AND table_name = 'inbox'"));
+        // Ordering by key (ADR 0007): global settings, partition ownership, live instances.
+        Assert.Equal(3, await database.ScalarAsync("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'waybill' AND table_name IN ('settings', 'outbox_partitions', 'outbox_instances')"));
         Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM pg_indexes WHERE schemaname = 'waybill' AND indexname = 'ix_outbox_claimable' AND indexdef LIKE '%WHERE%'"));
         // Retention deletes inbox rows by age; the message_id may not be a UUIDv7, so it needs its own index (ADR 0004).
         Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM pg_indexes WHERE schemaname = 'waybill' AND indexname = 'ix_inbox_processed_at' AND indexdef LIKE '%(processed_at)%'"));

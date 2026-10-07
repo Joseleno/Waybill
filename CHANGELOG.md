@@ -5,10 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Groundwork for ordering by key (v0.2, in progress; it does not guarantee order yet): `WaybillOptions.OrderByKey` (off by default) turns on a partition lease. Keys map to `key_hash % Partitions`; each partition is held by one dispatcher at a time, shared evenly among live dispatchers, renewed every cycle and handed back on shutdown, and the claim checks ownership in the same statement. `Partitions` and `PartitionLease` are stored in the database by the first dispatcher that orders and checked by every other one; a mismatch stops the dispatcher with a critical log (ADR 0007).
+
 ### Changed
 
 - A message returned as unroutable (`basic.return`) now waits a growing interval before it is published again: `ReturnBackoff` (1 minute by default) after the first return, doubling with each return up to `MaxReturnBackoff` (10 minutes). With the defaults it reaches the outbox DLQ after 15 minutes of waiting instead of about 5 seconds, time to create the missing binding. Set `ReturnBackoff` to zero for the 0.1 behavior (ADR 0006).
-- The `waybill` schema gains the `outbox.next_attempt_at` column. Run `WaybillSchema.MigrateAsync` before upgrading the dispatcher; the migration only adds the column, and pending rows stay claimable. During a rolling upgrade, a 0.1 dispatcher still running ignores the wait and may publish a returned message once more before its time, which is harmless.
+- The `waybill` schema gains the `outbox.next_attempt_at` column and the `settings`, `outbox_partitions` and `outbox_instances` tables. Run `WaybillSchema.MigrateAsync` before upgrading the dispatcher; the migration only adds, and pending rows stay claimable. During a rolling upgrade, a 0.1 dispatcher still running ignores the wait and may publish a returned message once more before its time, which is harmless.
 
 ## [0.1.0-alpha] - 2026-10-06
 

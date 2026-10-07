@@ -12,7 +12,13 @@
 
 ## 8b — lease por partição
 
-Tarefas escritas no início do PR.
+- [x] Schema: `settings`, `outbox_partitions` e `outbox_instances` na migration da v0.2, refeita
+- [x] Opções `OrderByKey`, `Partitions` e `PartitionLease`, validadas; API pública declarada
+- [x] Store de partições: configuração global, heartbeat, renovação, aquisição, devolução e coleta
+- [x] Dispatcher: manutenção das partições a cada ciclo, claim com o `EXISTS` de posse, verificação da configuração e parada crítica, devolução no shutdown
+- [x] Cenários `G4_*` da 8b, um commit por cenário; oráculos de mandato e de claim fora do mandato no caos; mutações
+- [x] `OPERATIONS.md` (opções, ligar e desligar a ordenação, mudar P, com o SQL testado), escopo, ADR 0007, CHANGELOG
+- [x] Revisão de código independente antes da PR: nenhum caminho para dois donos ou claim fora do mandato; três falhas de vivacidade (startup simultâneo, espera entre ciclos maior que o lease, manutenção a cada lote) e duas de validação, cada uma com teste antes da correção
 
 ## 8c — cabeça por chave
 
