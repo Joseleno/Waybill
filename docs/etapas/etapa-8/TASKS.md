@@ -38,7 +38,7 @@ Um commit por cenário provado, na ordem abaixo.
 - [x] Transições: mudar P com `UPDATE settings` e escrita concorrente; reiniciar a ordenação ampliado; ligar com transação aberta; backlog anterior; trigger desligado como erro crítico; troca de dono com linha em voo
 - [x] `OutgoingMessage.Sequence` e cabeçalho `waybill-sequence`; teste estrutural da ordenação desligada
 - [x] Teste de propriedade da primeira entrega (caos, 20 s no PR; achou a ressalva das liberadas); backlog de 550 mil e custo desligada contra a `v0.1.0-alpha` emulada (agendado; histórico verde a acompanhar)
-- [ ] Mutações da lista do PLAN
+- [x] Mutações da lista do PLAN: cada proteção quebrou um teste nomeado (registro nos commits); "ORDER BY de um lado só" deixou de existir (só o trigger ordena)
 - [ ] Documentos: escopo (G4, linha "Ordenação"); `plano-v0.2.md` (8c-1/8c-2, cenários, três ADRs, nota para a etapa 10); ADR 0008, parte 1; `OPERATIONS.md` (custo medido, ativação, upgrade, rollback, liberação, diagnóstico, isolamento, crescimento de `outbox_keys`); CHANGELOG
 - [ ] Revisão de código independente antes da PR
 
