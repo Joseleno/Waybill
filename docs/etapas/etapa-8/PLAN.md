@@ -145,7 +145,7 @@ Testes de concorrência com intercalação forçada: um trigger de teste filtrad
 | `Schema_UpgradeDaV01ComBacklog_LinhasContinuamReivindicaveis` (existente) | Ampliado | Migration aditiva; o backlog drena | PR |
 | `Schema_MigracaoInterrompidaNoIndice_ReexecutarCompleta` | `pg_cancel_backend` durante o `CREATE INDEX CONCURRENTLY`, depois `MigrateAsync` de novo | Completa; nenhum índice com `indisvalid = false` | PR |
 | `Schema_DownComOutboxKeys_Recusa` | `Down` com `outbox_keys` preenchida | Recusa com a mensagem | PR |
-| Custo desligada | p99 da transação e vazão do claim contra a tag `v0.1.0-alpha` | No máximo 5% | Agendado |
+| Custo desligada | p99 da transação e vazão do claim contra a tag `v0.1.0-alpha` | No máximo 5% | Agendado | **Medido em Oct 8, 2026, local (Docker no Windows), linha de base emulada no mesmo teste:** claim −2,3% a +4,2%; p99 da transação +5,7% a +10,8% em três rodadas, variação que nesta máquina passa dos 5% só por ruído. Fica no job agendado; se falhar no runner Linux, a decisão volta ao autor (caminho candidato: o trigger só existir com a ordenação ligada) |
 
 **Mutações da 8c-1** (cada uma quebra um teste nomeado):
 - tirar a lista;
