@@ -1,3 +1,1 @@
 #nullable enable
-Waybill.WaybillOptions.OrderByKey.get -> bool
-Waybill.WaybillOptions.OrderByKey.set -> void

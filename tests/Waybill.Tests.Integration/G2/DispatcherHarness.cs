@@ -45,11 +45,14 @@ public static class DispatcherHarness
     /// <summary>A dispatcher instance over the test database, driven cycle by cycle by the test.</summary>
     internal static OutboxDispatcher Create(
         NpgsqlDataSource dataSource, ITransport transport, WaybillDispatcherOptions options, int maxPayloadBytes = 64 * 1024,
-        TimeProvider? time = null, bool orderByKey = false) =>
-        new(new OutboxStore(dataSource), transport,
-            Microsoft.Extensions.Options.Options.Create(new WaybillOptions { MaxPayloadBytes = maxPayloadBytes, OrderByKey = orderByKey }),
+        TimeProvider? time = null, bool orderByKey = false)
+    {
+        options.OrderByKey |= orderByKey;
+        return new(new OutboxStore(dataSource), transport,
+            Microsoft.Extensions.Options.Options.Create(new WaybillOptions { MaxPayloadBytes = maxPayloadBytes }),
             Microsoft.Extensions.Options.Options.Create(options),
             NullLogger<OutboxDispatcher>.Instance, time, new PartitionStore(dataSource));
+    }
 
     /// <summary>Writes <paramref name="count"/> messages through the real outbox, one transaction.</summary>
     /// <param name="key">The aggregate key of message i; by default <c>invoice-{i}</c>, one key per message. Null leaves it without a key.</param>

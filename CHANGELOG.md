@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- Groundwork for ordering by key (v0.2, in progress; it does not guarantee order yet): `WaybillOptions.OrderByKey` (off by default) turns on a partition lease. Keys map to `key_hash % Partitions`; each partition is held by one dispatcher at a time, shared evenly among live dispatchers, renewed every cycle and handed back on shutdown, and the claim checks ownership in the same statement. `Partitions` and `PartitionLease` are stored in the database by the first dispatcher that orders and checked by every other one; a mismatch stops the dispatcher with a critical log (ADR 0007).
+- Groundwork for ordering by key (v0.2, in progress; it does not guarantee order yet): `WaybillDispatcherOptions.OrderByKey` (off by default) turns on a partition lease. Keys map to `key_hash % Partitions`; each partition is held by one dispatcher at a time, shared evenly among live dispatchers, renewed every cycle and handed back on shutdown, and the claim checks ownership in the same statement. `Partitions` and `PartitionLease` are stored in the database by the first dispatcher that orders and checked by every other one; a mismatch stops the dispatcher with a critical log (ADR 0007).
 
 ### Changed
 

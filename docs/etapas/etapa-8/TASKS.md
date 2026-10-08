@@ -29,8 +29,8 @@
 Um commit por cenário provado, na ordem abaixo.
 
 - [x] Protótipo medido do contador no EF real (`PROTOTIPO-CONTADOR.md`): a lista é necessária (sem ela, 26 deadlocks com três chaves de 20); trava em duas etapas, com `FOR UPDATE` (37% menos p99 sob disputa); desligada, sem custo mensurável com uma chave e −4,3% com três linhas por transação; o p99 da chave quente do spike não vem do `deadlock_timeout`
-- [ ] Schema: `outbox_keys` (`fillfactor`), `lock_keys`, `released_at`/`released_by`, trigger que numera (`SECURITY DEFINER`), trigger de estado terminal, restrição com `NOT VALID` + `VALIDATE`, índices com `CONCURRENTLY`, `Up` idempotente, `Down` que recusa; `SchemaV0_2` refeita. Upgrade, migration interrompida e `Down`
-- [ ] Opções: `OrderByKey` para `WaybillDispatcherOptions`; chave acima de 512 bytes recusada no `Enqueue`; API pública declarada
+- [x] Schema: `outbox_keys` (`fillfactor`), `lock_keys`, `released_at`/`released_by`, trigger que numera (`SECURITY DEFINER`), trigger de estado terminal, restrição com `NOT VALID` + `VALIDATE`, índices com `CONCURRENTLY`, `Up` idempotente, `Down` que recusa; `SchemaV0_2` refeita. Upgrade, migration interrompida e `Down`
+- [x] Opções: `OrderByKey` para `WaybillDispatcherOptions`; API pública declarada. O limite da chave já existia (255 bytes, v0.1)
 - [ ] Enfileiramento: interceptor de `SavingChanges` registrado no `AddWaybillOutbox` e conferido no `Enqueue`. Cenários de lista sem deadlock (com controles negativos), limite de escrita depois de enfileirar, sequência contígua, lista que não sobrevive ao `SaveChanges`, chaves com separadores, RR/SERIALIZABLE, papel só com INSERT
 - [ ] Claim com M = 1: instante único, filtro de cabeça, guarda de `settings` no claim sem ordenação, sinal de chave quente. Marcação ou devolução concorrente, posse no limite, chave quente, dispatcher antigo ao lado de quem ordena
 - [ ] DLQ bloqueia a chave (log com chave e `sequence`), `blocked_keys` com índice, liberação com `RETURNING` e registro, consultas de diagnóstico, retenção, estado terminal

@@ -57,7 +57,7 @@ internal sealed partial class OutboxDispatcher
     {
         _store = store;
         _partitions = partitions;
-        _ordered = waybillOptions.Value.OrderByKey;
+        _ordered = dispatcherOptions.Value.OrderByKey;
         _transport = transport;
         _waybillOptions = waybillOptions;
         _options = dispatcherOptions.Value;

@@ -31,7 +31,7 @@ Any number of instances may run either service against the same database.
 | `WaybillDispatcherOptions.MaxReturns` | 5 | How many times a message may come back unroutable (`basic.return`) before it goes to the DLQ. |
 | `WaybillDispatcherOptions.ReturnBackoff` | 1 minute | How long a message waits after its first return before it is published again. The wait doubles with each return, up to `MaxReturnBackoff`. With the defaults a message waits 1 + 2 + 4 + 8 = 15 minutes in all before its fifth return sends it to the DLQ: time to create the missing binding. Zero publishes it again on the next cycle, as in 0.1. |
 | `WaybillDispatcherOptions.MaxReturnBackoff` | 10 minutes | The longest single wait after a return. At most one day. |
-| `WaybillOptions.OrderByKey` | off | Ordering by key, being built for v0.2. See [Ordering by key](#ordering-by-key). |
+| `WaybillDispatcherOptions.OrderByKey` | off | Ordering by key, being built for v0.2. Set on the dispatchers only; the applications that enqueue need no setting. See [Ordering by key](#ordering-by-key). |
 | `WaybillDispatcherOptions.Partitions` | 16 | With `OrderByKey`: how many partitions (P) keys are spread over. From 1 to 1024; the same on every dispatcher. |
 | `WaybillDispatcherOptions.PartitionLease` | 60 seconds | With `OrderByKey`: how long a dispatcher holds a partition without renewing it, so how long the keys of a crashed dispatcher wait. At least twice the claim lease, a whole number of milliseconds, and the same on every dispatcher. Without `OrderByKey`: how often the dispatcher checks that no other one orders. Always positive and at most one day. |
 | `WaybillDispatcherOptions.MetricsInterval` | 15 seconds | How often the pending-age gauge is sampled. |
@@ -113,7 +113,7 @@ renew them every `(PartitionLease − claim lease) / 4` (7.5 seconds with the de
 dispatcher checks them at startup and every `PartitionLease`. A dispatcher whose values differ, or one without
 `OrderByKey` while the settings exist, stops with a critical log, and its health check reports `Unhealthy`.
 
-To turn ordering on, stop every dispatcher, set `OrderByKey` everywhere, and start them. To turn it off, or to change
+To turn ordering on, stop every dispatcher, set `OrderByKey` on every dispatcher, and start them. To turn it off, or to change
 `Partitions` or `PartitionLease`, stop every dispatcher, clear the ordering state, and start them with the new
 configuration:
 
