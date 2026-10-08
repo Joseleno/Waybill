@@ -12,7 +12,7 @@ using Waybill.EntityFrameworkCore.Schema;
 namespace Waybill.EntityFrameworkCore.Schema.Migrations
 {
     [DbContext(typeof(WaybillSchemaContext))]
-    [Migration("20261006131418_SchemaV0_2")]
+    [Migration("20261008011852_SchemaV0_2")]
     partial class SchemaV0_2
     {
         /// <inheritdoc />
@@ -67,6 +67,24 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     b.ToTable("outbox_instances", "waybill");
                 });
 
+            modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.KeyRow", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasColumnType("text")
+                        .HasColumnName("key");
+
+                    b.Property<long>("Seq")
+                        .HasColumnType("bigint")
+                        .HasColumnName("seq");
+
+                    b.HasKey("Key")
+                        .HasName("pk_outbox_keys");
+
+                    b.ToTable("outbox_keys", "waybill");
+
+                    b.HasAnnotation("Npgsql:StorageParameter:fillfactor", 80);
+                });
+
             modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.OutboxRow", b =>
                 {
                     b.Property<Guid>("Id")
@@ -116,6 +134,10 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("lease_until");
 
+                    b.PrimitiveCollection<string[]>("LockKeys")
+                        .HasColumnType("text[]")
+                        .HasColumnName("lock_keys");
+
                     b.Property<DateTimeOffset?>("NextAttemptAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("next_attempt_at");
@@ -132,6 +154,14 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     b.Property<DateTimeOffset?>("PublishedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("published_at");
+
+                    b.Property<DateTimeOffset?>("ReleasedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("released_at");
+
+                    b.Property<string>("ReleasedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("released_by");
 
                     b.Property<long?>("Sequence")
                         .HasColumnType("bigint")
@@ -156,9 +186,17 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                         .HasDatabaseName("ix_outbox_claimable")
                         .HasFilter("status IN ('pending', 'claimed')");
 
+                    b.HasIndex("Key")
+                        .HasDatabaseName("ix_outbox_blocked_keys")
+                        .HasFilter("status = 'dlq' AND sequence IS NOT NULL");
+
+                    b.HasIndex("Key", "Sequence")
+                        .HasDatabaseName("ix_outbox_key_sequence")
+                        .HasFilter("sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq')");
+
                     b.ToTable("outbox", "waybill", t =>
                         {
-                            t.HasCheckConstraint("ck_outbox_status", "status IN ('pending', 'claimed', 'published', 'dlq')");
+                            t.HasCheckConstraint("ck_outbox_status", "status IN ('pending', 'claimed', 'published', 'dlq', 'released')");
                         });
                 });
 
