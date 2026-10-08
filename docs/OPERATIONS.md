@@ -113,9 +113,28 @@ renew them every `(PartitionLease − claim lease) / 4` (7.5 seconds with the de
 dispatcher checks them at startup and every `PartitionLease`. A dispatcher whose values differ, or one without
 `OrderByKey` while the settings exist, stops with a critical log, and its health check reports `Unhealthy`.
 
-To turn ordering on, stop every dispatcher, set `OrderByKey` on every dispatcher, and start them. To turn it off, or to change
-`Partitions` or `PartitionLease`, stop every dispatcher, clear the ordering state, and start them with the new
-configuration:
+To turn ordering on, stop every dispatcher, set `OrderByKey` on every dispatcher, and start them. While
+`waybill.settings` exists, the database numbers every message with a key as it is written; transactions already open
+when ordering is turned on may still write theirs unnumbered, and those are not ordered. For order from the first
+message, turn ordering on with the applications that enqueue stopped.
+
+To change `Partitions` or `PartitionLease`, stop every dispatcher, change the stored values (here to 32 partitions) and
+start them with the same values. The settings row stays, so messages keep being numbered meanwhile:
+
+<!-- ordering-change -->
+```sql
+BEGIN;
+UPDATE waybill.settings SET partitions = 32, partition_lease = interval '60 seconds';
+WITH old AS (DELETE FROM waybill.outbox_partitions RETURNING epoch)
+INSERT INTO waybill.outbox_partitions (partition, epoch)
+SELECT g, (SELECT coalesce(max(epoch), 0) FROM old) FROM generate_series(0, 31) AS g;
+DELETE FROM waybill.outbox_instances;
+COMMIT;
+```
+
+To turn ordering off, stop every dispatcher, clear the ordering state, and start them without `OrderByKey`. From then
+on, messages are not numbered. Never delete `waybill.outbox_keys`: turned on again, each key continues from its last
+sequence, where starting again at 1 would look like a regression to its consumers.
 
 <!-- ordering-reset -->
 ```sql
