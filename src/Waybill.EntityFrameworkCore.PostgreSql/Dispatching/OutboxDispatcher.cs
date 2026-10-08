@@ -170,7 +170,11 @@ internal sealed partial class OutboxDispatcher
         if (finish.Fenced > 0)
             LogFenced(_logger, finish.Fenced);
         foreach (var (id, reason) in finish.DeadLettered)
-            LogDeadLettered(_logger, id, reason);
+        {
+            // With ordering, the row now stops its key: the log says which, and from which sequence on.
+            var row = claimed.First(c => c.Message.MessageId == id);
+            LogDeadLettered(_logger, id, row.Message.Key, row.Sequence, reason);
+        }
 
         return new DispatchCycle(claimed.Count, React(results), batchSize, claimed.Any(c => c.MoreOfKey));
     }
@@ -281,8 +285,8 @@ internal sealed partial class OutboxDispatcher
         Message = "{Count} outbox row(s) were fenced off: their lease expired and another claim took them. The newer claim decides their outcome.")]
     private static partial void LogFenced(ILogger logger, int count);
 
-    [LoggerMessage(EventId = 12, Level = LogLevel.Error, Message = "Message {MessageId} went to the outbox DLQ: {Reason}")]
-    private static partial void LogDeadLettered(ILogger logger, Guid messageId, string reason);
+    [LoggerMessage(EventId = 12, Level = LogLevel.Error, Message = "Message {MessageId} (key {Key}, sequence {Sequence}) went to the outbox DLQ: {Reason}")]
+    private static partial void LogDeadLettered(ILogger logger, Guid messageId, string? key, long? sequence, string reason);
 
     [LoggerMessage(EventId = 13, Level = LogLevel.Error,
         Message = "The transport returned {Count} result(s) with an undefined status; they are treated as Retry, never as confirmed.")]

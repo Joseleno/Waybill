@@ -257,6 +257,20 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     public Task<string> DefaultIsolationAsync(CancellationToken cancellationToken) =>
         IsolationLevelCheck.DefaultAsync(dataSource, cancellationToken);
 
+    // Ordering by key: a DLQ row with a sequence is its key's head until it is requeued or released, so the key is
+    // stopped (ADR 0008). Null while ordering is off: old DLQ rows then stop nothing. Read through ix_outbox_blocked_keys.
+    private const string BlockedKeysSql = """
+        SELECT CASE WHEN EXISTS (SELECT 1 FROM waybill.settings)
+                    THEN (SELECT count(DISTINCT key) FROM waybill.outbox WHERE status = 'dlq' AND sequence IS NOT NULL) END
+        """;
+
+    /// <summary>How many keys a DLQ row stops; null while ordering by key is off.</summary>
+    public async Task<long?> BlockedKeysAsync(CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(BlockedKeysSql);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is long blocked ? blocked : null;
+    }
+
     /// <summary>Seconds since the oldest message not yet published was written; 0 when there is none.</summary>
     public async Task<double> OldestPendingAgeAsync(CancellationToken cancellationToken)
     {
