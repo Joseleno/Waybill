@@ -26,7 +26,8 @@ internal enum DispatchOutcome
 /// <param name="Claimed">Rows claimed.</param>
 /// <param name="Outcome">How the cycle ended.</param>
 /// <param name="BatchSize">The batch size this cycle used.</param>
-internal readonly record struct DispatchCycle(int Claimed, DispatchOutcome Outcome, int BatchSize)
+/// <param name="MoreOfKeys">Ordering by key: a claimed row had more rows of its key waiting behind it, claimable once it is published.</param>
+internal readonly record struct DispatchCycle(int Claimed, DispatchOutcome Outcome, int BatchSize, bool MoreOfKeys = false)
 {
     public bool TransportFailed => Outcome is DispatchOutcome.ConnectionFailure or DispatchOutcome.Pressure;
 }
@@ -171,7 +172,7 @@ internal sealed partial class OutboxDispatcher
         foreach (var (id, reason) in finish.DeadLettered)
             LogDeadLettered(_logger, id, reason);
 
-        return new DispatchCycle(claimed.Count, React(results), batchSize);
+        return new DispatchCycle(claimed.Count, React(results), batchSize, claimed.Any(c => c.MoreOfKey));
     }
 
     /// <summary>Confirmation timeouts in a row, already at a batch of one, after which the broker counts as unreachable.</summary>

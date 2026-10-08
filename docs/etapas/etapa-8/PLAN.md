@@ -125,7 +125,7 @@ Testes de concorrência com intercalação forçada: um trigger de teste filtrad
 | `G4_TriggerDesligado_ErroCritico` | `DISABLE TRIGGER`, no startup e com o dispatcher rodando | Para com erro crítico nos dois casos | PR |
 | `G4_EstadoTerminal_NaoVolta` | `published` → `pending`, `released` → `pending` | Recusado pelo trigger | PR |
 | `G4_MarcacaoOuDevolucaoConcorrente_ClaimNaoLevaASeguinte` (nome do plano) | Cabeça travada numa transação aberta que (a) a marca `published` ou (b) a devolve a `pending` | Nada da chave no claim concorrente. Depois do commit: em (a), a sucessora sai no claim seguinte; em (b), a cabeça sai antes | PR |
-| `G4_PosseNoLimite_UmInstantePorInstrucao` | Relógio de teste: `testclock.clock_timestamp()` avança a cada chamada, via `Search Path=testclock,pg_catalog`; `lease_until` válido só na primeira leitura | Nada da partição reivindicado pela metade. Estrutural: uma só ocorrência de `clock_timestamp()` no claim ordenado | PR |
+| `G4_ClaimOrdenado_UmInstantePorInstrucao` (estrutural) | O SQL do claim ordenado | Uma só leitura de `clock_timestamp()`. Com M = 1 só entram cabeças no lote, então o relógio por linha não consegue levar sucessora sem a cabeça; o teste comportamental (`G4_PosseNoLimite`, relógio de teste pelo `search_path`) vai para a 8c-2 | PR |
 | `G4_ChaveQuenteSozinha_NaoEsperaPollingInterval` | Uma chave com 100 pendentes, nenhuma outra, `PollingInterval` de 5 s | Drena sem esperar o intervalo entre mensagens | PR |
 | `G4_MensagemNaDlq_SoAquelaChaveParaEMetricaSobe` | Defeito numa chave com sucessoras | A chave para; as outras seguem; `blocked_keys` = 1; o log traz chave e `sequence` | PR |
 | `Operacao_LiberarChave` | SQL do `OPERATIONS.md`, como escrito | `RETURNING` com as sequências; `released_at`/`released_by` gravados; a chave volta a fluir; métrica em 0 | PR |
@@ -188,6 +188,7 @@ Mais perto da linha de corte do plano. Desenho a fechar no início do PR, com ba
 - **Vazão.** Por chave, M ÷ (claim + M idas de confirmação + marcação), documentada no `OPERATIONS.md`.
 - **Testes previstos.**
   - `G4_SucessoraComIdMenor_LoteDeUm_CabecaSai`;
+  - `G4_PosseNoLimite_UmInstantePorInstrucao` (relógio de teste pelo `search_path`, movido da 8c-1);
   - `G4_AntecessoraDoMeio_PrefixoCorta` (travada, em espera, `dlq`);
   - `G4_RodadasSeguemSequenceNaoId`;
   - `G4_MaiorQueACadeiaELoteCurto_PrefixoPorChave`;

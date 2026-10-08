@@ -4,7 +4,8 @@ using NpgsqlTypes;
 
 namespace Waybill.EntityFrameworkCore.Dispatching;
 
-internal sealed record ClaimedMessage(OutgoingMessage Message, long Fence);
+/// <summary>A claimed row: its message, its fencing token and, when ordered by key, its sequence and whether more rows of its key wait behind it.</summary>
+internal sealed record ClaimedMessage(OutgoingMessage Message, long Fence, long? Sequence = null, bool MoreOfKey = false);
 
 /// <summary>The basic.return budget and the growing wait between returns (ADR 0006).</summary>
 internal sealed record ReturnPolicy(int MaxReturns, TimeSpan Backoff, TimeSpan MaxBackoff)
@@ -53,26 +54,60 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         RETURNING o.id, o.type, o.key, o.payload, o.content_type, o.headers, o.created_at, o.fence
         """;
 
-    private static readonly string ClaimSql = Claim();
-
-    // Ordering by key (ADR 0007): a keyed row is claimable only by the instance that holds its partition key_hash % $4,
-    // and only while that partition stays held for longer than the row lease it is about to take. The ownership is read
-    // in the statement's snapshot, not taken from the instance's memory, so an instance that paused after renewing and
-    // lost the partition meanwhile claims nothing of it. EvalPlanQual re-checks this subquery against the old snapshot,
-    // which is safe: nobody can take the partition before lease_until, and lease_until outlives the claim by a row lease.
-    private static readonly string ClaimOrderedSql = Claim(
+    // Without ordering: no keyed row while another dispatcher orders (waybill.settings exists). An instance that does not
+    // order checks for that only at startup and every PartitionLease; until it stops, in a rolling deploy for one, it
+    // must not claim keyed rows outside any partition. Uncorrelated, so evaluated once per statement.
+    private static readonly string ClaimSql = Claim(
         candidateFilter: """
 
-              AND (key IS NULL OR EXISTS (
-                    SELECT 1 FROM waybill.outbox_partitions p
-                    WHERE p.partition = key_hash % $4 AND p.owner = $1 AND p.lease_until > clock_timestamp() + $2))
+              AND (key IS NULL OR NOT EXISTS (SELECT 1 FROM waybill.settings))
             """,
         rowFilter: """
 
+          AND (o.key IS NULL OR NOT EXISTS (SELECT 1 FROM waybill.settings))
+        """);
+
+    // Ordering by key (ADRs 0007 and 0008).
+    // - Partition: a keyed row is claimable only by the instance that holds its partition key_hash % $4, and only while
+    //   that partition stays held for longer than the row lease it is about to take. The ownership is read in the
+    //   statement's snapshot, not taken from the instance's memory, so an instance that paused after renewing and lost
+    //   the partition meanwhile claims nothing of it. EvalPlanQual re-checks that subquery against the old snapshot,
+    //   which is safe: nobody can take the partition before lease_until, and lease_until outlives the claim by a lease.
+    // - Head: a row with a sequence is claimable only when no earlier row of its key is still pending, claimed or in the
+    //   DLQ. Decided from the snapshot and not repeated on the UPDATE: an earlier row never leaves published or released
+    //   (a trigger refuses it), and none appears after a later one is visible, since sequences follow commit order. With
+    //   at most one row per key in the batch, a skipped or unclaimable head takes nothing behind it along.
+    // - One instant per statement: the clock read once, for every row and for the lease it takes.
+    internal static readonly string ClaimOrderedSql = """
+        WITH now AS MATERIALIZED (SELECT clock_timestamp() AS t),
+        candidates AS MATERIALIZED (
+            SELECT o.id FROM waybill.outbox o, now
+            WHERE o.status IN ('pending', 'claimed')
+              AND (o.status = 'pending' OR o.lease_until < now.t)
+              AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= now.t)
+              AND (o.key IS NULL OR EXISTS (
+                    SELECT 1 FROM waybill.outbox_partitions p
+                    WHERE p.partition = o.key_hash % $4 AND p.owner = $1 AND p.lease_until > now.t + $2))
+              AND (o.sequence IS NULL OR NOT EXISTS (
+                    SELECT 1 FROM waybill.outbox h
+                    WHERE h.key = o.key AND h.sequence < o.sequence AND h.status IN ('pending', 'claimed', 'dlq')))
+            ORDER BY o.id
+            LIMIT $3
+            FOR UPDATE OF o SKIP LOCKED)
+        UPDATE waybill.outbox o
+        SET status = 'claimed', owner = $1, fence = o.fence + 1, lease_until = now.t + $2
+        FROM candidates c, now
+        WHERE o.id = c.id
+          AND (o.status = 'pending' OR (o.status = 'claimed' AND o.lease_until < now.t))
+          AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= now.t)
           AND (o.key IS NULL OR EXISTS (
                 SELECT 1 FROM waybill.outbox_partitions p
-                WHERE p.partition = o.key_hash % $4 AND p.owner = $1 AND p.lease_until > clock_timestamp() + $2))
-        """);
+                WHERE p.partition = o.key_hash % $4 AND p.owner = $1 AND p.lease_until > now.t + $2))
+        RETURNING o.id, o.type, o.key, o.payload, o.content_type, o.headers, o.created_at, o.fence, o.sequence,
+                  o.sequence IS NOT NULL AND EXISTS (
+                      SELECT 1 FROM waybill.outbox s
+                      WHERE s.key = o.key AND s.sequence > o.sequence AND s.status IN ('pending', 'claimed', 'dlq'))
+        """;
 
     // Every finishing statement is fenced (still claimed by this owner, with this fence) and returns what it changed.
     private const string Fenced = "o.id = m.id AND o.fence = m.fence AND o.owner = $1 AND o.status = 'claimed'";
@@ -121,7 +156,7 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         LIMIT 1
         """;
 
-    /// <summary>Claims up to a batch. With <c>partitions</c> (P, ordering by key), only keyed rows of partitions this owner holds (ADR 0007).</summary>
+    /// <summary>Claims up to a batch. With <c>partitions</c> (P, ordering by key), only keyed rows of partitions this owner holds (ADR 0007), and of each key only its head (ADR 0008).</summary>
     public async Task<List<ClaimedMessage>> ClaimAsync(
         string owner, int batchSize, TimeSpan lease, CancellationToken cancellationToken, int? partitions = null)
     {
@@ -146,7 +181,9 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
                 Headers = ParseHeaders(reader.IsDBNull(5) ? null : reader.GetString(5)),
                 CreatedAt = reader.GetFieldValue<DateTimeOffset>(6),
             };
-            claimed.Add(new ClaimedMessage(message, reader.GetInt64(7)));
+            claimed.Add(reader.FieldCount > 8
+                ? new ClaimedMessage(message, reader.GetInt64(7), reader.IsDBNull(8) ? null : reader.GetInt64(8), reader.GetBoolean(9))
+                : new ClaimedMessage(message, reader.GetInt64(7)));
         }
 
         // RETURNING has no order guarantee; publish in id (UUIDv7, roughly enqueue) order. Guid.CompareTo matches
