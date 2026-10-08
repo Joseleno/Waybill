@@ -124,6 +124,68 @@ DELETE FROM waybill.outbox_instances;
 DELETE FROM waybill.settings;
 ```
 
+### A key stopped by the DLQ
+
+With ordering on, a message of a key goes out only after every earlier message of that key was published. A message
+that reaches the DLQ therefore stops its key: the messages behind it wait, and the other keys keep flowing. The error
+log of the dead-lettering names the key and the sequence. **`waybill.outbox.blocked_keys`** (meter `Waybill`) counts
+the keys stopped this way; it is not reported while ordering is off. A stopped key also makes
+`waybill.outbox.oldest_pending.age` grow while the broker is fine: read the two together.
+
+The keys stopped by the DLQ, the message that stops each one and how many wait behind it:
+
+<!-- blocked-keys -->
+```sql
+SELECT d.key, d.sequence, d.id, d.dlq_reason,
+       (SELECT count(*) FROM waybill.outbox w
+        WHERE w.key = d.key AND w.sequence > d.sequence AND w.status IN ('pending', 'claimed')) AS waiting
+FROM waybill.outbox d
+WHERE d.status = 'dlq' AND d.sequence IS NOT NULL
+ORDER BY d.key;
+```
+
+Keys held up for now by a message waiting after a `basic.return` (they move again when it goes through, or stop when
+it reaches the DLQ):
+
+<!-- waiting-heads -->
+```sql
+SELECT key, sequence, id, attempts, next_attempt_at
+FROM waybill.outbox
+WHERE status = 'pending' AND sequence IS NOT NULL AND next_attempt_at > clock_timestamp()
+ORDER BY next_attempt_at;
+```
+
+Everything not yet published of one key, and the dispatcher that holds its partition:
+
+<!-- key-rows -->
+```sql
+SELECT o.sequence, o.id, o.status, o.attempts, o.next_attempt_at, o.lease_until, o.owner, o.dlq_reason,
+       p.owner AS partition_owner
+FROM waybill.outbox o
+LEFT JOIN waybill.settings s ON true
+LEFT JOIN waybill.outbox_partitions p ON p.partition = o.key_hash % s.partitions
+WHERE o.key = 'order-42' AND o.status NOT IN ('published', 'released')
+ORDER BY o.sequence NULLS FIRST
+LIMIT 20;
+```
+
+Two ways out. If the message can still go (for `312 NO_ROUTE`, create the binding), hand it back with the DLQ
+requeue above: it goes out first, then the rest of its key, in order. If it must never go, release it: it stays in the
+table as `released`, with who released it and when, and its key moves on without it. Its consumers will see a gap in
+the key's sequence at that point:
+
+<!-- key-release -->
+```sql
+UPDATE waybill.outbox
+SET status = 'released', released_at = clock_timestamp(), released_by = session_user
+WHERE key = 'order-42' AND status = 'dlq' AND sequence IS NOT NULL
+RETURNING id, sequence, dlq_reason;
+```
+
+The returned sequences are the gaps; no row returned means the key was mistyped. A released message never goes back
+to `pending` (the database refuses it): its successors may already be out. Retention keeps released messages, like
+the DLQ.
+
 ## PostgreSQL: isolation level
 
 The claim and the retention run as single statements at the session's default isolation, and they rely on
