@@ -117,11 +117,16 @@ internal sealed partial class OutboxDispatcher
             : await _partitions.ReadSettingsAsync(cancellationToken).ConfigureAwait(false);
         if (stored is null)
             return "waybill.settings was removed while this dispatcher orders by key. Stop every dispatcher before turning ordering off";
-        return stored == Ordering
-            ? null
-            : $"the database holds Partitions = {stored.Value.Partitions} and PartitionLease = {stored.Value.PartitionLease}, and this instance "
+        if (stored != Ordering)
+            return $"the database holds Partitions = {stored.Value.Partitions} and PartitionLease = {stored.Value.PartitionLease}, and this instance "
                 + $"has {Ordering.Partitions} and {Ordering.PartitionLease}. Every dispatcher must use the same values; change them with all "
                 + "dispatchers stopped, as OPERATIONS.md shows";
+
+        // Without the trigger, keyed messages are written unnumbered and would go out in any order (ADR 0008).
+        return await _partitions.NumberingTriggerEnabledAsync(cancellationToken).ConfigureAwait(false)
+            ? null
+            : "the trigger waybill.outbox_sequence, which numbers keyed messages while ordering is on, is missing or disabled. "
+                + "Run WaybillSchema.MigrateAsync, or ALTER TABLE waybill.outbox ENABLE TRIGGER outbox_sequence";
     }
 
     /// <summary>Runs one cycle.</summary>
