@@ -7,12 +7,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- Groundwork for ordering by key (v0.2, in progress; it does not guarantee order yet): `WaybillDispatcherOptions.OrderByKey` (off by default) turns on a partition lease. Keys map to `key_hash % Partitions`; each partition is held by one dispatcher at a time, shared evenly among live dispatchers, renewed every cycle and handed back on shutdown, and the claim checks ownership in the same statement. `Partitions` and `PartitionLease` are stored in the database by the first dispatcher that orders and checked by every other one; a mismatch stops the dispatcher with a critical log (ADR 0007).
+- Ordering by key (v0.2): `WaybillDispatcherOptions.OrderByKey` (off by default) publishes the messages of each aggregate key in commit order, one per key at a time. Keys map to `key_hash % Partitions`; each partition is held by one dispatcher at a time, shared evenly among live dispatchers, renewed every cycle and handed back on shutdown, and the claim checks ownership in the same statement. `Partitions` and `PartitionLease` are stored in the database by the first dispatcher that orders and checked by every other one; a mismatch stops the dispatcher with a critical log (ADR 0007). While ordering is on, the database numbers every keyed message as it is written, in commit order, and the claim takes only the first message of each key not yet published; a message in the DLQ stops its key until it is requeued or released (ADR 0008).
+- `OutgoingMessage.Sequence`, the position of an ordered message in its key; the RabbitMQ transport sends it in the `waybill-sequence` header.
+- `waybill.outbox.blocked_keys`, the keys stopped by a message in the DLQ while ordering is on, and in `OPERATIONS.md` the SQL to find them and to release a key.
 
 ### Changed
 
 - A message returned as unroutable (`basic.return`) now waits a growing interval before it is published again: `ReturnBackoff` (1 minute by default) after the first return, doubling with each return up to `MaxReturnBackoff` (10 minutes). With the defaults it reaches the outbox DLQ after 15 minutes of waiting instead of about 5 seconds, time to create the missing binding. Set `ReturnBackoff` to zero for the 0.1 behavior (ADR 0006).
 - The `waybill` schema gains the `outbox.next_attempt_at` column and the `settings`, `outbox_partitions` and `outbox_instances` tables. Run `WaybillSchema.MigrateAsync` before upgrading the dispatcher; the migration only adds, and pending rows stay claimable. During a rolling upgrade, a 0.1 dispatcher still running ignores the wait and may publish a returned message once more before its time, which is harmless.
+- Message ids are UUIDv7 that increase in enqueue order within a process, also inside one millisecond, so the dispatcher claims messages of one process in the order they were enqueued.
+- `AddWaybillOutbox` adds an interceptor to the context's options; a context registered by hand, outside `AddDbContext`, `AddDbContextPool` or a context factory, logs a warning once.
+- The `waybill` schema gains `outbox_keys`, the `outbox.lock_keys`, `released_at` and `released_by` columns, the `released` status, two partial indexes built concurrently, and the triggers that number keyed messages and keep `published` and `released` final. The application's INSERT now carries `lock_keys`: run `WaybillSchema.MigrateAsync` before deploying the applications that enqueue.
 
 ## [0.1.0-alpha] - 2026-10-06
 

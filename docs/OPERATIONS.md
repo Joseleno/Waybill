@@ -100,8 +100,12 @@ Replaying a queue or an offset older than the inbox retention is not covered.
 
 ## Ordering by key
 
-Ordering by key is being built for v0.2 and is off by default. What exists today is the partition lease it rests on;
-until the rest lands, turning `OrderByKey` on spreads keys over partitions but does **not** yet guarantee order.
+Ordering by key is new in v0.2 (not released yet) and is off by default. With `OrderByKey` on, the messages of each key
+are published in commit order: per key, the first copy of each message to reach the broker arrives after the first
+copy of every earlier one. Later copies (a republication after a lease ran out, an attempt left unconfirmed) can arrive
+at any time and carry the same message id, which the consumers' inbox recognizes. Each ordered message carries its
+position in the key, `sequence`, in the `waybill-sequence` header. Messages without a key are never ordered. One message
+per key is published at a time; several per key in one batch come later in v0.2.
 
 With `OrderByKey` on, each key belongs to a partition, `key_hash % Partitions`, and each partition is held by one
 dispatcher at a time. Dispatchers share the partitions evenly (at most `ceil(Partitions / live dispatchers)` each),
@@ -142,6 +146,69 @@ DELETE FROM waybill.outbox_partitions;
 DELETE FROM waybill.outbox_instances;
 DELETE FROM waybill.settings;
 ```
+
+### Before turning it on
+
+- **Upgrade order.** Apply the v0.2 schema (`WaybillSchema.MigrateAsync`) before deploying the applications that
+  enqueue with the v0.2 package: their INSERT carries a column the 0.1 schema does not have.
+- **Register the context with `AddDbContext`, `AddDbContextPool` or a context factory.** `AddWaybillOutbox` then adds an
+  interceptor that hands the database the keys of each `SaveChanges`, so it locks them in one order. A context built by
+  hand lacks it (a warning says so once): nothing is lost or reordered, but transactions that enqueue several keys may
+  deadlock and have to be retried.
+- **A key's counter is locked from the INSERT to the commit.** Transactions of the same key wait for each other.
+  Enqueue in the last `SaveChanges` before the commit: a transaction that enqueues a key and then writes an application
+  row deadlocks with one that writes that row and then enqueues the key, and no setting prevents it. Set
+  `lock_timeout` and `idle_in_transaction_session_timeout` for the applications, so a transaction left open does not
+  hold a key indefinitely. To find who holds a key:
+
+  ```sql
+  SELECT pid, pg_blocking_pids(pid) AS blocked_by, wait_event, now() - xact_start AS transaction_age, state, query
+  FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0;
+  ```
+
+- **`REPEATABLE READ` and `SERIALIZABLE`.** Two such transactions enqueuing the same key at the same time: one fails
+  with 40001 (EF reports it as a transient failure). Retrying it succeeds. `READ COMMITTED`, PostgreSQL's default, just
+  waits.
+- **The numbering trigger must stay enabled.** A dispatcher that orders stops with a critical log if
+  `waybill.outbox_sequence` is missing or disabled. Sessions with `session_replication_role = replica` (some restore
+  and replication tools) skip it: messages they write are not numbered and not ordered.
+
+### What it costs
+
+Measured with EF Core 10 and PostgreSQL 18, 32 producers, one machine (stage 8 prototype); compare the ratios, not the
+absolute numbers:
+
+| Case | Ordering off | Ordering on |
+| --- | --- | --- |
+| One new or existing key per transaction | baseline | 5% to 12% fewer transactions per second, same p99 |
+| One hot key for every transaction | — | about 350 transactions per second for that key, p99 about 600 ms |
+| The same, with 2 ms of work after the `SaveChanges` | — | about 170 per second: the key stays locked meanwhile |
+| Three keys out of twenty per transaction | baseline | about 600 per second, no deadlock |
+
+Publishing: one message per key per batch, so a key's throughput is about one message per round trip to the broker.
+The claim reads and passes over the queued rows of a key whose head waits (in the DLQ, or behind a long queue of its
+own): about 12 µs per row, so 120 ms per claim with 10 thousand rows queued behind one key and 1.2 s with 100
+thousand. Watch `waybill.outbox.blocked_keys` and release or requeue stopped keys promptly.
+
+`waybill.outbox_keys` keeps one row per key ever ordered, about 130 bytes each (10 million keys, about 1.3 GB). It is
+never cleaned: a key starting again at 1 would look like a regression to its consumers. Its size:
+
+```sql
+SELECT pg_size_pretty(pg_total_relation_size('waybill.outbox_keys'));
+```
+
+### Upgrading and rolling back
+
+The v0.2 migration builds its indexes `CONCURRENTLY`, outside the migration's transaction: run it over a direct
+connection (not a pooler in transaction mode), and expect it to wait for transactions already open. If it stops halfway,
+run it again: every step is idempotent and an index left invalid is rebuilt. Afterwards, nothing should be listed here:
+
+```sql
+SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
+```
+
+The schema only moves forward once ordering has numbered a key or released a message: the v0.2 migration's `Down`
+refuses then. To go back to the 0.1 binaries, turn ordering off first (above) and keep the v0.2 schema.
 
 ### A key stopped by the DLQ
 

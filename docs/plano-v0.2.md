@@ -56,15 +56,21 @@ A etapa de maior risco. Fecha os riscos que o spike deixou abertos e entrega a G
 - P e lease globais, gravados no banco e validados no startup: instância com valor diferente para com erro crítico, como a verificação de `READ COMMITTED`
 - Fatia justa entre as instâncias vivas
 
-**8c. Cabeça por chave**
+**8c. Cabeça por chave** (revisto na abertura da 8c, em Oct 7, 2026, com o autor, depois de duas revisões do desenho: o detalhe está no `PLAN.md` da etapa e no ADR 0008)
 
-- Filtro de cabeça dentro da partição: não existe linha da mesma chave com `sequence` menor e status diferente de `published`. Até M mensagens consecutivas da mesma chave saem em série no mesmo canal
-- Tabela `outbox_keys` e contador incrementado durante o `SaveChanges`, com as chaves em ordem; medir dentro do EF real onde ele roda e quanto custa
-- `sequence` no envelope
-- Mensagem na DLQ bloqueia a própria chave; métrica de chaves bloqueadas
-- `outbox_keys` nunca é limpa pela retenção
-- SQL de liberação de chave no `OPERATIONS.md`
-- ADR: ordenação por chave, com a resposta às quatro primeiras perguntas da tabela de decisões
+Dividida em dois PRs, porque a G4 não depende de M:
+
+- **8c-1, G4 com M = 1.**
+  - Numeração por um trigger enquanto `settings` existe, com `outbox_keys`; as chaves de um `SaveChanges` viajam na linha e são travadas em ordem; `message_id` monotônico no processo.
+  - Filtro de cabeça: não existe linha da mesma chave com `sequence` menor em `pending`, `claimed` ou `dlq`; `published` e `released` são terminais.
+  - `sequence` no envelope.
+  - Mensagem na DLQ bloqueia a chave; métrica de chaves bloqueadas; liberação (`released`) e consultas de diagnóstico no `OPERATIONS.md`.
+  - `outbox_keys` nunca é limpa; mudar P sem apagar `settings`.
+  - ADR 0008, parte 1.
+- **Entre 8c-1 e 8c-2: ponteiro de cabeça.** Medido na 8c-1: o claim lê e pula as linhas de uma chave com fila longa à frente, de forma linear (1,19 s com 100 mil linhas).
+- **8c-2, M ≥ 2 em rodadas.**
+  - A k-ésima mensagem de cada chave sai na rodada k, como política do transporte, a ser desenhada com a mudança do `ITransport` da etapa 9.
+  - ADR 0008, parte 2, e a exceção de pressão no ADR 0003.
 
 **Testes que provam**
 
@@ -91,7 +97,7 @@ O `SKIP LOCKED` pula uma linha-cabeça travada por uma marcação ou devolução
 
 O índice parcial do claim não pode filtrar por `next_attempt_at`, porque o relógio não é imutável. Linhas em espera ficam no índice e são lidas a cada ciclo. Com um tipo quente sem binding, isso vira milhares de linhas lidas e descartadas por claim; o cenário de dez mil linhas mede o preço antes de decidir se precisa de índice próprio.
 
-**Pronto quando** os catorze cenários passam, o teste de propriedade e o de backlog têm histórico verde no job agendado, e os dois ADRs estão escritos.
+**Pronto quando** os catorze cenários passam, o teste de propriedade e o de backlog têm histórico verde no job agendado, e os três ADRs (0006, 0007 e 0008) estão escritos. Os cenários com M ≥ 2 ficam na 8c-2; o de marcação ou devolução concorrente também roda com M = 1 na 8c-1 (`G4_MarcacaoOuDevolucaoConcorrente_ClaimNaoLevaASeguinte`), assim como o de troca de dono com linhas em voo e o teste de propriedade, cujo oráculo passou a ser a primeira entrega em ordem (ADR 0008).
 
 ## Etapa 9 — Transporte Kafka
 
@@ -129,7 +135,7 @@ Cada partição do lease é um producer, com suas próprias conexões ao cluster
 
 ## Etapa 10 — Verificação de sequência no inbox
 
-Fecha a G4 do RabbitMQ. Sem fencing de produtor, a ordem lá vale na publicação, salvo republicação após lease vencido. O consumidor com a verificação ligada detecta a regressão e não a aplica.
+Fecha a G4 do RabbitMQ. Sem fencing de produtor, a ordem lá vale na publicação: a primeira cópia de cada mensagem chega na ordem de commit (ADR 0008). Cópias repetidas podem chegar depois, e uma mensagem liberada da DLQ ainda pode chegar de uma tentativa anterior. O consumidor com a verificação ligada detecta a regressão e não a aplica. **Premissa revista na 8c-1:** com a primeira entrega em ordem, uma regressão com `message_id` inédito só aparece depois da retenção do inbox, ou numa mensagem liberada. O escopo desta etapa deve ser reavaliado quando ela abrir.
 
 **Entregas**
 
