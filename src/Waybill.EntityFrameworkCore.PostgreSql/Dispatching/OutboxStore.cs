@@ -57,7 +57,7 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     // Without ordering: no keyed row while another dispatcher orders (waybill.settings exists). An instance that does not
     // order checks for that only at startup and every PartitionLease; until it stops, in a rolling deploy for one, it
     // must not claim keyed rows outside any partition. Uncorrelated, so evaluated once per statement.
-    private static readonly string ClaimSql = Claim(
+    internal static readonly string ClaimSql = Claim(
         candidateFilter: """
 
               AND (key IS NULL OR NOT EXISTS (SELECT 1 FROM waybill.settings))
@@ -171,6 +171,7 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
+            long? sequence = reader.FieldCount > 8 && !reader.IsDBNull(8) ? reader.GetInt64(8) : null; // ordered claim only
             var message = new OutgoingMessage
             {
                 MessageId = reader.GetGuid(0),
@@ -180,9 +181,10 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
                 ContentType = reader.GetString(4),
                 Headers = ParseHeaders(reader.IsDBNull(5) ? null : reader.GetString(5)),
                 CreatedAt = reader.GetFieldValue<DateTimeOffset>(6),
+                Sequence = sequence,
             };
             claimed.Add(reader.FieldCount > 8
-                ? new ClaimedMessage(message, reader.GetInt64(7), reader.IsDBNull(8) ? null : reader.GetInt64(8), reader.GetBoolean(9))
+                ? new ClaimedMessage(message, reader.GetInt64(7), sequence, reader.GetBoolean(9))
                 : new ClaimedMessage(message, reader.GetInt64(7)));
         }
 

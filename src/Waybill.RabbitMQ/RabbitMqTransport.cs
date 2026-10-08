@@ -18,6 +18,7 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
     : ITransport, IAsyncDisposable
 {
     internal const string KeyHeader = "waybill-key";
+    internal const string SequenceHeader = "waybill-sequence";
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private IConnection? _connection;
@@ -184,6 +185,8 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
         }
         if (message.Key is not null)
             headers[KeyHeader] = message.Key;
+        if (message.Sequence is { } sequence)
+            headers[SequenceHeader] = sequence.ToString(System.Globalization.CultureInfo.InvariantCulture); // a string, like the others
 
         return new BasicProperties
         {

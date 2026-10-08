@@ -1,1 +1,3 @@
 #nullable enable
+Waybill.OutgoingMessage.Sequence.get -> long?
+Waybill.OutgoingMessage.Sequence.init -> void
