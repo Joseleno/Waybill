@@ -34,7 +34,7 @@ Um commit por cenário provado, na ordem abaixo.
 - [x] Enfileiramento: interceptor de `SavingChanges` registrado no `AddWaybillOutbox` (contexto sem ele avisa uma vez); ids monotônicos (achado: 197 de 200 fora de ordem na mesma transação). Cenários de lista sem deadlock (com controles negativos), limite de escrita depois de enfileirar, sequência contígua, lista que não sobrevive ao `SaveChanges`, chaves com separadores, RR/SERIALIZABLE, papel só com INSERT
 - [x] Claim com M = 1: instante único, filtro de cabeça, guarda de `settings` no claim sem ordenação, sinal de chave quente (posse no limite movido para a 8c-2). Marcação ou devolução concorrente, posse no limite, chave quente, dispatcher antigo ao lado de quem ordena
 - [x] DLQ bloqueia a chave (log com chave e `sequence`), `blocked_keys` com índice, liberação com `RETURNING` e registro, consultas de diagnóstico, retenção, estado terminal
-- [ ] Chave bloqueada com 100 mil à frente (oráculo de buffers). Se não couber, o ponteiro de cabeça vira PR próprio antes da 8c-2
+- [x] Chave bloqueada com 100 mil à frente: medido (p50 1,19 s, linear), acima do limite; teto de regressão no teste. **Ponteiro de cabeça: PR próprio antes da 8c-2**
 - [ ] Transições: mudar P com `UPDATE settings` e escrita concorrente; reiniciar a ordenação ampliado; ligar com transação aberta; backlog anterior; trigger desligado como erro crítico; troca de dono com linha em voo
 - [ ] `OutgoingMessage.Sequence` e cabeçalho `waybill-sequence`; teste estrutural da ordenação desligada
 - [ ] Teste de propriedade da primeira entrega (caos, 20 s no PR); backlog de 500 mil a 1 milhão e custo desligada contra a `v0.1.0-alpha` (agendado)
