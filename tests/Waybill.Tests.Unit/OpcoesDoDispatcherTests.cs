@@ -77,10 +77,10 @@ public sealed class OpcoesDoDispatcherTests
             .AddWaybill(o =>
             {
                 o.MaxPayloadBytes = 1024;
-                o.OrderByKey = orderByKey;
             })
             .AddWaybillDispatcher(o =>
             {
+                o.OrderByKey = orderByKey;
                 o.ConnectionString = "Host=localhost";
                 o.PartitionLease = TimeSpan.FromSeconds(partitionLeaseSeconds);
             })
@@ -103,10 +103,10 @@ public sealed class OpcoesDoDispatcherTests
             .AddWaybill(o =>
             {
                 o.MaxPayloadBytes = 1024;
-                o.OrderByKey = true;
             })
             .AddWaybillDispatcher(o =>
             {
+                o.OrderByKey = true;
                 o.ConnectionString = "Host=localhost";
                 o.PartitionLease = TimeSpan.FromSeconds(60) + TimeSpan.FromTicks(1);
             })

@@ -80,9 +80,10 @@ internal sealed partial class WaybillDispatcherService(
                 databaseFailures = 0;
                 _status.CycleCompleted(cycle.Outcome);
 
-                // A full batch that made progress: go straight to the next one. Breaker open (connection or channel
-                // failure): wait it out, nothing is claimed meanwhile. Otherwise: the polling interval.
-                if (cycle.Outcome == DispatchOutcome.Progress && cycle.Claimed >= cycle.BatchSize)
+                // A full batch that made progress, or one that left rows of its keys behind (ordering by key takes one row
+                // per key per batch, so a busy key alone never fills it): go straight to the next one. Breaker open
+                // (connection or channel failure): wait it out, nothing is claimed meanwhile. Otherwise: the polling interval.
+                if (cycle.Outcome == DispatchOutcome.Progress && (cycle.Claimed >= cycle.BatchSize || cycle.MoreOfKeys))
                     continue;
                 wait = cycle.Outcome is DispatchOutcome.ConnectionFailure or DispatchOutcome.BreakerOpen
                     ? Max(dispatcher.BreakerRemaining, TimeSpan.FromMilliseconds(1))

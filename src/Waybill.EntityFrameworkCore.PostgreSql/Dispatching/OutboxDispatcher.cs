@@ -26,7 +26,8 @@ internal enum DispatchOutcome
 /// <param name="Claimed">Rows claimed.</param>
 /// <param name="Outcome">How the cycle ended.</param>
 /// <param name="BatchSize">The batch size this cycle used.</param>
-internal readonly record struct DispatchCycle(int Claimed, DispatchOutcome Outcome, int BatchSize)
+/// <param name="MoreOfKeys">Ordering by key: a claimed row had more rows of its key waiting behind it, claimable once it is published.</param>
+internal readonly record struct DispatchCycle(int Claimed, DispatchOutcome Outcome, int BatchSize, bool MoreOfKeys = false)
 {
     public bool TransportFailed => Outcome is DispatchOutcome.ConnectionFailure or DispatchOutcome.Pressure;
 }
@@ -57,7 +58,7 @@ internal sealed partial class OutboxDispatcher
     {
         _store = store;
         _partitions = partitions;
-        _ordered = waybillOptions.Value.OrderByKey;
+        _ordered = dispatcherOptions.Value.OrderByKey;
         _transport = transport;
         _waybillOptions = waybillOptions;
         _options = dispatcherOptions.Value;
@@ -116,11 +117,16 @@ internal sealed partial class OutboxDispatcher
             : await _partitions.ReadSettingsAsync(cancellationToken).ConfigureAwait(false);
         if (stored is null)
             return "waybill.settings was removed while this dispatcher orders by key. Stop every dispatcher before turning ordering off";
-        return stored == Ordering
-            ? null
-            : $"the database holds Partitions = {stored.Value.Partitions} and PartitionLease = {stored.Value.PartitionLease}, and this instance "
+        if (stored != Ordering)
+            return $"the database holds Partitions = {stored.Value.Partitions} and PartitionLease = {stored.Value.PartitionLease}, and this instance "
                 + $"has {Ordering.Partitions} and {Ordering.PartitionLease}. Every dispatcher must use the same values; change them with all "
                 + "dispatchers stopped, as OPERATIONS.md shows";
+
+        // Without the trigger, keyed messages are written unnumbered and would go out in any order (ADR 0008).
+        return await _partitions.NumberingTriggerEnabledAsync(cancellationToken).ConfigureAwait(false)
+            ? null
+            : "the trigger waybill.outbox_sequence, which numbers keyed messages while ordering is on, is missing or disabled. "
+                + "Run WaybillSchema.MigrateAsync, or ALTER TABLE waybill.outbox ENABLE TRIGGER outbox_sequence";
     }
 
     /// <summary>Runs one cycle.</summary>
@@ -169,9 +175,13 @@ internal sealed partial class OutboxDispatcher
         if (finish.Fenced > 0)
             LogFenced(_logger, finish.Fenced);
         foreach (var (id, reason) in finish.DeadLettered)
-            LogDeadLettered(_logger, id, reason);
+        {
+            // With ordering, the row now stops its key: the log says which, and from which sequence on.
+            var row = claimed.First(c => c.Message.MessageId == id);
+            LogDeadLettered(_logger, id, row.Message.Key, row.Sequence, reason);
+        }
 
-        return new DispatchCycle(claimed.Count, React(results), batchSize);
+        return new DispatchCycle(claimed.Count, React(results), batchSize, claimed.Any(c => c.MoreOfKey));
     }
 
     /// <summary>Confirmation timeouts in a row, already at a batch of one, after which the broker counts as unreachable.</summary>
@@ -280,8 +290,8 @@ internal sealed partial class OutboxDispatcher
         Message = "{Count} outbox row(s) were fenced off: their lease expired and another claim took them. The newer claim decides their outcome.")]
     private static partial void LogFenced(ILogger logger, int count);
 
-    [LoggerMessage(EventId = 12, Level = LogLevel.Error, Message = "Message {MessageId} went to the outbox DLQ: {Reason}")]
-    private static partial void LogDeadLettered(ILogger logger, Guid messageId, string reason);
+    [LoggerMessage(EventId = 12, Level = LogLevel.Error, Message = "Message {MessageId} (key {Key}, sequence {Sequence}) went to the outbox DLQ: {Reason}")]
+    private static partial void LogDeadLettered(ILogger logger, Guid messageId, string? key, long? sequence, string reason);
 
     [LoggerMessage(EventId = 13, Level = LogLevel.Error,
         Message = "The transport returned {Count} result(s) with an undefined status; they are treated as Retry, never as confirmed.")]

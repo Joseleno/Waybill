@@ -3,10 +3,10 @@ using Microsoft.Extensions.Options;
 namespace Waybill.EntityFrameworkCore.Dispatching;
 
 /// <summary>
-/// Checks the partition options against <see cref="WaybillOptions.OrderByKey"/>: the partition lease only matters, and is
+/// Checks the partition options against <see cref="WaybillDispatcherOptions.OrderByKey"/>: the partition lease only matters, and is
 /// only enforced, when ordering is on, so raising <c>PublishTimeout</c> never breaks a dispatcher that does not order.
 /// </summary>
-internal sealed class PartitionOptionsValidation(IOptions<WaybillOptions> waybill) : IValidateOptions<WaybillDispatcherOptions>
+internal sealed class PartitionOptionsValidation : IValidateOptions<WaybillDispatcherOptions>
 {
     internal const int MaxPartitions = 1024;
 
@@ -20,13 +20,13 @@ internal sealed class PartitionOptionsValidation(IOptions<WaybillOptions> waybil
             return ValidateOptionsResult.Fail("WaybillDispatcherOptions.PartitionLease must be positive and at most one day.");
 
         // A claim needs the partition held for longer than the row lease it takes, measured from the claim itself.
-        if (waybill.Value.OrderByKey && options.PartitionLease < options.Lease * 2)
+        if (options.OrderByKey && options.PartitionLease < options.Lease * 2)
             return ValidateOptionsResult.Fail(
                 $"WaybillDispatcherOptions.PartitionLease must be at least twice the lease ({options.Lease * 2}: PublishTimeout plus LeaseMargin, doubled).");
 
         // Stored as a PostgreSQL interval and compared on every check: a fraction of a millisecond could come back
         // different and stop every dispatcher.
-        if (waybill.Value.OrderByKey && options.PartitionLease.Ticks % TimeSpan.TicksPerMillisecond != 0)
+        if (options.OrderByKey && options.PartitionLease.Ticks % TimeSpan.TicksPerMillisecond != 0)
             return ValidateOptionsResult.Fail("WaybillDispatcherOptions.PartitionLease must be a whole number of milliseconds.");
 
         return ValidateOptionsResult.Success;

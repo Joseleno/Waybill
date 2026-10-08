@@ -14,6 +14,12 @@ internal sealed class OutboxRecord
     public required string ContentType { get; init; }
     public string? Headers { get; init; }
 
+    /// <summary>
+    /// The distinct keys of the <c>SaveChanges</c> this row is saved by, when there are two or more; set by
+    /// <see cref="OutboxKeyLockInterceptor"/> and cleared by the numbering trigger before the row is stored (ADR 0008).
+    /// </summary>
+    public string[]? LockKeys { get; set; }
+
     public static OutboxRecord From(MessageEnvelope envelope) => new()
     {
         Id = envelope.Id,

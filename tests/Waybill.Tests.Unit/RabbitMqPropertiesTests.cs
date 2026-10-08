@@ -6,11 +6,12 @@ namespace Waybill.Tests.Unit;
 
 public sealed class RabbitMqPropertiesTests
 {
-    private static OutgoingMessage Message(string name = "billing.invoice-paid.v1", Dictionary<string, string>? headers = null) => new()
+    private static OutgoingMessage Message(string name = "billing.invoice-paid.v1", Dictionary<string, string>? headers = null, long? sequence = null) => new()
     {
         MessageId = Guid.Parse("01920000-0000-7000-8000-000000000001"),
         Name = name,
         Key = "invoice-7",
+        Sequence = sequence,
         Payload = Encoding.UTF8.GetBytes("{}"),
         ContentType = "application/json",
         Headers = headers ?? new Dictionary<string, string>
@@ -48,6 +49,17 @@ public sealed class RabbitMqPropertiesTests
 
         Assert.Null(properties.CorrelationId);
         Assert.Equal(["waybill-key"], properties.Headers!.Keys);
+    }
+
+    // Ordering by key (ADR 0008): the key's sequence travels next to the key, as a string like the other headers, for
+    // consumers to detect gaps and regressions (stage 10).
+    [Fact]
+    public void Propriedades_ComSequence_HeaderWaybillSequence()
+    {
+        var properties = RabbitMqTransport.Properties(Message(sequence: 42));
+
+        Assert.Equal("42", properties.Headers!["waybill-sequence"]);
+        Assert.False(RabbitMqTransport.Properties(Message()).Headers!.ContainsKey("waybill-sequence"));
     }
 
     [Fact]
