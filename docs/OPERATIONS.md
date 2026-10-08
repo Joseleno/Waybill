@@ -202,8 +202,10 @@ RETURNING id, sequence, dlq_reason;
 ```
 
 The returned sequences are the gaps; no row returned means the key was mistyped. A released message never goes back
-to `pending` (the database refuses it): its successors may already be out. Retention keeps released messages, like
-the DLQ.
+to `pending` (the database refuses it): its successors may already be out. Releasing does not unsend: if an earlier
+attempt to publish it went unconfirmed (a timeout, a lost connection), that attempt may have reached the broker, or
+may still reach it after the key's later messages. Consumers then see a message older than ones they already have,
+which their inbox does not mistake for a duplicate. Retention keeps released messages, like the DLQ.
 
 ## PostgreSQL: isolation level
 
