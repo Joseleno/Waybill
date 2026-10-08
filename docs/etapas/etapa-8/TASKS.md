@@ -35,8 +35,8 @@ Um commit por cenário provado, na ordem abaixo.
 - [x] Claim com M = 1: instante único, filtro de cabeça, guarda de `settings` no claim sem ordenação, sinal de chave quente (posse no limite movido para a 8c-2). Marcação ou devolução concorrente, posse no limite, chave quente, dispatcher antigo ao lado de quem ordena
 - [x] DLQ bloqueia a chave (log com chave e `sequence`), `blocked_keys` com índice, liberação com `RETURNING` e registro, consultas de diagnóstico, retenção, estado terminal
 - [x] Chave bloqueada com 100 mil à frente: medido (p50 1,19 s, linear), acima do limite; teto de regressão no teste. **Ponteiro de cabeça: PR próprio antes da 8c-2**
-- [ ] Transições: mudar P com `UPDATE settings` e escrita concorrente; reiniciar a ordenação ampliado; ligar com transação aberta; backlog anterior; trigger desligado como erro crítico; troca de dono com linha em voo
-- [ ] `OutgoingMessage.Sequence` e cabeçalho `waybill-sequence`; teste estrutural da ordenação desligada
+- [x] Transições: mudar P com `UPDATE settings` e escrita concorrente; reiniciar a ordenação ampliado; ligar com transação aberta; backlog anterior; trigger desligado como erro crítico; troca de dono com linha em voo
+- [x] `OutgoingMessage.Sequence` e cabeçalho `waybill-sequence`; teste estrutural da ordenação desligada
 - [ ] Teste de propriedade da primeira entrega (caos, 20 s no PR); backlog de 500 mil a 1 milhão e custo desligada contra a `v0.1.0-alpha` (agendado)
 - [ ] Mutações da lista do PLAN
 - [ ] Documentos: escopo (G4, linha "Ordenação"); `plano-v0.2.md` (8c-1/8c-2, cenários, três ADRs, nota para a etapa 10); ADR 0008, parte 1; `OPERATIONS.md` (custo medido, ativação, upgrade, rollback, liberação, diagnóstico, isolamento, crescimento de `outbox_keys`); CHANGELOG
