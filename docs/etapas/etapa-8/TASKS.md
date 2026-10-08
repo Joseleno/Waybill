@@ -28,7 +28,7 @@
 
 Um commit por cenário provado, na ordem abaixo.
 
-- [ ] Protótipo medido do contador no EF real (sem contador; trigger; trigger + `lock_keys`; trava da lista por `DO UPDATE` sem efeito contra `FOR UPDATE`; `log_lock_waits`). Registrar números e escolha
+- [x] Protótipo medido do contador no EF real (`PROTOTIPO-CONTADOR.md`): a lista é necessária (sem ela, 26 deadlocks com três chaves de 20); trava em duas etapas, com `FOR UPDATE` (37% menos p99 sob disputa); desligada, sem custo mensurável com uma chave e −4,3% com três linhas por transação; o p99 da chave quente do spike não vem do `deadlock_timeout`
 - [ ] Schema: `outbox_keys` (`fillfactor`), `lock_keys`, `released_at`/`released_by`, trigger que numera (`SECURITY DEFINER`), trigger de estado terminal, restrição com `NOT VALID` + `VALIDATE`, índices com `CONCURRENTLY`, `Up` idempotente, `Down` que recusa; `SchemaV0_2` refeita. Upgrade, migration interrompida e `Down`
 - [ ] Opções: `OrderByKey` para `WaybillDispatcherOptions`; chave acima de 512 bytes recusada no `Enqueue`; API pública declarada
 - [ ] Enfileiramento: interceptor de `SavingChanges` registrado no `AddWaybillOutbox` e conferido no `Enqueue`. Cenários de lista sem deadlock (com controles negativos), limite de escrita depois de enfileirar, sequência contígua, lista que não sobrevive ao `SaveChanges`, chaves com separadores, RR/SERIALIZABLE, papel só com INSERT
