@@ -6,9 +6,9 @@ namespace Waybill.EntityFrameworkCore;
 /// <summary>
 /// Hands the numbering trigger the keys it must lock in one order (ADR 0008). While ordering by key is on, each keyed
 /// row locks its key's counter until the transaction commits, at its own INSERT, and EF inserts in id order, not key
-/// order: two transactions enqueuing K1 and K2 in opposite orders would wait on each other. So every keyed row added to a
-/// <c>SaveChanges</c> with two or more distinct keys carries all of them, and the trigger locks them, sorted, at the first
-/// row. The list rides on the rows, not on the session: no I/O here, no state between calls, nothing a savepoint, a
+/// order: two transactions enqueuing K1 and K2 in opposite orders would wait on each other. So a
+/// <c>SaveChanges</c> with two or more distinct keys has them all handed to the trigger, which locks them, sorted, at the first
+/// row: the list rides on that first row, not on the session. No I/O here, no state between calls, nothing a savepoint, a
 /// retry of the execution strategy or a pooled context could leave behind. With ordering off the trigger drops it.
 /// </summary>
 /// <remarks>
@@ -60,8 +60,14 @@ internal sealed class OutboxKeyLockInterceptor : SaveChangesInterceptor
             context.ChangeTracker.AutoDetectChangesEnabled = autoDetect;
         }
         var keys = keyed.Select(r => r.Key!).Distinct(StringComparer.Ordinal).ToArray();
-        var lockKeys = keys.Length >= 2 ? keys : null; // one key needs no order; the trigger sorts
         foreach (var record in keyed)
-            record.LockKeys = lockKeys;
+            record.LockKeys = null;
+        if (keys.Length < 2)
+            return; // one key needs no order
+
+        // Only on the first keyed row EF inserts: it orders a table's inserts by key, and ids follow enqueue order. The
+        // trigger locks every key there, sorted, before any other keyed row locks its own. On every row the list would
+        // cost N × N keys per SaveChanges.
+        keyed.MinBy(r => r.Id)!.LockKeys = keys;
     }
 }

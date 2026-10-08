@@ -117,8 +117,41 @@ public sealed class G4_ListaDeChaves_NaoSobreviveAoSaveChanges(PostgresFixture p
         await context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(2, failOnce.Attempts);
-        Assert.Equal(2, failOnce.ListsSeen); // the retry still sent both lists
+        Assert.Equal(1, failOnce.ListsSeen); // the retry still sends the list, on the first row
         await AssertSavedKeysAsync(database, "A:1:1:1:1", "B:1:1:1:1");
+    }
+
+    // The list rides on one row only, the first EF inserts (the smallest id): all the keys are locked there, before any
+    // other keyed row locks its own. On every row it would cost N × N keys per SaveChanges, also with ordering off.
+    [Fact]
+    public async Task G4_ListaDeChaves_SoNaPrimeiraLinha_MilharesDeChavesNumSaveChanges()
+    {
+        var database = await StartAsync();
+        var lists = new CountLists();
+        await using var services = database.Services(interceptors: lists);
+        await using var scope = services.CreateAsyncScope();
+        var outbox = scope.ServiceProvider.GetRequiredService<IOutbox<AppDbContext>>();
+        for (var i = 0; i < 2_000; i++)
+            outbox.Enqueue(new InvoicePaid(Guid.NewGuid(), i), $"order-{i}");
+
+        await scope.ServiceProvider.GetRequiredService<AppDbContext>().SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, lists.Count);
+        Assert.Equal(2_000, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox_keys WHERE seq = 1"));
+        Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE lock_keys IS NOT NULL"));
+    }
+
+    private sealed class CountLists : DbCommandInterceptor
+    {
+        public int Count { get; private set; }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            if (eventData.CommandSource == CommandSource.SaveChanges)
+                Count += command.Parameters.Cast<DbParameter>().Count(p => p.Value is string[]);
+            return ValueTask.FromResult(result);
+        }
     }
 
     private async Task<TestDatabase> StartAsync()

@@ -30,7 +30,8 @@ A 8a espaçou o `basic.return` (ADR 0006), e a 8b entregou a posse da partição
    - o trigger trava a lista, ordenada por `COLLATE "C"`, na primeira linha da outbox: primeiro insere as chaves novas (`ON CONFLICT DO NOTHING`), depois trava todas com `FOR UPDATE`;
    - em seguida, anula a coluna;
    - um marcador `set_config(…, true)`, que vale só na transação, evita travar de novo nas linhas seguintes;
-   - a trava cai depois das linhas da aplicação, no mesmo ponto em que um `SaveChanges` de uma chave trava.
+   - a trava cai depois das linhas da aplicação, no mesmo ponto em que um `SaveChanges` de uma chave trava;
+   - a lista vai só na primeira linha com chave que o EF insere (o menor `id`), e não em todas: em todas, um `SaveChanges` de N chaves carregaria N × N chaves, também com a ordenação desligada (achado da revisão de código; com 10 mil chaves passaria do limite de 1 GB de uma mensagem do PostgreSQL).
 
    O interceptor é registrado pelo `AddWaybillOutbox` e não faz I/O nem guarda estado. Ele não reabre o buraco de G1 do ADR 0002: aquele interceptor anexava linhas de um buffer próprio, e este só preenche uma coluna de linhas que já estão no change tracker. Um contexto montado fora de `AddDbContext` fica sem o interceptor e gera um aviso, uma vez por tipo. Sem ele nada se perde nem sai de ordem; só pode haver deadlock, e um deadlock se resolve repetindo a transação.
 4. **Ids na ordem do `Enqueue`.** Dois UUIDv7 do mesmo milissegundo comparavam em ordem aleatória, então mensagens de uma chave numa transação recebiam `sequence` fora da ordem do `Enqueue`: numa rajada de 200, 197. O `message_id` passou a ser um UUIDv7 monotônico no processo (RFC 9562, seção 6.2, método 1). Um contador de 12 bits em `rand_a` ordena os ids do mesmo milissegundo, e passando de 4096 o gerador usa o milissegundo seguinte.
@@ -101,6 +102,7 @@ A 8a espaçou o `basic.return` (ADR 0006), e a 8b entregou a posse da partição
 - **Ordem de upgrade.** O INSERT do pacote passa a ter `lock_keys`, então a migration da v0.2 roda antes do deploy de quem enfileira. O `Down` recusa depois que uma chave foi numerada ou uma linha liberada.
 - **Ordenação desligada.** O claim fica igual ao da versão anterior; o p99 da transação variou mais de 5% entre rodadas só por ruído nesta máquina, e o critério é decidido no job agendado.
 - **Chave longa.** A chave continua limitada a 255 bytes UTF-8 no `Enqueue`, desde a v0.1, bem abaixo do limite do btree de `outbox_keys`.
+- **Relógio do `MessageId`.** O gerador nunca recua: se o relógio do processo saltar para o futuro e voltar, os ids seguem com o timestamp do futuro até o relógio alcançá-lo. A retenção, que escolhe pelo tempo do id, só retém essas linhas por mais tempo.
 
 ## Testes que provam
 
