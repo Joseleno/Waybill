@@ -34,6 +34,49 @@ public sealed class G4_ListaDeChaves_SemDeadlock(PostgresFixture postgres)
         Assert.Equal(["K1:2:1:2:2", "K2:2:1:2:2"], await KeyLockHarness.SequencesAsync(database));
     }
 
+    // The trigger marks the list it locked so later rows of the same SaveChanges skip it. The mark lasts the transaction
+    // only: on a pooled session, the next transaction with the same list must lock it again.
+    [Fact]
+    public async Task G4_ListaDeChaves_MarcaDaListaNaoSobreviveATransacao()
+    {
+        var database = await TestDatabase.CreateAsync(postgres);
+        await KeyLockHarness.EnableOrderingAsync(database);
+        await using var first = new NpgsqlConnection(KeyLockHarness.ConnectionString(database, KeyLockHarness.BarrierApp));
+        await using var second = new NpgsqlConnection(KeyLockHarness.ConnectionString(database, KeyLockHarness.BarrierApp));
+        await first.OpenAsync(TestContext.Current.CancellationToken);
+        await second.OpenAsync(TestContext.Current.CancellationToken);
+        foreach (var session in new[] { first, second }) // an earlier transaction on each session, with the same list
+        {
+            await using var earlier = await session.BeginTransactionAsync(TestContext.Current.CancellationToken);
+            await KeyLockHarness.InsertAsync(session, "K1", ["K1", "K2"]);
+            await earlier.CommitAsync(TestContext.Current.CancellationToken);
+        }
+        await using var barrier = await Barrier.InstallAsync(database, "waybill.outbox", "INSERT");
+
+        static async Task<PostgresException?> Enqueue(NpgsqlConnection session, params string[] keys)
+        {
+            await using var transaction = await session.BeginTransactionAsync();
+            try
+            {
+                foreach (var key in keys)
+                    await KeyLockHarness.InsertAsync(session, key, ["K1", "K2"]);
+                await transaction.CommitAsync();
+                return null;
+            }
+            catch (PostgresException error)
+            {
+                return error;
+            }
+        }
+
+        var a = Task.Run(() => Enqueue(first, "K1", "K2"));
+        var b = Task.Run(() => Enqueue(second, "K2", "K1"));
+        await barrier.WaitForAsync(atBarrier: 1, onLocks: 1);
+        await barrier.ReleaseAsync();
+
+        Assert.Equal([null, null], await Task.WhenAll(a, b));
+    }
+
     [Fact]
     public async Task G4_ListaDeChaves_OrdensOpostasSemALista_Deadlock()
     {
