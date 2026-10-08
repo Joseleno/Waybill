@@ -74,7 +74,13 @@ public sealed class SchemaTests(PostgresFixture postgres)
     {
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres, untilMigration: LastV01Migration);
-        await G2.DispatcherHarness.EnqueueAsync(database, 20);
+        // Written as 0.1.0-alpha wrote them: this package's INSERT also carries lock_keys, which needs the v0.2 schema
+        // first (OPERATIONS.md, upgrade order).
+        await database.ExecuteAsync("""
+            INSERT INTO waybill.outbox (id, type, key, key_hash, payload, content_type, headers)
+            SELECT gen_random_uuid(), 'billing.invoice-paid.v1', 'invoice-' || g, g, convert_to('{"InvoiceId":"00000000-0000-0000-0000-000000000000","Amount":1}', 'UTF8'), 'application/json', NULL
+            FROM generate_series(1, 20) g
+            """);
 
         await WaybillSchema.MigrateAsync(database.ConnectionString, ct);
 
