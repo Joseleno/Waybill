@@ -79,6 +79,39 @@ public static class KeyLockHarness
         return [.. rows];
     }
 
+    /// <summary>Waits until <paramref name="atBarrier"/> sessions wait at the barrier and <paramref name="onLocks"/> wait on a row or transaction lock.</summary>
+    public static async Task WaitForAsync(NpgsqlConnection observer, int atBarrier, int onLocks)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        var seen = (-1L, -1L);
+        while (DateTime.UtcNow < deadline)
+        {
+            await using var command = new NpgsqlCommand("""
+                SELECT count(*) FILTER (WHERE wait_event = 'advisory'),
+                       count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event <> 'advisory')
+                FROM pg_stat_activity
+                WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'
+                """, observer);
+            await using (var reader = await command.ExecuteReaderAsync())
+            {
+                await reader.ReadAsync();
+                seen = (reader.GetInt64(0), reader.GetInt64(1));
+            }
+            if (seen == (atBarrier, onLocks))
+                return;
+            await Task.Delay(20);
+        }
+        throw new TimeoutException($"Expected {atBarrier} session(s) at the barrier and {onLocks} on locks; saw {seen.Item1} and {seen.Item2}.");
+    }
+
+    /// <inheritdoc cref="WaitForAsync(NpgsqlConnection, int, int)"/>
+    public static async Task WaitForAsync(TestDatabase database, int atBarrier, int onLocks)
+    {
+        await using var observer = new NpgsqlConnection(database.ConnectionString);
+        await observer.OpenAsync();
+        await WaitForAsync(observer, atBarrier, onLocks);
+    }
+
     /// <summary>The PostgreSQL error inside an EF or Npgsql exception, if any.</summary>
     public static PostgresException? PostgresError(Exception? exception)
     {
@@ -132,29 +165,7 @@ public sealed class Barrier : IAsyncDisposable
     }
 
     /// <summary>Waits until <paramref name="atBarrier"/> sessions wait at the barrier and <paramref name="onLocks"/> wait on a row or transaction lock.</summary>
-    public async Task WaitForAsync(int atBarrier, int onLocks)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        var seen = (-1L, -1L);
-        while (DateTime.UtcNow < deadline)
-        {
-            await using var command = new NpgsqlCommand("""
-                SELECT count(*) FILTER (WHERE wait_event = 'advisory'),
-                       count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event <> 'advisory')
-                FROM pg_stat_activity
-                WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'
-                """, _holder);
-            await using (var reader = await command.ExecuteReaderAsync())
-            {
-                await reader.ReadAsync();
-                seen = (reader.GetInt64(0), reader.GetInt64(1));
-            }
-            if (seen == (atBarrier, onLocks))
-                return;
-            await Task.Delay(20);
-        }
-        throw new TimeoutException($"Expected {atBarrier} session(s) at the barrier and {onLocks} on locks; saw {seen.Item1} and {seen.Item2}.");
-    }
+    public Task WaitForAsync(int atBarrier, int onLocks) => KeyLockHarness.WaitForAsync(_holder, atBarrier, onLocks);
 
     public Task ReleaseAsync() => KeyLockHarness.ExecuteAsync(_holder, $"SELECT pg_advisory_unlock({LockId})");
 
