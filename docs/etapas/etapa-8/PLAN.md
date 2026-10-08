@@ -57,9 +57,156 @@
 
 **Fora da 8b:** filtro de cabeça, contador, `sequence`, M, liberação de chave e o teste de propriedade de ordem (8c). Com a ordenação ligada e só a 8b, as partições já valem, mas a ordem ainda não é garantida; nada disso sai em release antes da 8c.
 
-## 8c
+## 8c — cabeça por chave
 
-Detalhado no início do PR, a partir de `docs/plano-v0.2.md`, Etapa 8, e das decisões do `SPEC.md`.
+Desenho revisto em Oct 7, 2026, em duas rodadas de revisão. Primeiro, um revisor adversarial e uma sondagem no EF 10 + Npgsql 10 + PostgreSQL 18. Depois, um time de cinco revisores (concorrência, testes, EF e API, operação, escopo). As decisões marcadas "autor" foram tomadas com ele nessa data. A 8c sai em dois PRs: **8c-1** entrega a G4 com M = 1; **8c-2** acrescenta M ≥ 2 em rodadas. A G4 não depende de M, que só amortiza o claim e a marcação.
+
+**Fatos verificados**
+
+- Na sondagem (EF 10.0.4, Npgsql EF 10.0.3, PG 18):
+  - O `SavingChanges` roda sem transação, e um `SaveChanges` de um comando só não abre transação.
+  - Várias linhas de outbox viram um INSERT por linha, num comando só, em ordem de `id`, com transação.
+  - Os comandos da aplicação (schema padrão) vêm antes dos INSERTs da outbox (`waybill`).
+  - Travar as chaves no começo do comando faz deadlock com um `SaveChanges` de uma chave que toca a mesma linha da aplicação. Reproduzido.
+  - Em `REPEATABLE READ`, o upsert numa chave incrementada por outra transação depois do snapshot falha com 40001.
+- No código decompilado do EFCore.PG 10.0.3 (`NpgsqlModificationCommandBatch.Consume`): cada instrução sem `RETURNING` tem de afetar exatamente uma linha, senão o EF lança `DbUpdateConcurrencyException`. Nenhuma instrução pode ser anteposta ao lote do EF, nem mesmo um `SET`.
+- No código decompilado do EF 10.0.4: o `SavingChanges` roda uma vez, fora da estratégia de execução. O `TransactionStarted` roda a cada tentativa. Uma exceção no `SavingChanges` não chama o `SaveChangesFailed`.
+- No código do Waybill:
+  - O laço do dispatcher só emenda o ciclo seguinte com o lote cheio (`WaybillDispatcherService.cs:85`).
+  - O `RabbitMqTransport` publica o lote em paralelo (`Task.WhenAll`).
+  - O SQL `ordering-reset` apaga `settings`.
+
+### 8c-1 — G4 com M = 1
+
+**Desenho**
+
+| Tema | Decisão |
+| --- | --- |
+| Quem numera (autor) | O banco. Trigger `BEFORE INSERT` na `outbox`, `WHEN (NEW.key IS NOT NULL)`: se a linha de `settings` existe, faz o upsert em `outbox_keys (key text PK, seq bigint)` e grava `seq + 1` em `NEW.sequence`; se não existe, deixa `sequence` nula. A aplicação não grava `sequence`. A função é `SECURITY DEFINER` com `SET search_path = pg_catalog, waybill`, para que um papel só com INSERT na outbox continue enfileirando. `outbox_keys` tem `fillfactor = 80` (o incremento cabe em HOT) e nunca é limpa: nem pela retenção, nem por SQL de operação, porque recomeçar em 1 seria regressão para o consumidor |
+| Ordem de commit | O upsert roda na instrução do INSERT e a trava da chave fica até o commit. A `sequence` segue a ordem de commit e não deixa buraco no rollback nem no savepoint do EF. A transação anterior sai do ProcArray antes de soltar a trava, então todo snapshot que vê `n` vê `n − 1` |
+| Lista de chaves contra deadlock (autor) | Coluna `lock_keys text[]`, mapeada no `OutboxRecord`. Um interceptor de `SavingChanges`, sem I/O e sem estado, grava nas linhas Added a lista das chaves distintas do `SaveChanges` quando há duas ou mais. O trigger, se a lista vem e ainda não foi travada nesta transação, trava as chaves em ordem (`SELECT DISTINCT … ORDER BY key COLLATE "C"`, upsert que trava também as novas) e grava um marcador com `set_config(…, true)`. Em seguida, `NEW.lock_keys := NULL`. A trava cai no primeiro INSERT da outbox, o mesmo ponto do caso de uma chave. A lista vai como parâmetro (sem injeção), sem ida a mais. Sobrevive ao retry da estratégia de execução, e o rollback a savepoint desfaz junto a trava e o marcador. Funciona com pooling, `UseTransaction` e síncrono/assíncrono. É incondicional: com a ordenação desligada, o trigger só anula a coluna. O interceptor é registrado pelo `AddWaybillOutbox` (`ConfigureDbContext`), e o `Verify` do `Enqueue` recusa um contexto sem ele, com mensagem que diz o que fazer. Ordem de upgrade: migration da v0.2 antes do deploy de quem enfileira, porque o INSERT passa a ter a coluna |
+| `OrderByKey` | Sai de `WaybillOptions` e vai para `WaybillDispatcherOptions`, ainda em `PublicAPI.Unshipped`, ao lado de `Partitions` e `PartitionLease`. Do lado de quem enfileira não sobra opção |
+| Limite da chave (autor) | O `Enqueue` recusa chave acima de 512 bytes UTF-8, antes de gravar (ADR 0002), com a ordenação ligada ou desligada. Acima de ~2,7 kB, a chave estouraria o btree de `outbox_keys` no commit da aplicação. Muda a v0.1 para chaves longas; vai no CHANGELOG |
+| Isolamento (autor) | Documentar e testar: em `REPEATABLE READ` ou `SERIALIZABLE`, enfileirar ao mesmo tempo na mesma chave dá 40001, e repetir resolve |
+| Trava até o commit | Uma transação que enfileira K e depois escreve na linha R da aplicação faz deadlock com outra que escreve em R e depois enfileira K. Nenhuma lista cobre isso: é o preço do contador dentro da transação. O `OPERATIONS.md` documenta a regra de enfileirar no último `SaveChanges` antes do commit, `lock_timeout` e `idle_in_transaction_session_timeout` nas aplicações, a consulta para achar quem segura a chave (`pg_blocking_pids`) e a ordem de ativação (migration, produtores com o pacote da v0.2, dispatchers). Vale para todo produtor assim que a ordenação liga |
+| Ligar, mudar P, desligar | **Mudar P** passa a ser `UPDATE settings` mais a recriação de `outbox_partitions` numa transação, sem apagar `settings`. Com isso, o trigger não para de numerar. **Desligar** é o único SQL que apaga `settings`. **Ligar com tráfego:** transações abertas antes de `settings` (as RC que já inseriram, e as RR, pelo snapshot) gravam sem `sequence`, e essas mensagens não são ordenadas. O `OPERATIONS.md` diz isso e recomenda ligar com os produtores parados para ter ordem desde a primeira mensagem. **Claim sem ordenação** ganha `AND (key IS NULL OR NOT EXISTS (SELECT 1 FROM waybill.settings))`, avaliado uma vez por instrução (InitPlan): uma instância antiga, num deploy rolante, não reivindica linha com chave enquanto alguém ordena |
+| Trigger desligado | O dispatcher que ordena confere `pg_trigger.tgenabled` no startup e a cada `PartitionLease`. Trigger ausente ou desligado é erro crítico, como a divergência de P (8b): o laço para e o health check acusa. A heurística por `created_at` foi descartada, porque dava falso alarme na transição. `session_replication_role = replica` é por sessão e não é detectável; fica no `OPERATIONS.md` |
+| Estado terminal | Trigger `BEFORE UPDATE OF status` recusa sair de `published` ou `released`. O argumento do claim depende disso, e um SQL de operador que "desfaça" uma liberação daria primeira entrega fora de ordem |
+| Cabeça | A cabeça é a primeira linha com `sequence` não terminal da chave. Não terminal: `pending` (inclusive em espera), `claimed`, `dlq`. Terminal: `published`, `released`. "Bloqueante" depende só do status no snapshot, nunca do relógio. Linhas com chave e `sequence` nula não entram no filtro: a G4 vale a partir da primeira `sequence` |
+| Claim com M = 1 | Um instante só por instrução (`now AS MATERIALIZED (SELECT clock_timestamp())`), usado na condição de reivindicável, na posse da partição e no `UPDATE` externo. Candidatas: reivindicáveis no instante, com posse, sem antecessora não terminal (índice `(key, sequence)`, O(1)), em ordem de `id`, `LIMIT BatchSize`, `FOR UPDATE SKIP LOCKED`. No `UPDATE` externo repetem-se a condição de reivindicável e a posse, com o mesmo `now`. O filtro de cabeça não se repete, e o ADR 0008 prova por quê: terminal é irreversível e nenhuma antecessora nasce depois de uma sucessora visível. Com uma linha por chave no lote, a ordem do `RETURNING` não importa |
+| Chave quente | O `RETURNING` informa se alguma cabeça levada tem sucessora não terminal. Se tem, o ciclo seguinte é imediato. Sem isso, uma chave sozinha sairia a uma mensagem por `PollingInterval` |
+| `sequence` no envelope | `OutgoingMessage.Sequence { get; init; }` (`long?`, sem `required`, para não quebrar quem constrói a mensagem). Nula quer dizer não ordenada: sem chave, gravada antes de ligar, ou sessão em modo replica. O RabbitMQ manda o cabeçalho `waybill-sequence` como string decimal, como os outros |
+| DLQ e liberação | A linha na DLQ bloqueia a chave. O log de DLQ ganha `{Key}` e `{Sequence}`. Status `released`, com colunas `released_at` e `released_by`. O SQL do `OPERATIONS.md` (`<!-- key-release -->`) libera as linhas `dlq` de uma chave, grava data e `session_user`, e faz `RETURNING id, sequence`. As sequências devolvidas são as lacunas que o consumidor vai ver, e zero linhas quer dizer chave errada. Avisos: para `312 NO_ROUTE`, criar o binding e reenviar, não liberar; `released` não volta, e o trigger de estado terminal garante isso |
+| Métricas e diagnóstico | Gauge `waybill.outbox.blocked_keys`, emitido só enquanto `settings` existe, com índice parcial `(key) WHERE status = 'dlq' AND sequence IS NOT NULL`. Consultas prontas no `OPERATIONS.md`, executadas por teste: chaves bloqueadas com a cabeça, o motivo e quantas esperam atrás; cabeças em espera de `basic.return`; linhas não publicadas de uma chave e o dono da partição. O texto explica a leitura conjunta com `oldest_pending.age` |
+| Índices | `(key, sequence)` parcial em `sequence IS NOT NULL AND status IN ('pending','claimed','dlq')`. Com a ordenação desligada, nenhuma linha entra nele. Mais o da métrica |
+| Migration | Refaz a `SchemaV0_2`. O `Up` é idempotente em SQL cru: `IF NOT EXISTS`, e índice com `indisvalid = false` é removido com `DROP INDEX CONCURRENTLY` e recriado. Restrição com `NOT VALID` + `VALIDATE`. Índices com `CREATE INDEX CONCURRENTLY` fora da transação (`suppressTransaction`). O `Down` recusa (`RAISE EXCEPTION`) se `outbox_keys` tem linhas ou existe `released`. O `OPERATIONS.md` ganha uma seção de upgrade (conexão direta, sem pooler em modo transação; conferir transações longas e `pg_index.indisvalid`) e uma de rollback (o schema só anda para frente; desligar a ordenação antes de voltar o binário) |
+| Chave bloqueada com muitas à frente (autor) | Medida num teste de PR com oráculo de buffers do `EXPLAIN (ANALYZE, BUFFERS)`. A latência fica registrada na saída. Se o custo não couber, o ponteiro de cabeça vira PR próprio entre a 8c-1 e a 8c-2 |
+| G4 (autor) | **Por chave, a partir da primeira mensagem com `sequence`, a primeira cópia de cada mensagem a chegar ao broker chega depois da primeira cópia de todas as anteriores, na ordem de commit. Cópias repetidas podem chegar depois e são reconhecidas pelo `message_id`. Mensagens liberadas não chegam e deixam lacuna.** Vai para o escopo nesta etapa. No `GUARANTEES.md`, só na etapa 12, como manda o plano. A premissa da etapa 10 muda: regressão com `message_id` inédito só aparece depois da retenção do inbox. Isso fica registrado no `plano-v0.2.md` |
+| Documentos que mudam na 8c-1 | Escopo (G4 e linha "Ordenação"); `plano-v0.2.md` (bullets e cenários da 8c, divisão 8c-1/8c-2, três ADRs na etapa 8, nota para a etapa 10); ADR 0008, parte 1 (inclui por que o interceptor e o trigger não violam o ADR 0002, e os atores que mudam linhas por fora, um a um); `OPERATIONS.md`; CHANGELOG |
+
+**Testes que provam (8c-1)**
+
+Testes de concorrência com intercalação forçada: um trigger de teste filtrado por `application_name` espera numa barreira (`pg_advisory_xact_lock`). O teste só solta a barreira depois de ver as duas transações esperando em `pg_stat_activity`. `lock_timeout` de 10 s, retry do EF desligado.
+
+| Teste | Cenário | Resultado esperado | Onde |
+| --- | --- | --- | --- |
+| Protótipo do contador (medição) | EF real, 32 produtores: chaves distintas, chave quente (também com trabalho depois do `SaveChanges`), várias chaves por transação. Sem contador, trigger sozinho, trigger + `lock_keys`. Trava da lista por `DO UPDATE` sem efeito contra `SELECT … FOR UPDATE`. `log_lock_waits` ligado | p99 e vazão no `OPERATIONS.md` e no ADR. O p99 de ~1 s da chave quente do spike, que coincide com o `deadlock_timeout`, fica explicado | Local |
+| `G4_ListaDeChaves_SemDeadlock` (teoria) | (a) K1 e K2 em ordens opostas, chaves novas e existentes; (b) um `SaveChanges` de uma chave e um de duas na mesma linha da aplicação | Espera simultânea observada; zero exceções; dois commits. Controles negativos: sem `lock_keys`, (a) dá 40P01; com a trava anteposta ao comando, (b) dá 40P01 | PR |
+| `Limite_EscritaDepoisDeEnfileirar_PodeDarDeadlock` | Enfileirar K e depois escrever em R, contra escrever em R e depois enfileirar K | 40P01 reproduzido, como o `OPERATIONS.md` descreve | PR |
+| `G4_SequenciaContiguaNaOrdemDeCommit` | Rollback forçado (A segura a 1, B espera, A desfaz, B fica com a 1); falha de savepoint depois do trigger (segunda linha da outbox recusada por trigger de teste); leitor concorrente por amostragem | `sequence` 1..n sem buraco nem repetição. O leitor roda `count(*) = coalesce(max(sequence), 0)` numa instrução só, sempre verdadeiro | PR |
+| `G4_ListaDeChaves_NaoSobreviveAoSaveChanges` (teoria) | Rollback a savepoint, cancelamento, `AddDbContextPool(poolSize: 1)`, `UseTransaction` entre contextos, falha transitória com estratégia de retry | As chaves de `outbox_keys` são exatamente as enfileiradas; `lock_keys` nula em toda linha gravada | PR |
+| `G4_ChavesComSeparadoresEUnicode_ListaFiel` | Vírgula, aspas, `\`, `{}`, unicode, 512 bytes | Nenhum erro; `outbox_keys` fiel | PR |
+| `G4_AplicacaoEmRRouSerializable_Erro40001ERepetirResolve` (teoria) | Duas transações na mesma chave, retry desligado | 40001 numa; repetida, grava a `sequence` seguinte | PR |
+| `G4_ContextoSemInterceptor_RecusadoNoEnqueue` | Contexto criado com `new`, sem `AddWaybillOutbox` | `Enqueue` lança com mensagem que diz o que fazer | PR |
+| `Opcoes_ChaveAcimaDe512Bytes_RecusadaNoEnqueue` (unidade) | Chave de 513 bytes UTF-8 | Recusada antes de gravar | PR |
+| `G4_PapelSoComInsert_Enfileira` | Papel com INSERT só na outbox, ordenação ligada | Grava com `sequence` | PR |
+| `G4_TriggerDesligado_ErroCritico` | `DISABLE TRIGGER`, no startup e com o dispatcher rodando | Para com erro crítico nos dois casos | PR |
+| `G4_EstadoTerminal_NaoVolta` | `published` → `pending`, `released` → `pending` | Recusado pelo trigger | PR |
+| `G4_MarcacaoOuDevolucaoConcorrente_ClaimNaoLevaASeguinte` (nome do plano) | Cabeça travada numa transação aberta que (a) a marca `published` ou (b) a devolve a `pending` | Nada da chave no claim concorrente. Depois do commit: em (a), a sucessora sai no claim seguinte; em (b), a cabeça sai antes | PR |
+| `G4_PosseNoLimite_UmInstantePorInstrucao` | Relógio de teste: `testclock.clock_timestamp()` avança a cada chamada, via `Search Path=testclock,pg_catalog`; `lease_until` válido só na primeira leitura | Nada da partição reivindicado pela metade. Estrutural: uma só ocorrência de `clock_timestamp()` no claim ordenado | PR |
+| `G4_ChaveQuenteSozinha_NaoEsperaPollingInterval` | Uma chave com 100 pendentes, nenhuma outra, `PollingInterval` de 5 s | Drena sem esperar o intervalo entre mensagens | PR |
+| `G4_MensagemNaDlq_SoAquelaChaveParaEMetricaSobe` | Defeito numa chave com sucessoras | A chave para; as outras seguem; `blocked_keys` = 1; o log traz chave e `sequence` | PR |
+| `Operacao_LiberarChave` | SQL do `OPERATIONS.md`, como escrito | `RETURNING` com as sequências; `released_at`/`released_by` gravados; a chave volta a fluir; métrica em 0 | PR |
+| `Operacao_ConsultasDeDiagnostico` | Consultas do `OPERATIONS.md` sobre chave na DLQ, em espera e com dono | Devolvem a cabeça, o motivo e a fila atrás | PR |
+| `Operacao_MudarP_ComEscritaConcorrente_SemSequenceNula` | SQL de mudar P com produtores gravando | Nenhuma linha com chave e `sequence` nula depois de ligar | PR |
+| `G4_DispatcherSemOrdenacaoAindaVivo_NaoReivindicaLinhaComChave` | Instância antiga ao lado de `settings` | Só linhas sem chave | PR |
+| `Operacao_ReiniciarOrdenacao` (existente) | Ampliado | `outbox_keys` intacta; `blocked_keys` não emitido depois | PR |
+| `G4_LigarComTransacaoAberta_LinhaSemSequenceNaoOrdenada` | Transação RR aberta antes de `settings`, grava depois | `sequence` nula, como o `OPERATIONS.md` descreve; nenhum erro crítico | PR |
+| `G4_OrdenacaoLigadaComBacklog_OrdemValeAPartirDaPrimeiraSequence` | Linhas com chave anteriores a `settings` | As antigas drenam; as novas saem em ordem | PR |
+| `G4_TrocaDeDonoComLinhasEmVoo_ChaveEsperaOLeaseDasLinhas` | Partição vencida por SQL e assumida antes do lease da cabeça em voo | Nada da chave até o lease vencer; depois, em ordem | PR |
+| `G4_ChaveBloqueadaComCemMilAFrente_ClaimContinuaFluindo` | 100 mil sucessoras de uma chave na DLQ, de `id` antigo, geradas com `generate_series` e trigger desligado; outras chaves pendentes | As outras são reivindicadas; buffers do claim abaixo do limite; latência registrada | PR |
+| `G4_SequenceNoEnvelope` (+ RabbitMQ real) | Mensagem ordenada | `Sequence` no transporte; `waybill-sequence` no consumidor | PR |
+| `G4_Retencao_NaoApagaOutboxKeysNemReleased` | Retenção com chaves publicadas e uma liberada | `outbox_keys` intacta; `released` fica | PR |
+| `G4_OrdenacaoDesligada_SemContadorNemFiltro` (estrutural) | Sem `settings`, carga com chaves | `sequence` e `lock_keys` nulas. O SQL do claim é a constante da 8a mais a guarda de `settings`. `pg_stat_user_tables` mostra `outbox_keys` sem leitura nem escrita | PR |
+| `G4_Propriedade_PrimeiraEntregaEmOrdem` | N dispatchers, leases forçados a vencer, zumbis, timeouts com chamada abandonada, retornos e defeitos. Produtores geram inversão de `id` contra `sequence` de propósito. Entrega = aceitação no transporte falso, com contador global | Por chave, as primeiras ocorrências por `message_id` têm `sequence` estritamente crescente, conferida contra o banco. No fim, toda linha está `published`, `dlq` ou `released`, ou `pending` com antecessora `dlq`. A premissa de canal (FIFO) fica escrita no ADR | PR: 20 s (caos); agendado: 10 min |
+| `G4_Backlog_ClaimOrdenadoMedido` | 500 mil a 1 milhão de pendentes, chaves espalhadas e uma quente; custo de pular partições alheias | Latências e `EXPLAIN` no ADR; health `Healthy` e nenhum log de erro | Agendado |
+| `Schema_UpgradeDaV01ComBacklog_LinhasContinuamReivindicaveis` (existente) | Ampliado | Migration aditiva; o backlog drena | PR |
+| `Schema_MigracaoInterrompidaNoIndice_ReexecutarCompleta` | `pg_cancel_backend` durante o `CREATE INDEX CONCURRENTLY`, depois `MigrateAsync` de novo | Completa; nenhum índice com `indisvalid = false` | PR |
+| `Schema_DownComOutboxKeys_Recusa` | `Down` com `outbox_keys` preenchida | Recusa com a mensagem | PR |
+| Custo desligada | p99 da transação e vazão do claim contra a tag `v0.1.0-alpha` | No máximo 5% | Agendado |
+
+**Mutações da 8c-1** (cada uma quebra um teste nomeado):
+- tirar a lista;
+- `ORDER BY` só de um lado (trigger ou interceptor);
+- `is_local = false` no marcador;
+- não anular `lock_keys`;
+- o instante único;
+- `dlq` como bloqueante;
+- o filtro de cabeça;
+- a guarda de `settings` no claim sem ordenação;
+- o trigger de estado terminal;
+- a verificação de `tgenabled`;
+- o sinal de chave quente.
+
+O filtro de cabeça repetido no `UPDATE` externo não se repete por desenho (ADR 0008).
+
+**Pronto quando (8c-1):** os cenários acima verdes no PG 15 e 18; cada mutação quebra um teste nomeado; ADR 0008 (parte 1), escopo, `plano-v0.2.md` e `OPERATIONS.md` atualizados; propriedade e backlog com três execuções agendadas verdes antes de fechar a etapa 8.
+
+### 8c-2 — M ≥ 2 em rodadas
+
+Mais perto da linha de corte do plano. Desenho a fechar no início do PR, com base nestes pontos já levantados:
+
+- **Opção.** `MaxPerKey` (M) em `WaybillDispatcherOptions`, default 1, de 1 a 100, acima de 1 só com a ordenação ligada.
+- **Claim em três passos.**
+  - (1) Cabeças, como na 8c-1.
+  - (2) Sucessoras: para cada cabeça, `CROSS JOIN LATERAL (… ORDER BY sequence LIMIT M − 1 FOR UPDATE SKIP LOCKED)`, porque `FOR UPDATE` não aceita janela nem agregado no mesmo nível.
+  - (3) Corte por (posição da cabeça, `sequence`) até o lote efetivo B, com as cabeças primeiro. Prefixo numa CTE final: uma sucessora só fica se todas as não terminais entre a cabeça e ela estão no conjunto já cortado.
+  - O lote tem no máximo B linhas. Com B ocupado só por cabeças, M não age naquele ciclo. No meio aberto, M = 1.
+- **Rodadas como política do transporte.**
+  - O transporte declara se preserva a ordem dentro do lote. O RabbitMQ não preserva (`Task.WhenAll`, isolamento depois de um 406) e recebe rodadas. O Kafka da etapa 9 pode receber a série numa transação só. Isso é desenhado junto com a mudança do `ITransport` da etapa 9.
+  - "Uma mensagem por chave por lote" fica descrito como comportamento atual, não como contrato do `ITransport`.
+- **Desfecho interno de devolução, fora do `PublishResult`.**
+  - O `React` recebe os resultados reais da rodada 1 e as falhas de conexão de qualquer rodada. Conexão abre o breaker em qualquer rodada.
+  - Nenhuma rodada nova começa depois do pedido de shutdown.
+- **Prazo.**
+  - Sejam T0 o início da rodada 1 (relógio monotônico) e D a duração da rodada k − 1. A rodada k só começa se `PublishTimeout − (agora − T0) ≥ D`. Senão, as rodadas ≥ k voltam a `pending` sem gastar tentativa e sem pressão.
+  - Timeout numa rodada k > 1 não conta pressão. Exceção registrada no ADR 0003.
+  - Um lote com rodada não iniciada conta como saudável para o lote crescer.
+- **Defeito local.** Defeito de tamanho no meio da série conta como falha da rodada daquela chave.
+- **Vazão.** Por chave, M ÷ (claim + M idas de confirmação + marcação), documentada no `OPERATIONS.md`.
+- **Testes previstos.**
+  - `G4_SucessoraComIdMenor_LoteDeUm_CabecaSai`;
+  - `G4_AntecessoraDoMeio_PrefixoCorta` (travada, em espera, `dlq`);
+  - `G4_RodadasSeguemSequenceNaoId`;
+  - `G4_MaiorQueACadeiaELoteCurto_PrefixoPorChave`;
+  - `G4_CorteDoLote_NaoQuebraOPrefixo`;
+  - `G4_RodadaComRetornoDeN_NaoEnviaASeguinte`;
+  - `G4_DefeitoLocalNoMeioDaSerie_NaoEnviaASeguinte`;
+  - `G4_RodadaTardia` em três casos com `FakeTimeProvider` (não começa; estoura sem pressão; controle: timeout na rodada 1 conta pressão);
+  - `G4_ShutdownNaRodadaDois_PrimeiraEntregaEmOrdem`;
+  - a marcação concorrente e a troca de dono com M ≥ 2;
+  - a propriedade com M ≥ 2;
+  - unidade de `MaxPerKey`.
+
+**Armadilhas da 8c**
+
+- **`id` e `sequence` divergem dentro da chave.** O `id` nasce no `Enqueue` e a `sequence` no commit. Nenhuma lógica de lote pode deixar a sucessora ocupar o lugar da cabeça.
+- **`clock_timestamp()` muda dentro da instrução.** Com ordenação, um instante só por claim.
+- **Nada pode ser anteposto ao lote do EF.** Cada instrução tem de afetar exatamente uma linha.
+- **GUC volta com o rollback a savepoint e vaza entre usos da sessão.** Por isso a lista viaja na linha, não na sessão.
+- **`pg_stat_database.deadlocks` não serve como oráculo.** É cumulativo, atrasado e global. Os testes contam exceções e forçam a intercalação.
+
+**Fora da 8c:** detecção de gap e regressão no consumidor (etapa 10); `epoch` no transporte (etapa 9); API de liberação (v1.0).
 
 ## Pronto quando (8a)
 
