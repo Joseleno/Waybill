@@ -27,6 +27,9 @@ public sealed class G4_Ponteiro_EstatisticasVazias_TransacaoGrandeLinear(Postgre
             FROM generate_series(1, 50000) g
             """, connection, transaction))
             await insert.ExecuteNonQueryAsync(ct);
+        // The checks deferred to the commit run now, inside the transaction, so they count too.
+        await using (var immediate = new NpgsqlCommand("SET CONSTRAINTS ALL IMMEDIATE", connection, transaction))
+            await immediate.ExecuteNonQueryAsync(ct);
         await using var scans = new NpgsqlCommand(
             "SELECT seq_scan FROM pg_stat_xact_user_tables WHERE schemaname = 'waybill' AND relname = 'outbox'", connection, transaction);
         var sequentialScans = (long)(await scans.ExecuteScalarAsync(ct))!;
