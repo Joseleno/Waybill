@@ -44,8 +44,10 @@ rows it still holds. The host's `HostOptions.ShutdownTimeout` (30 seconds by def
 
 ## What to monitor
 
-**`waybill.outbox.oldest_pending.age`** (meter `Waybill`, unit `s`): the age of the oldest outbox message not yet
-published, measured on the database clock. It is 0 when nothing is waiting. A value that keeps growing means events
+**`waybill.outbox.oldest_pending.age`** (meter `Waybill`, unit `s`): the age of the oldest outbox message a claim
+could take, measured on the database clock. It is 0 when nothing is waiting. With ordering by key on, a message
+waiting behind an earlier one of its key does not count: a key stopped by the DLQ shows in `blocked_keys`, and a key
+stopped without one in `heads_repaired`. A value that keeps growing means events
 are not leaving: broker down, dispatcher stopped, or a dispatcher that cannot keep up. Alert on it staying above what
 your consumers can tolerate. If a sample fails (database unreachable), the gauge keeps its last value and an error is
 logged; it never drops to 0 because of a failure. The meter comes from the host's `IMeterFactory` when one is
@@ -174,8 +176,10 @@ COMMIT;
 
 - **`REPEATABLE READ` and `SERIALIZABLE`.** Two such transactions enqueuing the same key at the same time: one fails
   with 40001 (EF reports it as a transient failure). Retrying it succeeds. `READ COMMITTED`, PostgreSQL's default, just
-  waits. The head pointer adds no failure there: a message written at those levels is marked claimable at once, which
-  on a hot key only makes the claim look at more candidates.
+  waits. The head pointer adds no failure there, at a price: a message written at those levels is marked claimable at
+  once, so on a hot key fed at those levels the claim reads the key's whole queue again, as it did before the head
+  pointer. Finishing or deleting a message of an ordered key by hand (a release, a `DELETE`) at those levels is refused:
+  run it in `READ COMMITTED`.
 - **Waybill's triggers must stay enabled.** `outbox_sequence` numbers keyed messages; `outbox_head_check`,
   `outbox_head_promote` and `outbox_head_promote_on_delete` keep each key's first unfinished message marked claimable.
   A dispatcher that orders stops with a critical log if any is missing or disabled, or if its own sessions run with
@@ -186,8 +190,10 @@ COMMIT;
   unfinished one checks that one at its commit, locking it for an instant; the dispatcher publishing it at that moment
   waits for the commit to end. That is short, unless the application holds its transaction past that point:
   `SET CONSTRAINTS ALL IMMEDIATE` (the check then runs at the insert and the lock lasts the whole transaction), slow
-  deferred constraints of its own, synchronous replication, or `PREPARE TRANSACTION`. Order is kept; the batch waits, and
-  a lease that runs out meanwhile publishes those messages again (duplicates, never loss).
+  deferred constraints of its own, synchronous replication, or `PREPARE TRANSACTION`. Order is kept, but the
+  dispatcher instance waits with its batch, for as long as that transaction stays open: meanwhile it neither claims
+  nor renews its partitions, and the messages of the batch its marking already reached stay locked. Another instance
+  takes over its partitions once their lease runs out; its own messages go once the transaction ends.
 
 ### What it costs
 
@@ -235,8 +241,8 @@ refuses then. To go back to the 0.1 binaries, turn ordering off first (above) an
 With ordering on, a message of a key goes out only after every earlier message of that key was published. A message
 that reaches the DLQ therefore stops its key: the messages behind it wait, and the other keys keep flowing. The error
 log of the dead-lettering names the key and the sequence. **`waybill.outbox.blocked_keys`** (meter `Waybill`) counts
-the keys stopped this way; it is not reported while ordering is off. A stopped key also makes
-`waybill.outbox.oldest_pending.age` grow while the broker is fine: read the two together.
+the keys stopped this way; it is not reported while ordering is off. A stopped key does not show in
+`waybill.outbox.oldest_pending.age`, which counts only messages a claim could take: alert on `blocked_keys` itself.
 
 The keys stopped by the DLQ, the message that stops each one and how many wait behind it:
 
@@ -306,11 +312,12 @@ leave a key's first message unmarked, and the key then stops without a DLQ messa
 triggers disabled, an `UPDATE` run with `session_replication_role = replica`, a restore of part of the table, a
 hand-written `UPDATE` of `is_head`.
 
-Each dispatcher that orders by key walks a slice of 2,000 keys of its partitions on every partition upkeep and marks
-any such message, with an error log naming the key and the sequence. **`waybill.outbox.heads_repaired`** (meter
-`Waybill`) counts them, and stays at zero unless something changed the outbox outside Waybill: alert on any increase.
-A full pass over K keys takes K / 2,000 upkeeps, about every `(PartitionLease − Lease) / 4`. To find and mark them at
-once:
+On every partition upkeep, each dispatcher that orders by key walks the next slice of 2,000 keys (of all partitions,
+in key order) and marks any such message in the partitions it holds, with an error log naming the key and the
+sequence. **`waybill.outbox.heads_repaired`** (meter `Waybill`) counts them, and stays at zero unless something changed
+the outbox outside Waybill: alert on any increase. Each instance makes the full pass over the K keys with unfinished
+messages in K / 2,000 upkeeps, one about every `(PartitionLease − Lease) / 4`; more instances do not shorten it. To
+find and mark them at once:
 
 <!-- unmarked-heads -->
 ```sql

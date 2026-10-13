@@ -26,7 +26,7 @@ internal sealed class OutboxMetrics : IDisposable
             "waybill.outbox.oldest_pending.age",
             () => Volatile.Read(ref _oldestPendingAge),
             unit: "s",
-            description: "Age of the oldest outbox message not yet published (pending or claimed); 0 when there is none.");
+            description: "Age of the oldest outbox message a claim could take (pending or claimed, and with ordering by key the first unfinished one of its key); 0 when there is none.");
         _meter.CreateObservableGauge(
             "waybill.outbox.blocked_keys",
             BlockedKeysMeasurements,
