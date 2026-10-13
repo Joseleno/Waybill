@@ -37,15 +37,17 @@ public sealed class G4_ClaimOrdenado(PostgresFixture postgres)
     // that zombie's late statement when the claim runs: nothing of the key is taken. Once it commits, the mark lets the
     // next row out; the hand-back lets the head out first.
     [Theory]
-    [InlineData("published")]
-    [InlineData("pending")]
-    public async Task G4_MarcacaoOuDevolucaoConcorrente_ClaimNaoLevaASeguinte(string zombieWrites)
+    [InlineData("published", 1)]
+    [InlineData("pending", 1)]
+    [InlineData("published", 3)] // M ≥ 2: the series starts at the head; a locked head takes its series with it
+    [InlineData("pending", 3)]
+    public async Task G4_MarcacaoOuDevolucaoConcorrente_ClaimNaoLevaASeguinte(string zombieWrites, int maxPerKey)
     {
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);
         await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
         var transport = new FakeTransport();
-        var dispatcher = OrderingHarness.Create(dataSource, transport, OrderingHarness.Options(database, partitions: 4));
+        var dispatcher = OrderingHarness.Create(dataSource, transport, OrderingHarness.Options(database, partitions: 4), maxPerKey: maxPerKey);
         Assert.Null(await dispatcher.CheckOrderingAsync(atStartup: true, ct));
         await DispatcherHarness.EnqueueAsync(database, 2, key: _ => "K");
         await database.ExecuteAsync("""
@@ -65,7 +67,7 @@ public sealed class G4_ClaimOrdenado(PostgresFixture postgres)
 
         await late.CommitAsync(ct);
         await dispatcher.RunOnceAsync(ct);
-        Assert.Equal([zombieWrites == "published" ? 2L : 1L], await SequencesOfAsync(database, transport.Received.ToList()));
+        Assert.Equal(zombieWrites == "published" ? [2L] : maxPerKey == 1 ? [1L] : new List<long> { 1, 2 }, await SequencesOfAsync(database, transport.Received.ToList()));
     }
 
     [Fact]
