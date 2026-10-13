@@ -13,7 +13,9 @@ internal sealed class OutboxMetrics : IDisposable
 
     private readonly Meter _meter;
     private readonly bool _ownsMeter;
+    private readonly Counter<long> _headsRepaired;
     private double _oldestPendingAge;
+    private long _headsRepairedTotal;
 
     public OutboxMetrics(IMeterFactory? factory)
     {
@@ -24,12 +26,27 @@ internal sealed class OutboxMetrics : IDisposable
             "waybill.outbox.oldest_pending.age",
             () => Volatile.Read(ref _oldestPendingAge),
             unit: "s",
-            description: "Age of the oldest outbox message not yet published (pending or claimed); 0 when there is none.");
+            description: "Age of the oldest outbox message a claim could take (pending or claimed, and with ordering by key the first unfinished one of its key); 0 when there is none.");
         _meter.CreateObservableGauge(
             "waybill.outbox.blocked_keys",
             BlockedKeysMeasurements,
             unit: "{key}",
             description: "Keys stopped by a message in the outbox DLQ while ordering by key is on, until it is requeued or released; not reported while ordering is off.");
+        _headsRepaired = _meter.CreateCounter<long>(
+            "waybill.outbox.heads_repaired",
+            unit: "{message}",
+            description: "Messages a dispatcher found first in their key yet not marked claimable, and marked: zero unless something changed the outbox outside Waybill (a disabled trigger, a replica session, a restore).");
+    }
+
+    /// <summary>How many key heads this instance repaired since it started.</summary>
+    public long HeadsRepaired => Interlocked.Read(ref _headsRepairedTotal);
+
+    public void RecordHeadsRepaired(int count)
+    {
+        if (count == 0)
+            return;
+        Interlocked.Add(ref _headsRepairedTotal, count);
+        _headsRepaired.Add(count);
     }
 
     private long _blockedKeys = -1; // -1: ordering off, nothing to report

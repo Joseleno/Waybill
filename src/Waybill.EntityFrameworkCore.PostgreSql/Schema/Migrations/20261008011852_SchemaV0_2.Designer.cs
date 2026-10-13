@@ -122,6 +122,12 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("headers");
 
+                    b.Property<bool?>("IsHead")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("is_head");
+
                     b.Property<string>("Key")
                         .HasColumnType("text")
                         .HasColumnName("key");
@@ -184,7 +190,7 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
 
                     b.HasIndex("Id")
                         .HasDatabaseName("ix_outbox_claimable")
-                        .HasFilter("status IN ('pending', 'claimed')");
+                        .HasFilter("status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)");
 
                     b.HasIndex("Key")
                         .HasDatabaseName("ix_outbox_blocked_keys")

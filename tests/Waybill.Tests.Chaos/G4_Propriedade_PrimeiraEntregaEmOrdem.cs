@@ -135,6 +135,29 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
                 await Task.Delay(random.Next(0, 15), CancellationToken.None);
             }
         }, CancellationToken.None)).ToList();
+        // One more producer on a single hot key: its queue is long, and its head is finished while new rows arrive.
+        producers.Add(Task.Run(async () =>
+        {
+            while (clock.Elapsed < duration)
+            {
+                await using var scope = services.CreateAsyncScope();
+                var outbox = scope.ServiceProvider.GetRequiredService<IOutbox<AppDbContext>>();
+                outbox.Enqueue(new InvoicePaid(Guid.NewGuid(), Interlocked.Increment(ref amount)), "key-hot");
+                await scope.ServiceProvider.GetRequiredService<AppDbContext>().SaveChangesAsync(CancellationToken.None);
+            }
+        }, CancellationToken.None));
+        // The head pointer's invariant (PLAN.md), sampled in one statement while everything runs: in every snapshot, the
+        // first unfinished row of each key is marked. A mark is set in the same transaction that makes it needed.
+        long unmarkedHeads = 0, samples = 0;
+        var sampler = Task.Run(async () =>
+        {
+            while (clock.Elapsed < duration)
+            {
+                Interlocked.Add(ref unmarkedHeads, await UnmarkedHeadsAsync(database));
+                Interlocked.Increment(ref samples);
+                await Task.Delay(50, CancellationToken.None);
+            }
+        }, CancellationToken.None);
         // An operator releasing the keys the DLQ stops, now and then: the key moves on, leaving a gap.
         var released = 0;
         var operatorTask = Task.Run(async () =>
@@ -149,7 +172,7 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
                     """);
             }
         }, CancellationToken.None);
-        await Task.WhenAll(producers.Concat(slots).Append(operatorTask));
+        await Task.WhenAll(producers.Concat(slots).Append(operatorTask).Append(sampler));
 
         // Drain with one survivor, the broker stand-in calm, once every dead instance's leases ran out.
         Volatile.Write(ref calm, 1);
@@ -178,8 +201,11 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
             $"SELECT count(*) FROM waybill.outbox WHERE status = 'published' AND NOT (id = ANY('{{{string.Join(',', firstDeliveries.Select(d => d.Message.MessageId))}}}'::uuid[]))");
 
         TestContext.Current.SendDiagnosticMessage(
-            $"produced {amount}, published {published}, released {released} (delivered anyway {releasedDelivered}), deliveries {deliveries.Count} ({firstDeliveries.Count} first), late copies {lateCopies}, lost calls {lostCalls}, returns {returns}, defects {defects}, graceful {graceful}, deaths {deaths}, inversions {inversions}");
+            $"produced {amount}, published {published}, released {released} (delivered anyway {releasedDelivered}), deliveries {deliveries.Count} ({firstDeliveries.Count} first), late copies {lateCopies}, lost calls {lostCalls}, returns {returns}, defects {defects}, graceful {graceful}, deaths {deaths}, inversions {inversions}, unmarked heads {unmarkedHeads} in {samples} samples");
 
+        Assert.Equal(0, unmarkedHeads);      // the head pointer: no key's first unfinished row ever seen unmarked
+        Assert.Equal(0, await UnmarkedHeadsAsync(database));
+        Assert.True(samples > 0);
         Assert.Equal(0, inversions);         // first copies per key in commit order, released messages aside
         Assert.Equal(0, envelopeMismatches); // the transport saw the stored sequence (null when not ordered)
         Assert.Equal(0, stranded);           // nothing left that could still go: only what a DLQ head stops
@@ -191,6 +217,14 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
 
     private static int Amount(OutgoingMessage message) =>
         JsonDocument.Parse(message.Payload).RootElement.GetProperty("Amount").GetInt32();
+
+    // Keys whose first unfinished numbered row is not marked claimable, in one snapshot.
+    private static Task<long> UnmarkedHeadsAsync(TestDatabase database) => database.ScalarAsync("""
+        SELECT count(*) FROM waybill.outbox o
+        WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq') AND o.is_head IS NOT TRUE
+          AND o.sequence = (SELECT min(h.sequence) FROM waybill.outbox h
+                            WHERE h.key = o.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq'))
+        """);
 
     // Rows that could still be published: pending or claimed, and not behind a DLQ head of their key.
     private static Task<long> ClaimableAsync(TestDatabase database) => database.ScalarAsync("""

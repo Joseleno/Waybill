@@ -23,6 +23,8 @@ public sealed class G4_OrdenacaoDesligada_SemContadorNemFiltro(PostgresFixture p
 
         Assert.Equal(3, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE sequence IS NULL AND lock_keys IS NULL"));
         Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox_keys"));
+        // Unmarked by nothing: every row enters ix_outbox_claimable, as before the head pointer.
+        Assert.Equal(3, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE is_head"));
     }
 
     [Fact]
@@ -30,7 +32,10 @@ public sealed class G4_OrdenacaoDesligada_SemContadorNemFiltro(PostgresFixture p
     {
         Assert.DoesNotContain("outbox_keys", OutboxStore.ClaimSql);
         Assert.DoesNotContain("outbox_partitions", OutboxStore.ClaimSql);
-        Assert.DoesNotContain("sequence", OutboxStore.ClaimSql);
+        Assert.DoesNotContain("FROM waybill.outbox h", OutboxStore.ClaimSql);
+        // sequence appears only in ix_outbox_claimable's predicate, repeated so a generic plan can use the index.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(OutboxStore.ClaimSql, "sequence"));
+        Assert.Contains("AND (sequence IS NULL OR is_head)", OutboxStore.ClaimSql);
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(OutboxStore.ClaimSql, @"NOT EXISTS \(SELECT 1 FROM waybill\.settings\)").Count);
     }
 }

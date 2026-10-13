@@ -93,16 +93,34 @@ internal sealed class PartitionStore(NpgsqlDataSource dataSource)
         return await ReadSettingsAsync(command, cancellationToken).ConfigureAwait(false);
     }
 
-    // The trigger that numbers keyed rows while ordering is on (ADR 0008). 'O' fires in ordinary sessions, 'A' always;
-    // 'D' (ALTER TABLE … DISABLE TRIGGER) and 'R' (replica only) leave keyed rows unnumbered, so they go out unordered.
-    private const string NumberingTriggerSql =
-        "SELECT tgenabled FROM pg_trigger WHERE tgrelid = 'waybill.outbox'::regclass AND tgname = 'outbox_sequence'";
+    // The triggers ordering by key relies on (ADR 0008): the one that numbers keyed rows and the head pointer's check at
+    // the commit and promotions. 'O' fires in ordinary sessions, 'A' always; 'D' (ALTER TABLE … DISABLE TRIGGER) and 'R'
+    // (replica only) do not, and then keyed rows go out unordered or a key's next row is never marked.
+    internal static readonly string[] OrderingTriggers = ["outbox_sequence", "outbox_head_check", "outbox_head_promote", "outbox_head_promote_on_delete"];
 
-    /// <summary>Whether the numbering trigger exists and fires for the applications' sessions.</summary>
-    public async Task<bool> NumberingTriggerEnabledAsync(CancellationToken cancellationToken)
+    private const string OrderingTriggersOffSql = """
+        SELECT t.name FROM unnest($1::text[]) AS t(name)
+        WHERE NOT EXISTS (SELECT 1 FROM pg_trigger
+                          WHERE tgrelid = 'waybill.outbox'::regclass AND tgname = t.name AND tgenabled IN ('O', 'A'))
+        """;
+
+    /// <summary>The ordering triggers that are missing or do not fire for the applications' sessions, if any.</summary>
+    public async Task<List<string>> OrderingTriggersOffAsync(CancellationToken cancellationToken)
     {
-        await using var command = dataSource.CreateCommand(NumberingTriggerSql);
-        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is char state && state is 'O' or 'A';
+        await using var command = dataSource.CreateCommand(OrderingTriggersOffSql);
+        command.Parameters.Add(new NpgsqlParameter { Value = OrderingTriggers });
+        var off = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            off.Add(reader.GetString(0));
+        return off;
+    }
+
+    /// <summary>The session_replication_role of the dispatcher's sessions: under 'replica' no ordinary trigger fires.</summary>
+    public async Task<string> SessionReplicationRoleAsync(CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand("SHOW session_replication_role");
+        return (string)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
     /// <summary>

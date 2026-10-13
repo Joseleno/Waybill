@@ -15,12 +15,17 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // The ALTER TABLE takes an exclusive lock: behind a long transaction it would hold every producer waiting.
+            // is_head (the head pointer) has a constant default, so adding it touches only the catalog.
             migrationBuilder.Sql("""
+                SET LOCAL lock_timeout = '10s';
+
                 ALTER TABLE waybill.outbox
                     ADD COLUMN IF NOT EXISTS next_attempt_at timestamp with time zone,
                     ADD COLUMN IF NOT EXISTS lock_keys text[],
                     ADD COLUMN IF NOT EXISTS released_at timestamp with time zone,
-                    ADD COLUMN IF NOT EXISTS released_by text;
+                    ADD COLUMN IF NOT EXISTS released_by text,
+                    ADD COLUMN IF NOT EXISTS is_head boolean DEFAULT true;
 
                 CREATE TABLE IF NOT EXISTS waybill.settings (
                     id integer NOT NULL,
@@ -92,6 +97,21 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     INSERT INTO waybill.outbox_keys AS k (key, seq) VALUES (NEW.key, 1)
                     ON CONFLICT (key) DO UPDATE SET seq = k.seq + 1
                     RETURNING seq INTO NEW.sequence;
+                    -- The head pointer. Behind a row of this transaction (the last one numbered), never a head before the
+                    -- commit, and that row is invisible to the dispatcher: false, and nothing to check. Outside READ
+                    -- COMMITTED the check at commit would fail on a predecessor published meanwhile (40001): true, a
+                    -- harmless false positive. Behind an unfinished row of another transaction: decided at commit (null).
+                    IF current_setting('waybill.last_keyed', true) = NEW.key || ' ' || (NEW.sequence - 1) THEN
+                        NEW.is_head := false;
+                    ELSIF current_setting('transaction_isolation') <> 'read committed' THEN
+                        NEW.is_head := true;
+                    ELSIF (SELECT min(h.sequence) FROM waybill.outbox h
+                           WHERE h.key = NEW.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq')) < NEW.sequence THEN
+                        NEW.is_head := NULL;
+                    ELSE
+                        NEW.is_head := true;
+                    END IF;
+                    PERFORM set_config('waybill.last_keyed', NEW.key || ' ' || NEW.sequence, true);
                     RETURN NEW;
                 END $$;
 
@@ -117,6 +137,84 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     EXECUTE FUNCTION waybill.outbox_terminal_guard();
                 """);
 
+            // The head pointer: when a key's row finishes (published, released) or is deleted unfinished, its key's first
+            // unfinished row becomes claimable. Not tied to the settings row, so a key whose rows were numbered keeps
+            // moving across turning ordering off and on. VOLATILE: each query takes a new snapshot, so a promotion that
+            // waited for a producer's commit sees that producer's row. SECURITY DEFINER: whoever finishes the row (the
+            // dispatcher, an operator's release) needs no right on the mark. Only in READ COMMITTED: at a stricter level the
+            // queries see the transaction's snapshot, and a producer's row committed meanwhile would be left unmarked. The
+            // dispatcher already runs in READ COMMITTED; an operator's release or delete at another level is refused.
+            migrationBuilder.Sql("""
+                CREATE OR REPLACE FUNCTION waybill.outbox_head_promote() RETURNS trigger
+                LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, waybill AS $$
+                BEGIN
+                    IF current_setting('transaction_isolation') <> 'read committed' THEN
+                        RAISE EXCEPTION 'Finishing or deleting message % of ordered key % needs READ COMMITTED, and this transaction is %: the next message of the key could be left unclaimable. Run it again in READ COMMITTED.',
+                            OLD.id, OLD.key, current_setting('transaction_isolation')
+                            USING ERRCODE = 'object_not_in_prerequisite_state';
+                    END IF;
+                    UPDATE waybill.outbox s SET is_head = true
+                    WHERE s.id = (SELECT n.id FROM waybill.outbox n
+                                  WHERE n.key = OLD.key AND n.sequence IS NOT NULL AND n.status IN ('pending', 'claimed', 'dlq')
+                                  ORDER BY n.sequence
+                                  LIMIT 1)
+                      AND s.is_head IS NOT TRUE;
+                    RETURN NULL;
+                END $$;
+
+                CREATE OR REPLACE TRIGGER outbox_head_promote
+                    AFTER UPDATE OF status ON waybill.outbox
+                    FOR EACH ROW WHEN (OLD.sequence IS NOT NULL AND OLD.status IN ('pending', 'claimed', 'dlq')
+                                       AND NEW.status IN ('published', 'released'))
+                    EXECUTE FUNCTION waybill.outbox_head_promote();
+
+                CREATE OR REPLACE TRIGGER outbox_head_promote_on_delete
+                    AFTER DELETE ON waybill.outbox
+                    FOR EACH ROW WHEN (OLD.sequence IS NOT NULL AND OLD.status IN ('pending', 'claimed', 'dlq'))
+                    EXECUTE FUNCTION waybill.outbox_head_promote();
+                """);
+
+            // The head pointer, decided at the commit for a row inserted behind another transaction's unfinished row: that
+            // row may be finishing right now, its promotion unable to see this one. Lock the predecessor FOR SHARE SKIP
+            // LOCKED, re-checking it is unfinished. Locked: it stays unfinished until this commit ends, so whoever finishes
+            // it later waits for that and its promotion sees this row; the mark stays null. Skipped (the dispatcher or an
+            // operator is changing it) or finished: mark this row, at worst a harmless false positive. The producer never
+            // waits. The predecessor is chosen without a lock first, so SKIP LOCKED cannot slide to an older row.
+            migrationBuilder.Sql("""
+                CREATE OR REPLACE FUNCTION waybill.outbox_head_check() RETURNS trigger
+                LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, waybill AS $$
+                DECLARE
+                    predecessor uuid;
+                BEGIN
+                    SELECT h.id INTO predecessor FROM waybill.outbox h
+                    WHERE h.key = NEW.key AND h.sequence < NEW.sequence AND h.sequence IS NOT NULL
+                      AND h.status IN ('pending', 'claimed', 'dlq')
+                    ORDER BY h.sequence DESC
+                    LIMIT 1;
+                    IF predecessor IS NOT NULL THEN
+                        PERFORM 1 FROM waybill.outbox h
+                        WHERE h.id = predecessor AND h.status IN ('pending', 'claimed', 'dlq')
+                        FOR SHARE SKIP LOCKED;
+                        IF FOUND THEN
+                            RETURN NULL;
+                        END IF;
+                    END IF;
+                    UPDATE waybill.outbox SET is_head = true WHERE id = NEW.id AND is_head IS NOT TRUE;
+                    RETURN NULL;
+                END $$;
+
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'waybill.outbox'::regclass AND tgname = 'outbox_head_check') THEN
+                        CREATE CONSTRAINT TRIGGER outbox_head_check
+                            AFTER INSERT ON waybill.outbox
+                            DEFERRABLE INITIALLY DEFERRED
+                            FOR EACH ROW WHEN (NEW.sequence IS NOT NULL AND NEW.is_head IS NULL)
+                            EXECUTE FUNCTION waybill.outbox_head_check();
+                    END IF;
+                END $$;
+                """);
+
             migrationBuilder.Sql("ALTER TABLE waybill.outbox VALIDATE CONSTRAINT ck_outbox_status;", suppressTransaction: true);
 
             // An index left invalid by an interrupted CONCURRENTLY build would be kept by IF NOT EXISTS; drop it first.
@@ -126,7 +224,27 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                 "(key, sequence) WHERE sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq')");
             CreateIndexConcurrently(migrationBuilder, "ix_outbox_blocked_keys",
                 "(key) WHERE status = 'dlq' AND sequence IS NOT NULL");
+
+            // The head pointer: the claim index keeps only rows a claim can take. Built beside the v0.1 one under a
+            // temporary name, swapped in by renames (a short lock), the old one dropped CONCURRENTLY. Every step can run
+            // again: a temporary index left behind by a run that had already swapped is dropped at the end.
+            CreateIndexConcurrently(migrationBuilder, "ix_outbox_claimable_head", $"(id) WHERE {ClaimablePredicate}");
+            migrationBuilder.Sql("""
+                SET LOCAL lock_timeout = '10s';
+                DO $$
+                BEGIN
+                    IF pg_get_indexdef('waybill.ix_outbox_claimable'::regclass) NOT LIKE '%is_head%' THEN
+                        ALTER INDEX waybill.ix_outbox_claimable RENAME TO ix_outbox_claimable_v01;
+                        ALTER INDEX waybill.ix_outbox_claimable_head RENAME TO ix_outbox_claimable;
+                    END IF;
+                END $$;
+                """);
+            migrationBuilder.Sql("DROP INDEX CONCURRENTLY IF EXISTS waybill.ix_outbox_claimable_v01;", suppressTransaction: true);
+            migrationBuilder.Sql("DROP INDEX CONCURRENTLY IF EXISTS waybill.ix_outbox_claimable_head;", suppressTransaction: true);
         }
+
+        // Repeated word for word by every SQL that walks the index (OutboxStore), so a generic plan can prove it applies.
+        private const string ClaimablePredicate = "status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)";
 
         private static void CreateIndexConcurrently(MigrationBuilder migrationBuilder, string name, string definition)
         {
@@ -156,10 +274,17 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
 
                 DROP TRIGGER IF EXISTS outbox_sequence ON waybill.outbox;
                 DROP TRIGGER IF EXISTS outbox_terminal_guard ON waybill.outbox;
+                DROP TRIGGER IF EXISTS outbox_head_promote ON waybill.outbox;
+                DROP TRIGGER IF EXISTS outbox_head_promote_on_delete ON waybill.outbox;
+                DROP FUNCTION IF EXISTS waybill.outbox_head_promote();
+                DROP TRIGGER IF EXISTS outbox_head_check ON waybill.outbox;
+                DROP FUNCTION IF EXISTS waybill.outbox_head_check();
                 DROP FUNCTION IF EXISTS waybill.outbox_sequence();
                 DROP FUNCTION IF EXISTS waybill.outbox_terminal_guard();
                 DROP INDEX IF EXISTS waybill.ix_outbox_key_sequence;
                 DROP INDEX IF EXISTS waybill.ix_outbox_blocked_keys;
+                DROP INDEX IF EXISTS waybill.ix_outbox_claimable;
+                CREATE INDEX ix_outbox_claimable ON waybill.outbox (id) WHERE status IN ('pending', 'claimed');
 
                 ALTER TABLE waybill.outbox DROP CONSTRAINT IF EXISTS ck_outbox_status;
                 ALTER TABLE waybill.outbox ADD CONSTRAINT ck_outbox_status CHECK (status IN ('pending', 'claimed', 'published', 'dlq'));
@@ -167,7 +292,8 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     DROP COLUMN IF EXISTS next_attempt_at,
                     DROP COLUMN IF EXISTS lock_keys,
                     DROP COLUMN IF EXISTS released_at,
-                    DROP COLUMN IF EXISTS released_by;
+                    DROP COLUMN IF EXISTS released_by,
+                    DROP COLUMN IF EXISTS is_head;
 
                 DROP TABLE IF EXISTS waybill.outbox_keys;
                 DROP TABLE IF EXISTS waybill.settings;

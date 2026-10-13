@@ -36,10 +36,12 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     // the UPDATE: when FOR UPDATE meets a row another transaction changed and committed, PostgreSQL re-checks only the
     // predicates on the locked table (EvalPlanQual). A row waiting after a basic.return is not claimable until its
     // next_attempt_at (ADR 0006); the index cannot filter on the clock, so waiting rows are read and passed over.
+    // The candidates repeat ix_outbox_claimable's predicate word for word: a generic plan (auto-prepare) uses a partial
+    // index only when the query's own predicate proves it applies.
     private static string Claim(string candidateFilter = "", string rowFilter = "") => $"""
         WITH candidates AS MATERIALIZED (
             SELECT id FROM waybill.outbox
-            WHERE status IN ('pending', 'claimed')
+            WHERE status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)
               AND (status = 'pending' OR lease_until < clock_timestamp())
               AND (next_attempt_at IS NULL OR next_attempt_at <= clock_timestamp()){candidateFilter}
             ORDER BY id
@@ -77,20 +79,24 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     //   DLQ. Decided from the snapshot and not repeated on the UPDATE: an earlier row never leaves published or released
     //   (a trigger refuses it), and none appears after a later one is visible, since sequences follow commit order. With
     //   at most one row per key in the batch, a skipped or unclaimable head takes nothing behind it along.
+    //   Asked as "the key's least unfinished sequence", which the planner answers by one descent of ix_outbox_key_sequence
+    //   (min/max): as NOT EXISTS, a key dominating the statistics was probed by a sequential scan, row after row.
+    // - Head pointer: only marked rows (is_head) are candidates, so a long queue behind a stopped or busy head is never
+    //   read. The mark only narrows the candidates; the head is still decided here, from the snapshot.
     // - One instant per statement: the clock read once, for every row and for the lease it takes.
     internal static readonly string ClaimOrderedSql = """
         WITH now AS MATERIALIZED (SELECT clock_timestamp() AS t),
         candidates AS MATERIALIZED (
             SELECT o.id FROM waybill.outbox o, now
-            WHERE o.status IN ('pending', 'claimed')
+            WHERE o.status IN ('pending', 'claimed') AND (o.sequence IS NULL OR o.is_head)
               AND (o.status = 'pending' OR o.lease_until < now.t)
               AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= now.t)
               AND (o.key IS NULL OR EXISTS (
                     SELECT 1 FROM waybill.outbox_partitions p
                     WHERE p.partition = o.key_hash % $4 AND p.owner = $1 AND p.lease_until > now.t + $2))
-              AND (o.sequence IS NULL OR NOT EXISTS (
-                    SELECT 1 FROM waybill.outbox h
-                    WHERE h.key = o.key AND h.sequence < o.sequence AND h.status IN ('pending', 'claimed', 'dlq')))
+              AND (o.sequence IS NULL OR o.sequence = (
+                    SELECT min(h.sequence) FROM waybill.outbox h
+                    WHERE h.key = o.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq')))
             ORDER BY o.id
             LIMIT $3
             FOR UPDATE OF o SKIP LOCKED)
@@ -104,9 +110,9 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
                 SELECT 1 FROM waybill.outbox_partitions p
                 WHERE p.partition = o.key_hash % $4 AND p.owner = $1 AND p.lease_until > now.t + $2))
         RETURNING o.id, o.type, o.key, o.payload, o.content_type, o.headers, o.created_at, o.fence, o.sequence,
-                  o.sequence IS NOT NULL AND EXISTS (
-                      SELECT 1 FROM waybill.outbox s
-                      WHERE s.key = o.key AND s.sequence > o.sequence AND s.status IN ('pending', 'claimed', 'dlq'))
+                  o.sequence IS NOT NULL AND o.sequence < (
+                      SELECT max(s.sequence) FROM waybill.outbox s
+                      WHERE s.key = o.key AND s.sequence IS NOT NULL AND s.status IN ('pending', 'claimed', 'dlq'))
         """;
 
     // Every finishing statement is fenced (still claimed by this owner, with this fence) and returns what it changed.
@@ -147,14 +153,82 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     private const string ReleaseOwnedSql = "UPDATE waybill.outbox SET status = 'pending', lease_until = NULL WHERE owner = $1 AND status = 'claimed'";
 
     // The first row still in flight in claim order (ix_outbox_claimable), not min(created_at): with the broker down and a
-    // large backlog that would read every pending row on every sample. The age comes from the database clock.
-    private const string OldestPendingAgeSql = """
+    // large backlog that would read every pending row on every sample. The age comes from the database clock. With ordering
+    // on, a row waiting behind its key's head is not in the index: the age is that of the oldest row a claim could take.
+    internal const string OldestPendingAgeSql = """
         SELECT extract(epoch FROM clock_timestamp() - created_at)::float8
         FROM waybill.outbox
-        WHERE status IN ('pending', 'claimed')
+        WHERE status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)
         ORDER BY id
         LIMIT 1
         """;
+
+    // The head pointer's safety net (ADR 0008). Walks, in key order from after $1 (null: from the first), the next $2
+    // keys with an unfinished numbered row, jumping from key to key in ix_outbox_key_sequence (a recursive CTE, read only
+    // as far as the slice needs), and marks each key's first unfinished row left unmarked, in the partitions $4 of P = $3
+    // this instance holds. Waybill itself never leaves one so: whatever this marks, something outside it changed the outbox.
+    internal const string RepairHeadsSql = """
+        WITH RECURSIVE walk AS (
+            (SELECT o.key FROM waybill.outbox o
+             WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq') AND ($1::text IS NULL OR o.key > $1)
+             ORDER BY o.key LIMIT 1)
+            UNION ALL
+            SELECT (SELECT o.key FROM waybill.outbox o
+                    WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq') AND o.key > w.key
+                    ORDER BY o.key LIMIT 1)
+            FROM walk w
+            WHERE w.key IS NOT NULL),
+        slice AS MATERIALIZED (SELECT key FROM walk WHERE key IS NOT NULL LIMIT $2),
+        repaired AS (
+            UPDATE waybill.outbox o SET is_head = true
+            FROM slice s
+            WHERE o.id = (SELECT h.id FROM waybill.outbox h
+                          WHERE h.key = s.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq')
+                          ORDER BY h.sequence LIMIT 1)
+              AND o.is_head IS NOT TRUE AND o.key_hash % $3 = ANY ($4)
+            RETURNING o.key, o.sequence)
+        SELECT (SELECT max(key) FROM slice), (SELECT count(*) FROM slice), r.key, r.sequence
+        FROM (SELECT 1) AS one LEFT JOIN repaired r ON true
+        """;
+
+    // With ordering off, the claim takes numbered rows only when marked, and nothing finishes the heads that would mark
+    // the rest. The reset SQL marks them, but cannot see a row a producer wrote while settings existed and had not yet
+    // committed; a dispatcher that does not order marks what is left. Empty once the numbered backlog drained.
+    private const string MarkNumberedSql = """
+        UPDATE waybill.outbox SET is_head = true
+        WHERE sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq') AND is_head IS NOT TRUE
+        """;
+
+    /// <summary>Marks every unfinished numbered row claimable (ordering off); returns how many it marked.</summary>
+    public async Task<int> MarkNumberedClaimableAsync(CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(MarkNumberedSql);
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Repairs one slice of keys after <paramref name="after"/> (null: from the first key); see <see cref="RepairHeadsSql"/>.</summary>
+    /// <returns>Where the next slice starts (null once the walk reached the last key), and the rows marked.</returns>
+    public async Task<(string? Next, List<(string Key, long Sequence)> Repaired)> RepairHeadsAsync(
+        string? after, int slice, int partitions, int[] held, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(RepairHeadsSql);
+        command.Parameters.Add(new NpgsqlParameter { Value = (object?)after ?? DBNull.Value, NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text });
+        command.Parameters.Add(new NpgsqlParameter { Value = slice });
+        command.Parameters.Add(new NpgsqlParameter { Value = partitions });
+        command.Parameters.Add(new NpgsqlParameter { Value = held });
+        string? last = null;
+        long walked = 0;
+        var repaired = new List<(string, long)>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            last = reader.IsDBNull(0) ? null : reader.GetString(0);
+            walked = reader.GetInt64(1);
+            if (!reader.IsDBNull(2))
+                repaired.Add((reader.GetString(2), reader.GetInt64(3)));
+        }
+        return (walked < slice ? null : last, repaired);
+    }
 
     /// <summary>Claims up to a batch. With <c>partitions</c> (P, ordering by key), only keyed rows of partitions this owner holds (ADR 0007), and of each key only its head (ADR 0008).</summary>
     public async Task<List<ClaimedMessage>> ClaimAsync(

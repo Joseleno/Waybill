@@ -44,8 +44,10 @@ rows it still holds. The host's `HostOptions.ShutdownTimeout` (30 seconds by def
 
 ## What to monitor
 
-**`waybill.outbox.oldest_pending.age`** (meter `Waybill`, unit `s`): the age of the oldest outbox message not yet
-published, measured on the database clock. It is 0 when nothing is waiting. A value that keeps growing means events
+**`waybill.outbox.oldest_pending.age`** (meter `Waybill`, unit `s`): the age of the oldest outbox message a claim
+could take, measured on the database clock. It is 0 when nothing is waiting. With ordering by key on, a message
+waiting behind an earlier one of its key does not count: a key stopped by the DLQ shows in `blocked_keys`, and a key
+stopped without one in `heads_repaired`. A value that keeps growing means events
 are not leaving: broker down, dispatcher stopped, or a dispatcher that cannot keep up. Alert on it staying above what
 your consumers can tolerate. If a sample fails (database unreachable), the gauge keeps its last value and an error is
 logged; it never drops to 0 because of a failure. The meter comes from the host's `IMeterFactory` when one is
@@ -138,13 +140,19 @@ COMMIT;
 
 To turn ordering off, stop every dispatcher, clear the ordering state, and start them without `OrderByKey`. From then
 on, messages are not numbered. Never delete `waybill.outbox_keys`: turned on again, each key continues from its last
-sequence, where starting again at 1 would look like a regression to its consumers.
+sequence, where starting again at 1 would look like a regression to its consumers. The `UPDATE` makes every unfinished
+numbered message claimable without ordering: one waiting behind its key's head is otherwise left out of the claim, and
+behind a dead-lettered head (which stops nothing once ordering is off) it would never go.
 
 <!-- ordering-reset -->
 ```sql
+BEGIN;
+UPDATE waybill.outbox SET is_head = true
+WHERE sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq') AND is_head IS NOT TRUE;
 DELETE FROM waybill.outbox_partitions;
 DELETE FROM waybill.outbox_instances;
 DELETE FROM waybill.settings;
+COMMIT;
 ```
 
 ### Before turning it on
@@ -168,10 +176,24 @@ DELETE FROM waybill.settings;
 
 - **`REPEATABLE READ` and `SERIALIZABLE`.** Two such transactions enqueuing the same key at the same time: one fails
   with 40001 (EF reports it as a transient failure). Retrying it succeeds. `READ COMMITTED`, PostgreSQL's default, just
-  waits.
-- **The numbering trigger must stay enabled.** A dispatcher that orders stops with a critical log if
-  `waybill.outbox_sequence` is missing or disabled. Sessions with `session_replication_role = replica` (some restore
-  and replication tools) skip it: messages they write are not numbered and not ordered.
+  waits. The head pointer adds no failure there, at a price: a message written at those levels is marked claimable at
+  once, so on a hot key fed at those levels the claim reads the key's whole queue again, as it did before the head
+  pointer. Finishing or deleting a message of an ordered key by hand (a release, a `DELETE`) at those levels is refused:
+  run it in `READ COMMITTED`.
+- **Waybill's triggers must stay enabled.** `outbox_sequence` numbers keyed messages; `outbox_head_check`,
+  `outbox_head_promote` and `outbox_head_promote_on_delete` keep each key's first unfinished message marked claimable.
+  A dispatcher that orders stops with a critical log if any is missing or disabled, or if its own sessions run with
+  `session_replication_role = replica`. Other sessions with `replica` (some restore and replication tools) skip them:
+  messages they write are not numbered and not ordered, and changes they make may leave a key unmarked (see
+  "Unmarked heads" below).
+- **The dispatcher may wait for a producer's commit.** A producer whose message sits behind another transaction's
+  unfinished one checks that one at its commit, locking it for an instant; the dispatcher publishing it at that moment
+  waits for the commit to end. That is short, unless the application holds its transaction past that point:
+  `SET CONSTRAINTS ALL IMMEDIATE` (the check then runs at the insert and the lock lasts the whole transaction), slow
+  deferred constraints of its own, synchronous replication, or `PREPARE TRANSACTION`. Order is kept, but the
+  dispatcher instance waits with its batch, for as long as that transaction stays open: meanwhile it neither claims
+  nor renews its partitions, and the messages of the batch its marking already reached stay locked. Another instance
+  takes over its partitions once their lease runs out; its own messages go once the transaction ends.
 
 ### What it costs
 
@@ -186,9 +208,10 @@ absolute numbers:
 | Three keys out of twenty per transaction | baseline | about 600 per second, no deadlock |
 
 Publishing: one message per key per batch, so a key's throughput is about one message per round trip to the broker.
-The claim reads and passes over the queued rows of a key whose head waits (in the DLQ, or behind a long queue of its
-own): about 12 µs per row, so 120 ms per claim with 10 thousand rows queued behind one key and 1.2 s with 100
-thousand. Watch `waybill.outbox.blocked_keys` and release or requeue stopped keys promptly.
+The claim reads only each key's first unfinished message, never the queue behind it: with 100 thousand messages stopped
+behind a dead-lettered one, a claim of 100 messages reads about 4,500 buffers (p50 5.6 ms), and one hot key drains at
+the same cost per message whatever its queue. Publishing a message with others of its key behind it also marks the next
+one claimable: one more row update. Watch `waybill.outbox.blocked_keys` and release or requeue stopped keys promptly.
 
 `waybill.outbox_keys` keeps one row per key ever ordered, about 130 bytes each (10 million keys, about 1.3 GB). It is
 never cleaned: a key starting again at 1 would look like a regression to its consumers. Its size:
@@ -200,8 +223,11 @@ SELECT pg_size_pretty(pg_total_relation_size('waybill.outbox_keys'));
 ### Upgrading and rolling back
 
 The v0.2 migration builds its indexes `CONCURRENTLY`, outside the migration's transaction: run it over a direct
-connection (not a pooler in transaction mode), and expect it to wait for transactions already open. If it stops halfway,
-run it again: every step is idempotent and an index left invalid is rebuilt. Afterwards, nothing should be listed here:
+connection (not a pooler in transaction mode), and expect it to wait for transactions already open. Its short
+exclusive locks on the outbox (new columns, triggers, the swap of the claim index) give up after 10 seconds instead of
+holding every producer behind a long transaction. If it stops halfway, run it again: every step is idempotent and an
+index left invalid is rebuilt. The claim index is rebuilt with a narrower predicate, which a 0.1 dispatcher's claim
+cannot use: deploy the v0.2 dispatchers right after the migration. Afterwards, nothing should be listed here:
 
 ```sql
 SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
@@ -215,8 +241,8 @@ refuses then. To go back to the 0.1 binaries, turn ordering off first (above) an
 With ordering on, a message of a key goes out only after every earlier message of that key was published. A message
 that reaches the DLQ therefore stops its key: the messages behind it wait, and the other keys keep flowing. The error
 log of the dead-lettering names the key and the sequence. **`waybill.outbox.blocked_keys`** (meter `Waybill`) counts
-the keys stopped this way; it is not reported while ordering is off. A stopped key also makes
-`waybill.outbox.oldest_pending.age` grow while the broker is fine: read the two together.
+the keys stopped this way; it is not reported while ordering is off. A stopped key does not show in
+`waybill.outbox.oldest_pending.age`, which counts only messages a claim could take: alert on `blocked_keys` itself.
 
 The keys stopped by the DLQ, the message that stops each one and how many wait behind it:
 
@@ -246,7 +272,7 @@ Everything not yet published of one key, and the dispatcher that holds its parti
 <!-- key-rows -->
 ```sql
 SELECT o.sequence, o.id, o.status, o.attempts, o.next_attempt_at, o.lease_until, o.owner, o.dlq_reason,
-       p.owner AS partition_owner
+       p.owner AS partition_owner, o.is_head
 FROM waybill.outbox o
 LEFT JOIN waybill.settings s ON true
 LEFT JOIN waybill.outbox_partitions p ON p.partition = o.key_hash % s.partitions
@@ -274,6 +300,47 @@ attempt to publish it went unconfirmed (a timeout, a lost connection), that atte
 may still reach it after the key's later messages. Consumers then see a message older than ones they already have,
 which their inbox does not mistake for a duplicate. Retention keeps released messages, like the DLQ.
 
+Never delete a message of a key to get it moving: release it. A deleted message leaves no record of the gap, and an
+unconfirmed attempt to publish it may still arrive.
+
+### Unmarked heads
+
+The claim reads only the first unfinished message of each key, marked by `is_head` (with `is_head` false or null the
+message waits behind an earlier one of its key). Waybill keeps that mark itself: when a message is written, when its
+transaction commits, and when the one before it is published, released or deleted. Something outside Waybill can
+leave a key's first message unmarked, and the key then stops without a DLQ message to show for it: one of Waybill's
+triggers disabled, an `UPDATE` run with `session_replication_role = replica`, a restore of part of the table, a
+hand-written `UPDATE` of `is_head`.
+
+On every partition upkeep, each dispatcher that orders by key walks the next slice of 2,000 keys (of all partitions,
+in key order) and marks any such message in the partitions it holds, with an error log naming the key and the
+sequence. **`waybill.outbox.heads_repaired`** (meter `Waybill`) counts them, and stays at zero unless something changed
+the outbox outside Waybill: alert on any increase. Each instance makes the full pass over the K keys with unfinished
+messages in K / 2,000 upkeeps, one about every `(PartitionLease − Lease) / 4`; more instances do not shorten it. To
+find and mark them at once:
+
+<!-- unmarked-heads -->
+```sql
+SELECT o.key, o.sequence, o.id, o.status
+FROM waybill.outbox o
+WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq') AND o.is_head IS NOT TRUE
+  AND o.sequence = (SELECT min(h.sequence) FROM waybill.outbox h
+                    WHERE h.key = o.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq'))
+ORDER BY o.key;
+```
+
+<!-- mark-heads -->
+```sql
+UPDATE waybill.outbox o SET is_head = true
+WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq') AND o.is_head IS NOT TRUE
+  AND o.sequence = (SELECT min(h.sequence) FROM waybill.outbox h
+                    WHERE h.key = o.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq'))
+RETURNING o.key, o.sequence;
+```
+
+Marking is always safe: the claim still checks that a message is its key's first, so a mark too many costs one more
+look and nothing goes out of order. Both read every unfinished numbered message.
+
 ## PostgreSQL: isolation level
 
 The claim and the retention run as single statements at the session's default isolation, and they rely on
@@ -294,7 +361,9 @@ updates, so each message leaves dead tuples and dead index entries behind. Vacuu
 ALTER TABLE waybill.outbox SET (autovacuum_vacuum_scale_factor = 0.01, autovacuum_vacuum_threshold = 1000);
 ```
 
-Do not set a `fillfactor` on the outbox: it only helps HOT updates, and they cannot happen here.
+Do not set a `fillfactor` on the outbox: it only helps HOT updates, and they cannot happen here. With ordering by
+key, marking a key's next message claimable is one more such update per message published with others of its key
+behind it.
 
 A long-running transaction anywhere in the database (a report, an idle-in-transaction session, a standby with
 `hot_standby_feedback` running a long query) holds back the vacuum horizon. While it is open, dead tuples pile up and

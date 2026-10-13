@@ -45,6 +45,7 @@ internal sealed partial class OutboxDispatcher
     private readonly PartitionStore? _partitions;
     private readonly bool _ordered;
     private readonly TimeProvider _time;
+    private readonly OutboxMetrics? _metrics;
     private long? _lastUpkeep; // TimeProvider timestamp of the last partition upkeep that succeeded
 
     public OutboxDispatcher(
@@ -54,10 +55,12 @@ internal sealed partial class OutboxDispatcher
         IOptions<WaybillDispatcherOptions> dispatcherOptions,
         ILogger<OutboxDispatcher> logger,
         TimeProvider? timeProvider = null,
-        PartitionStore? partitions = null)
+        PartitionStore? partitions = null,
+        OutboxMetrics? metrics = null)
     {
         _store = store;
         _partitions = partitions;
+        _metrics = metrics;
         _ordered = dispatcherOptions.Value.OrderByKey;
         _transport = transport;
         _waybillOptions = waybillOptions;
@@ -93,6 +96,23 @@ internal sealed partial class OutboxDispatcher
 
     private PartitionStore Partitions => _partitions ?? throw new InvalidOperationException("Ordering by key needs the partition store.");
 
+    // The head pointer's safety net (ADR 0008): one slice of keys per partition upkeep, so a full pass over K keys takes
+    // K / RepairSlice upkeeps. Each slice is a few index descents per key.
+    internal const int RepairSlice = 2_000;
+    private string? _repairAfter; // where the next slice starts; null: from the first key
+
+    private async Task RepairHeadsAsync(CancellationToken cancellationToken)
+    {
+        if (HeldPartitions.Count == 0)
+            return;
+        var (next, repaired) = await _store.RepairHeadsAsync(
+            _repairAfter, RepairSlice, _options.Partitions, [.. HeldPartitions.Keys], cancellationToken).ConfigureAwait(false);
+        _repairAfter = next;
+        foreach (var (key, sequence) in repaired)
+            LogHeadRepaired(_logger, key, sequence);
+        _metrics?.RecordHeadsRepaired(repaired.Count);
+    }
+
     /// <summary>
     /// Checks that this instance agrees with the others on ordering (ADR 0007): with <c>OrderByKey</c>, the stored P and
     /// partition lease (created by the first instance, at startup); without it, that no instance orders. A disagreement
@@ -106,10 +126,15 @@ internal sealed partial class OutboxDispatcher
 
         if (!_ordered)
         {
-            return await _partitions.ReadSettingsAsync(cancellationToken).ConfigureAwait(false) is null
-                ? null
-                : "another dispatcher orders by key (waybill.settings exists) and this one does not, so it would claim keyed rows "
+            if (await _partitions.ReadSettingsAsync(cancellationToken).ConfigureAwait(false) is not null)
+                return "another dispatcher orders by key (waybill.settings exists) and this one does not, so it would claim keyed rows "
                     + "outside any partition. Set OrderByKey on every instance, or stop them all and turn ordering off as OPERATIONS.md shows";
+
+            // Rows numbered by a transaction still open when ordering was turned off, which the reset could not mark.
+            var marked = await _store.MarkNumberedClaimableAsync(cancellationToken).ConfigureAwait(false);
+            if (marked > 0)
+                LogNumberedMarked(_logger, marked);
+            return null;
         }
 
         var stored = atStartup
@@ -122,11 +147,19 @@ internal sealed partial class OutboxDispatcher
                 + $"has {Ordering.Partitions} and {Ordering.PartitionLease}. Every dispatcher must use the same values; change them with all "
                 + "dispatchers stopped, as OPERATIONS.md shows";
 
-        // Without the trigger, keyed messages are written unnumbered and would go out in any order (ADR 0008).
-        return await _partitions.NumberingTriggerEnabledAsync(cancellationToken).ConfigureAwait(false)
-            ? null
-            : "the trigger waybill.outbox_sequence, which numbers keyed messages while ordering is on, is missing or disabled. "
-                + "Run WaybillSchema.MigrateAsync, or ALTER TABLE waybill.outbox ENABLE TRIGGER outbox_sequence";
+        // Without the numbering trigger, keyed messages are written unnumbered and would go out in any order; without the
+        // head pointer's, a key's next message is never marked claimable and the key stops (ADR 0008).
+        var off = await _partitions.OrderingTriggersOffAsync(cancellationToken).ConfigureAwait(false);
+        if (off.Count > 0)
+            return $"the trigger(s) {string.Join(", ", off.Select(t => "waybill." + t))}, which ordering by key relies on, are missing or "
+                + "disabled. Run WaybillSchema.MigrateAsync, or " + string.Join("; ", off.Select(t => $"ALTER TABLE waybill.outbox ENABLE TRIGGER {t}"));
+
+        // The dispatcher's own marking must fire the promotion of a key's next message.
+        var role = await _partitions.SessionReplicationRoleAsync(cancellationToken).ConfigureAwait(false);
+        return role == "replica"
+            ? "session_replication_role is 'replica' for this dispatcher's sessions, so publishing a message would not mark the next "
+                + "message of its key claimable. Set it back to 'origin' for the dispatcher's role or connection string"
+            : null;
     }
 
     /// <summary>Runs one cycle.</summary>
@@ -138,6 +171,7 @@ internal sealed partial class OutboxDispatcher
         {
             HeldPartitions = await Partitions.MaintainAsync(Owner, Ordering, cancellationToken).ConfigureAwait(false);
             _lastUpkeep = _time.GetTimestamp();
+            await RepairHeadsAsync(cancellationToken).ConfigureAwait(false);
         }
 
         if (_breaker.IsOpen)
@@ -307,4 +341,14 @@ internal sealed partial class OutboxDispatcher
     [LoggerMessage(EventId = 16, Level = LogLevel.Warning,
         Message = "The broker is slow or pushing back: the batch size is now {BatchSize}. The breaker stays closed.")]
     private static partial void LogBatchReduced(ILogger logger, int batchSize);
+
+    [LoggerMessage(EventId = 17, Level = LogLevel.Error,
+        Message = "The first unfinished message of key {Key} (sequence {Sequence}) was not marked claimable, and is now. Waybill never "
+            + "leaves it so: something changed the outbox outside it (a disabled trigger, a session in replica mode, a restore, a manual "
+            + "UPDATE). See OPERATIONS.md, \"Unmarked heads\".")]
+    private static partial void LogHeadRepaired(ILogger logger, string key, long sequence);
+
+    [LoggerMessage(EventId = 18, Level = LogLevel.Information,
+        Message = "Ordering by key is off: {Count} message(s) numbered while it was on, by transactions still open when it was turned off, are now claimable.")]
+    private static partial void LogNumberedMarked(ILogger logger, int count);
 }

@@ -144,8 +144,15 @@ public sealed class Barrier : IAsyncDisposable
     /// <param name="database">The test database.</param>
     /// <param name="table">The table whose first written row stops the session: <c>waybill.outbox</c> or <c>invoices</c>.</param>
     /// <param name="operation"><c>INSERT</c> or <c>UPDATE</c>.</param>
-    public static async Task<Barrier> InstallAsync(TestDatabase database, string table, string operation)
+    /// <param name="atCommit">
+    /// Stop at the commit instead, after the head pointer's check of that first row (a constraint trigger deferred to the
+    /// commit, named to fire after <c>outbox_head_check</c>: deferred triggers fire per row, in name order).
+    /// </param>
+    public static async Task<Barrier> InstallAsync(TestDatabase database, string table, string operation, bool atCommit = false)
     {
+        var trigger = atCommit
+            ? $"CREATE CONSTRAINT TRIGGER zz_test_barrier AFTER {operation} ON {table} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.test_barrier();"
+            : $"CREATE TRIGGER test_barrier AFTER {operation} ON {table} FOR EACH ROW EXECUTE FUNCTION public.test_barrier();";
         await database.ExecuteAsync($"""
             CREATE OR REPLACE FUNCTION public.test_barrier() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
@@ -156,7 +163,7 @@ public sealed class Barrier : IAsyncDisposable
                 END IF;
                 RETURN NULL;
             END $$;
-            CREATE TRIGGER test_barrier AFTER {operation} ON {table} FOR EACH ROW EXECUTE FUNCTION public.test_barrier();
+            {trigger}
             """);
         var holder = new NpgsqlConnection(database.ConnectionString);
         await holder.OpenAsync();
@@ -172,6 +179,9 @@ public sealed class Barrier : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _holder.DisposeAsync();
-        await _database.ExecuteAsync("DROP TRIGGER IF EXISTS test_barrier ON waybill.outbox; DROP TRIGGER IF EXISTS test_barrier ON invoices");
+        await _database.ExecuteAsync("""
+            DROP TRIGGER IF EXISTS test_barrier ON waybill.outbox; DROP TRIGGER IF EXISTS test_barrier ON invoices;
+            DROP TRIGGER IF EXISTS zz_test_barrier ON waybill.outbox;
+            """);
     }
 }

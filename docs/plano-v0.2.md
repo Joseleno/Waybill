@@ -67,7 +67,7 @@ Dividida em dois PRs, porque a G4 não depende de M:
   - Mensagem na DLQ bloqueia a chave; métrica de chaves bloqueadas; liberação (`released`) e consultas de diagnóstico no `OPERATIONS.md`.
   - `outbox_keys` nunca é limpa; mudar P sem apagar `settings`.
   - ADR 0008, parte 1.
-- **Entre 8c-1 e 8c-2: ponteiro de cabeça.** Medido na 8c-1: o claim lê e pula as linhas de uma chave com fila longa à frente, de forma linear (1,19 s com 100 mil linhas).
+- **Entre 8c-1 e 8c-2: ponteiro de cabeça.** Medido na 8c-1: o claim lê e pula as linhas de uma chave com fila longa à frente, de forma linear (1,19 s com 100 mil linhas); a sondagem do desenho achou o mesmo numa chave quente sozinha (O(n²) para drenar). Uma marca por linha (`is_head`), decidida no INSERT e no commit do produtor e passada adiante quando uma linha termina, deixa no claim só as cabeças; o dispatcher repara marcas deixadas faltando por ação externa. ADR 0008, parte 1b. Com ele, a etapa 8 sai em cinco PRs (8a, 8b, 8c-1, ponteiro, 8c-2) em vez de três. **Gatilho de corte:** se a 8c-2 não fechar dentro das três semanas da etapa somadas a uma de folga, a etapa 11 sai da v0.2, como manda a linha de corte.
 - **8c-2, M ≥ 2 em rodadas.**
   - A k-ésima mensagem de cada chave sai na rodada k, como política do transporte, a ser desenhada com a mudança do `ITransport` da etapa 9.
   - ADR 0008, parte 2, e a exceção de pressão no ADR 0003.

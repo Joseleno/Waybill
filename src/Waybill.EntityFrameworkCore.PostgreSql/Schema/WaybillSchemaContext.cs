@@ -54,8 +54,14 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
             outbox.Property(m => m.ReleasedAt).HasColumnName("released_at");
             outbox.Property(m => m.ReleasedBy).HasColumnName("released_by");
 
-            // The dispatcher's claim walks this index in id (UUIDv7) order; it only holds rows still in flight.
-            outbox.HasIndex(m => m.Id).HasDatabaseName("ix_outbox_claimable").HasFilter("status IN ('pending', 'claimed')");
+            // The head pointer: true for a row the claim may take (its key's head, or a harmless false positive), false or
+            // null behind an earlier row of its key. Defaults to true, so anything that skips the triggers stays claimable.
+            outbox.Property(m => m.IsHead).HasColumnName("is_head").HasDefaultValue(true);
+
+            // The dispatcher's claim walks this index in id (UUIDv7) order; it only holds rows still in flight that a claim
+            // can take. Every SQL that walks it repeats the predicate, or a generic plan cannot use it.
+            outbox.HasIndex(m => m.Id).HasDatabaseName("ix_outbox_claimable")
+                .HasFilter("status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)");
 
             // A key's head is its first row not yet published or released; with ordering off no row has a sequence,
             // so neither index holds anything. The migration builds both CONCURRENTLY.
@@ -149,6 +155,7 @@ internal sealed class OutboxRow
     public string[]? LockKeys { get; set; }
     public DateTimeOffset? ReleasedAt { get; set; }
     public string? ReleasedBy { get; set; }
+    public bool? IsHead { get; set; }
 }
 
 internal sealed class KeyRow
