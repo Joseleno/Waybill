@@ -19,7 +19,11 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     public ValueTask DisposeAsync() => _container.DisposeAsync();
 
-    /// <summary>A fresh, empty database per test: isolation without truncating between tests.</summary>
+    /// <summary>
+    /// A fresh, empty database per test: isolation without truncating between tests. Each database is its own
+    /// Npgsql pool, so idle connections close after a couple of seconds instead of the default 300; otherwise
+    /// they pile up across tests until the server refuses new clients (53300).
+    /// </summary>
     public async Task<string> CreateDatabaseAsync()
     {
         var name = $"t_{Guid.NewGuid():N}";
@@ -29,7 +33,12 @@ public sealed class PostgresFixture : IAsyncLifetime
             await using var command = new NpgsqlCommand($"CREATE DATABASE \"{name}\"", connection);
             await command.ExecuteNonQueryAsync();
         }
-        return new NpgsqlConnectionStringBuilder(ConnectionString) { Database = name }.ConnectionString;
+        return new NpgsqlConnectionStringBuilder(ConnectionString)
+        {
+            Database = name,
+            ConnectionIdleLifetime = 2,
+            ConnectionPruningInterval = 1,
+        }.ConnectionString;
     }
 }
 

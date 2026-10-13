@@ -38,6 +38,14 @@ public sealed class WaybillDispatcherOptions
     public TimeSpan MaxReturnBackoff { get; set; } = TimeSpan.FromMinutes(10);
 
     /// <summary>
+    /// Publishes the messages of each aggregate key in commit order (v0.2, in progress). Off by default: ordering costs
+    /// throughput, and messages without a key are never ordered. Every dispatcher must agree; the setting is kept in the
+    /// database and checked at startup. The applications that enqueue need no setting: the database numbers keyed
+    /// messages while ordering is on.
+    /// </summary>
+    public bool OrderByKey { get; set; }
+
+    /// <summary>
     /// With <c>OrderByKey</c>: how many partitions (P) the keys are spread over, as <c>key_hash % P</c>. Each partition is
     /// held by one dispatcher at a time; more dispatchers than P leave the extra ones idle for keyed messages. Every
     /// dispatcher must use the same value. Default 16, from 1 to 1024.

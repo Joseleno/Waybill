@@ -22,13 +22,6 @@ public sealed class WaybillOptions
     public bool ThrowOnPendingMessagesAtDispose { get; set; }
 
     /// <summary>
-    /// Publishes the messages of each aggregate key in commit order (v0.2, in progress). Off by default: ordering costs
-    /// throughput, and messages without a key are never ordered. Every dispatcher must agree; the setting is kept in the
-    /// database and checked at startup.
-    /// </summary>
-    public bool OrderByKey { get; set; }
-
-    /// <summary>
     /// Registers a message type under a stable name. The name travels in the envelope and is the contract with
     /// consumers, so renaming or moving the class does not change it. Serialization uses the source-generated
     /// <paramref name="typeInfo"/>.

@@ -1,3 +1,3 @@
 #nullable enable
-Waybill.WaybillOptions.OrderByKey.get -> bool
-Waybill.WaybillOptions.OrderByKey.set -> void
+Waybill.OutgoingMessage.Sequence.get -> long?
+Waybill.OutgoingMessage.Sequence.init -> void

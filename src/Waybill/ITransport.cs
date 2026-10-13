@@ -35,6 +35,13 @@ public sealed class OutgoingMessage
     /// <summary>Aggregate key, if any.</summary>
     public string? Key { get; init; }
 
+    /// <summary>
+    /// The message's position among its key's messages, in commit order, when ordering by key is on: 1, 2, 3… with a gap
+    /// only where a message was released from the DLQ. Null for a message that is not ordered: without a key, written
+    /// before ordering was turned on, or published by a dispatcher that does not order.
+    /// </summary>
+    public long? Sequence { get; init; }
+
     /// <summary>Serialized message body.</summary>
     public required ReadOnlyMemory<byte> Payload { get; init; }
 

@@ -26,7 +26,7 @@ internal static class EnvelopeFactory
                 $"Message '{messageType.Name}' serializes to {payload.Length} bytes, above MaxPayloadBytes ({options.MaxPayloadBytes}). " +
                 "Large payloads belong in a claim-check managed by the application.");
 
-        var id = Guid.CreateVersion7();
+        var id = MessageId.NewV7();
         var keyHash = key is null ? KeyHash.Of(id) : KeyHash.Of(key);
         return new MessageEnvelope(id, messageType.Name, key, keyHash, payload, JsonContentType,
             Headers(Activity.Current, correlationId, tenantId));

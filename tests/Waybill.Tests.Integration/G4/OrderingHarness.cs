@@ -15,8 +15,8 @@ public static class OrderingHarness
         });
 
     internal static OutboxDispatcher Create(
-        NpgsqlDataSource dataSource, ITransport transport, WaybillDispatcherOptions options, TimeProvider? time = null) =>
-        DispatcherHarness.Create(dataSource, transport, options, time: time, orderByKey: true);
+        NpgsqlDataSource dataSource, ITransport transport, WaybillDispatcherOptions options, TimeProvider? time = null, LogSink? logs = null) =>
+        DispatcherHarness.Create(dataSource, transport, options, time: time, orderByKey: true, logs: logs);
 
     /// <summary>The partition of each message, as the claim computes it: key_hash % P.</summary>
     public static async Task<Dictionary<Guid, int>> PartitionOfAsync(TestDatabase database, int partitions)

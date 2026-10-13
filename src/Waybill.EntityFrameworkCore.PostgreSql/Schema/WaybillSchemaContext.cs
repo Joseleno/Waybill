@@ -28,7 +28,7 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
         modelBuilder.Entity<OutboxRow>(outbox =>
         {
             outbox.ToTable(WaybillSchema.OutboxTable, table => table.HasCheckConstraint(
-                "ck_outbox_status", "status IN ('pending', 'claimed', 'published', 'dlq')"));
+                "ck_outbox_status", "status IN ('pending', 'claimed', 'published', 'dlq', 'released')"));
             outbox.HasKey(m => m.Id).HasName("pk_outbox");
             outbox.Property(m => m.Id).HasColumnName("id").ValueGeneratedNever();
             outbox.Property(m => m.Type).HasColumnName("type");
@@ -48,8 +48,32 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
             outbox.Property(m => m.DlqReason).HasColumnName("dlq_reason");
             outbox.Property(m => m.NextAttemptAt).HasColumnName("next_attempt_at"); // after a basic.return (ADR 0006)
 
+            // Ordering by key (ADR 0008): the keys of one SaveChanges, locked in order by the numbering trigger and then
+            // cleared by it; and who released a dead-lettered row of a key, and when.
+            outbox.Property(m => m.LockKeys).HasColumnName("lock_keys");
+            outbox.Property(m => m.ReleasedAt).HasColumnName("released_at");
+            outbox.Property(m => m.ReleasedBy).HasColumnName("released_by");
+
             // The dispatcher's claim walks this index in id (UUIDv7) order; it only holds rows still in flight.
             outbox.HasIndex(m => m.Id).HasDatabaseName("ix_outbox_claimable").HasFilter("status IN ('pending', 'claimed')");
+
+            // A key's head is its first row not yet published or released; with ordering off no row has a sequence,
+            // so neither index holds anything. The migration builds both CONCURRENTLY.
+            outbox.HasIndex(m => new { m.Key, m.Sequence }).HasDatabaseName("ix_outbox_key_sequence")
+                .HasFilter("sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq')");
+            outbox.HasIndex(m => m.Key).HasDatabaseName("ix_outbox_blocked_keys")
+                .HasFilter("status = 'dlq' AND sequence IS NOT NULL");
+        });
+
+        // One row per key ever numbered, holding its last sequence. Never cleaned: starting a key again at 1 would look
+        // like a regression to its consumers. The increment rewrites only seq, so the row can be updated in place (HOT).
+        modelBuilder.Entity<KeyRow>(key =>
+        {
+            key.ToTable(WaybillSchema.KeysTable);
+            key.HasKey(k => k.Key).HasName("pk_outbox_keys");
+            key.Property(k => k.Key).HasColumnName("key");
+            key.Property(k => k.Seq).HasColumnName("seq");
+            key.HasStorageParameter("fillfactor", 80);
         });
 
         // Ordering by key (v0.2, ADR 0007). One row while ordering is on: P and the partition lease, shared by every
@@ -122,6 +146,15 @@ internal sealed class OutboxRow
     public DateTimeOffset? PublishedAt { get; set; }
     public string? DlqReason { get; set; }
     public DateTimeOffset? NextAttemptAt { get; set; }
+    public string[]? LockKeys { get; set; }
+    public DateTimeOffset? ReleasedAt { get; set; }
+    public string? ReleasedBy { get; set; }
+}
+
+internal sealed class KeyRow
+{
+    public required string Key { get; set; }
+    public long Seq { get; set; }
 }
 
 internal sealed class SettingsRow

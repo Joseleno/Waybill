@@ -143,6 +143,14 @@ public sealed class TestDatabase
         return Convert.ToInt64(await command.ExecuteScalarAsync());
     }
 
+    public async Task ExecuteAsync(string sql)
+    {
+        await using var connection = new NpgsqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync();
+    }
+
     public Task<long> OutboxCountAsync() => ScalarAsync("SELECT count(*) FROM waybill.outbox");
 }
 

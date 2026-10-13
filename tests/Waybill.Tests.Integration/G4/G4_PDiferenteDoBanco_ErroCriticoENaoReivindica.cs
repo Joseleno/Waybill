@@ -25,9 +25,9 @@ public sealed class G4_PDiferenteDoBanco_ErroCriticoENaoReivindica(PostgresFixtu
         await DispatcherHarness.EnqueueAsync(database, 10);
         var logs = new LogSink();
         await using var harness = new HealthHarness(database, new FakeTransport(), logs,
-            waybill: o => o.OrderByKey = true,
             dispatcher: o =>
             {
+                o.OrderByKey = true;
                 o.Partitions = partitions;
                 o.PartitionLease = TimeSpan.FromSeconds(partitionLeaseSeconds);
             });

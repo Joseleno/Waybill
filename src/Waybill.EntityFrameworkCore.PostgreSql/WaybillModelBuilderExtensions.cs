@@ -25,6 +25,7 @@ public static class WaybillModelBuilderExtensions
             outbox.Property(m => m.Payload).HasColumnName("payload");
             outbox.Property(m => m.ContentType).HasColumnName("content_type");
             outbox.Property(m => m.Headers).HasColumnName("headers").HasColumnType("jsonb");
+            outbox.Property(m => m.LockKeys).HasColumnName("lock_keys");
         });
         return modelBuilder;
     }

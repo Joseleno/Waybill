@@ -93,6 +93,18 @@ internal sealed class PartitionStore(NpgsqlDataSource dataSource)
         return await ReadSettingsAsync(command, cancellationToken).ConfigureAwait(false);
     }
 
+    // The trigger that numbers keyed rows while ordering is on (ADR 0008). 'O' fires in ordinary sessions, 'A' always;
+    // 'D' (ALTER TABLE … DISABLE TRIGGER) and 'R' (replica only) leave keyed rows unnumbered, so they go out unordered.
+    private const string NumberingTriggerSql =
+        "SELECT tgenabled FROM pg_trigger WHERE tgrelid = 'waybill.outbox'::regclass AND tgname = 'outbox_sequence'";
+
+    /// <summary>Whether the numbering trigger exists and fires for the applications' sessions.</summary>
+    public async Task<bool> NumberingTriggerEnabledAsync(CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(NumberingTriggerSql);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is char state && state is 'O' or 'A';
+    }
+
     /// <summary>
     /// One round of partition upkeep, before a claim and with nothing in flight: heartbeat, collection of long-dead
     /// instances, renewal, then acquisition up to the fair share <c>ceil(P / live)</c> or release of what exceeds it.

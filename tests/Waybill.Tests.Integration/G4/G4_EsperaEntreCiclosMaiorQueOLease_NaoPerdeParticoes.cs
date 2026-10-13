@@ -16,9 +16,9 @@ public sealed class G4_EsperaEntreCiclosMaiorQueOLease_NaoPerdeParticoes(Postgre
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);
         await using var harness = new HealthHarness(database, new FakeTransport(),
-            waybill: o => o.OrderByKey = true,
             dispatcher: o =>
             {
+                o.OrderByKey = true;
                 o.Partitions = 4;
                 o.PollingInterval = TimeSpan.FromSeconds(5); // idle cycles much longer than the partition lease
                 o.PublishTimeout = TimeSpan.FromMilliseconds(200);

@@ -7,3 +7,5 @@ Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.PartitionLease.
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.PartitionLease.set -> void
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.Partitions.get -> int
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.Partitions.set -> void
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.OrderByKey.get -> bool
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.OrderByKey.set -> void

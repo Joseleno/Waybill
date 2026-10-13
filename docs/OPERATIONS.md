@@ -31,7 +31,7 @@ Any number of instances may run either service against the same database.
 | `WaybillDispatcherOptions.MaxReturns` | 5 | How many times a message may come back unroutable (`basic.return`) before it goes to the DLQ. |
 | `WaybillDispatcherOptions.ReturnBackoff` | 1 minute | How long a message waits after its first return before it is published again. The wait doubles with each return, up to `MaxReturnBackoff`. With the defaults a message waits 1 + 2 + 4 + 8 = 15 minutes in all before its fifth return sends it to the DLQ: time to create the missing binding. Zero publishes it again on the next cycle, as in 0.1. |
 | `WaybillDispatcherOptions.MaxReturnBackoff` | 10 minutes | The longest single wait after a return. At most one day. |
-| `WaybillOptions.OrderByKey` | off | Ordering by key, being built for v0.2. See [Ordering by key](#ordering-by-key). |
+| `WaybillDispatcherOptions.OrderByKey` | off | Ordering by key, being built for v0.2. Set on the dispatchers only; the applications that enqueue need no setting. See [Ordering by key](#ordering-by-key). |
 | `WaybillDispatcherOptions.Partitions` | 16 | With `OrderByKey`: how many partitions (P) keys are spread over. From 1 to 1024; the same on every dispatcher. |
 | `WaybillDispatcherOptions.PartitionLease` | 60 seconds | With `OrderByKey`: how long a dispatcher holds a partition without renewing it, so how long the keys of a crashed dispatcher wait. At least twice the claim lease, a whole number of milliseconds, and the same on every dispatcher. Without `OrderByKey`: how often the dispatcher checks that no other one orders. Always positive and at most one day. |
 | `WaybillDispatcherOptions.MetricsInterval` | 15 seconds | How often the pending-age gauge is sampled. |
@@ -100,8 +100,12 @@ Replaying a queue or an offset older than the inbox retention is not covered.
 
 ## Ordering by key
 
-Ordering by key is being built for v0.2 and is off by default. What exists today is the partition lease it rests on;
-until the rest lands, turning `OrderByKey` on spreads keys over partitions but does **not** yet guarantee order.
+Ordering by key is new in v0.2 (not released yet) and is off by default. With `OrderByKey` on, the messages of each key
+are published in commit order: per key, the first copy of each message to reach the broker arrives after the first
+copy of every earlier one. Later copies (a republication after a lease ran out, an attempt left unconfirmed) can arrive
+at any time and carry the same message id, which the consumers' inbox recognizes. Each ordered message carries its
+position in the key, `sequence`, in the `waybill-sequence` header. Messages without a key are never ordered. One message
+per key is published at a time; several per key in one batch come later in v0.2.
 
 With `OrderByKey` on, each key belongs to a partition, `key_hash % Partitions`, and each partition is held by one
 dispatcher at a time. Dispatchers share the partitions evenly (at most `ceil(Partitions / live dispatchers)` each),
@@ -113,9 +117,28 @@ renew them every `(PartitionLease − claim lease) / 4` (7.5 seconds with the de
 dispatcher checks them at startup and every `PartitionLease`. A dispatcher whose values differ, or one without
 `OrderByKey` while the settings exist, stops with a critical log, and its health check reports `Unhealthy`.
 
-To turn ordering on, stop every dispatcher, set `OrderByKey` everywhere, and start them. To turn it off, or to change
-`Partitions` or `PartitionLease`, stop every dispatcher, clear the ordering state, and start them with the new
-configuration:
+To turn ordering on, stop every dispatcher, set `OrderByKey` on every dispatcher, and start them. While
+`waybill.settings` exists, the database numbers every message with a key as it is written; transactions already open
+when ordering is turned on may still write theirs unnumbered, and those are not ordered. For order from the first
+message, turn ordering on with the applications that enqueue stopped.
+
+To change `Partitions` or `PartitionLease`, stop every dispatcher, change the stored values (here to 32 partitions) and
+start them with the same values. The settings row stays, so messages keep being numbered meanwhile:
+
+<!-- ordering-change -->
+```sql
+BEGIN;
+UPDATE waybill.settings SET partitions = 32, partition_lease = interval '60 seconds';
+WITH old AS (DELETE FROM waybill.outbox_partitions RETURNING epoch)
+INSERT INTO waybill.outbox_partitions (partition, epoch)
+SELECT g, (SELECT coalesce(max(epoch), 0) FROM old) FROM generate_series(0, 31) AS g;
+DELETE FROM waybill.outbox_instances;
+COMMIT;
+```
+
+To turn ordering off, stop every dispatcher, clear the ordering state, and start them without `OrderByKey`. From then
+on, messages are not numbered. Never delete `waybill.outbox_keys`: turned on again, each key continues from its last
+sequence, where starting again at 1 would look like a regression to its consumers.
 
 <!-- ordering-reset -->
 ```sql
@@ -123,6 +146,133 @@ DELETE FROM waybill.outbox_partitions;
 DELETE FROM waybill.outbox_instances;
 DELETE FROM waybill.settings;
 ```
+
+### Before turning it on
+
+- **Upgrade order.** Apply the v0.2 schema (`WaybillSchema.MigrateAsync`) before deploying the applications that
+  enqueue with the v0.2 package: their INSERT carries a column the 0.1 schema does not have.
+- **Register the context with `AddDbContext`, `AddDbContextPool` or a context factory.** `AddWaybillOutbox` then adds an
+  interceptor that hands the database the keys of each `SaveChanges`, so it locks them in one order. A context built by
+  hand lacks it (a warning says so once): nothing is lost or reordered, but transactions that enqueue several keys may
+  deadlock and have to be retried.
+- **A key's counter is locked from the INSERT to the commit.** Transactions of the same key wait for each other.
+  Enqueue in the last `SaveChanges` before the commit: a transaction that enqueues a key and then writes an application
+  row deadlocks with one that writes that row and then enqueues the key, and no setting prevents it. Set
+  `lock_timeout` and `idle_in_transaction_session_timeout` for the applications, so a transaction left open does not
+  hold a key indefinitely. To find who holds a key:
+
+  ```sql
+  SELECT pid, pg_blocking_pids(pid) AS blocked_by, wait_event, now() - xact_start AS transaction_age, state, query
+  FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0;
+  ```
+
+- **`REPEATABLE READ` and `SERIALIZABLE`.** Two such transactions enqueuing the same key at the same time: one fails
+  with 40001 (EF reports it as a transient failure). Retrying it succeeds. `READ COMMITTED`, PostgreSQL's default, just
+  waits.
+- **The numbering trigger must stay enabled.** A dispatcher that orders stops with a critical log if
+  `waybill.outbox_sequence` is missing or disabled. Sessions with `session_replication_role = replica` (some restore
+  and replication tools) skip it: messages they write are not numbered and not ordered.
+
+### What it costs
+
+Measured with EF Core 10 and PostgreSQL 18, 32 producers, one machine (stage 8 prototype); compare the ratios, not the
+absolute numbers:
+
+| Case | Ordering off | Ordering on |
+| --- | --- | --- |
+| One new or existing key per transaction | baseline | 5% to 12% fewer transactions per second, same p99 |
+| One hot key for every transaction | — | about 350 transactions per second for that key, p99 about 600 ms |
+| The same, with 2 ms of work after the `SaveChanges` | — | about 170 per second: the key stays locked meanwhile |
+| Three keys out of twenty per transaction | baseline | about 600 per second, no deadlock |
+
+Publishing: one message per key per batch, so a key's throughput is about one message per round trip to the broker.
+The claim reads and passes over the queued rows of a key whose head waits (in the DLQ, or behind a long queue of its
+own): about 12 µs per row, so 120 ms per claim with 10 thousand rows queued behind one key and 1.2 s with 100
+thousand. Watch `waybill.outbox.blocked_keys` and release or requeue stopped keys promptly.
+
+`waybill.outbox_keys` keeps one row per key ever ordered, about 130 bytes each (10 million keys, about 1.3 GB). It is
+never cleaned: a key starting again at 1 would look like a regression to its consumers. Its size:
+
+```sql
+SELECT pg_size_pretty(pg_total_relation_size('waybill.outbox_keys'));
+```
+
+### Upgrading and rolling back
+
+The v0.2 migration builds its indexes `CONCURRENTLY`, outside the migration's transaction: run it over a direct
+connection (not a pooler in transaction mode), and expect it to wait for transactions already open. If it stops halfway,
+run it again: every step is idempotent and an index left invalid is rebuilt. Afterwards, nothing should be listed here:
+
+```sql
+SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
+```
+
+The schema only moves forward once ordering has numbered a key or released a message: the v0.2 migration's `Down`
+refuses then. To go back to the 0.1 binaries, turn ordering off first (above) and keep the v0.2 schema.
+
+### A key stopped by the DLQ
+
+With ordering on, a message of a key goes out only after every earlier message of that key was published. A message
+that reaches the DLQ therefore stops its key: the messages behind it wait, and the other keys keep flowing. The error
+log of the dead-lettering names the key and the sequence. **`waybill.outbox.blocked_keys`** (meter `Waybill`) counts
+the keys stopped this way; it is not reported while ordering is off. A stopped key also makes
+`waybill.outbox.oldest_pending.age` grow while the broker is fine: read the two together.
+
+The keys stopped by the DLQ, the message that stops each one and how many wait behind it:
+
+<!-- blocked-keys -->
+```sql
+SELECT d.key, d.sequence, d.id, d.dlq_reason,
+       (SELECT count(*) FROM waybill.outbox w
+        WHERE w.key = d.key AND w.sequence > d.sequence AND w.status IN ('pending', 'claimed')) AS waiting
+FROM waybill.outbox d
+WHERE d.status = 'dlq' AND d.sequence IS NOT NULL
+ORDER BY d.key;
+```
+
+Keys held up for now by a message waiting after a `basic.return` (they move again when it goes through, or stop when
+it reaches the DLQ):
+
+<!-- waiting-heads -->
+```sql
+SELECT key, sequence, id, attempts, next_attempt_at
+FROM waybill.outbox
+WHERE status = 'pending' AND sequence IS NOT NULL AND next_attempt_at > clock_timestamp()
+ORDER BY next_attempt_at;
+```
+
+Everything not yet published of one key, and the dispatcher that holds its partition:
+
+<!-- key-rows -->
+```sql
+SELECT o.sequence, o.id, o.status, o.attempts, o.next_attempt_at, o.lease_until, o.owner, o.dlq_reason,
+       p.owner AS partition_owner
+FROM waybill.outbox o
+LEFT JOIN waybill.settings s ON true
+LEFT JOIN waybill.outbox_partitions p ON p.partition = o.key_hash % s.partitions
+WHERE o.key = 'order-42' AND o.status NOT IN ('published', 'released')
+ORDER BY o.sequence NULLS FIRST
+LIMIT 20;
+```
+
+Two ways out. If the message can still go (for `312 NO_ROUTE`, create the binding), hand it back with the DLQ
+requeue above: it goes out first, then the rest of its key, in order. If it must never go, release it: it stays in the
+table as `released`, with who released it and when, and its key moves on without it. Its consumers will see a gap in
+the key's sequence at that point:
+
+<!-- key-release -->
+```sql
+UPDATE waybill.outbox
+SET status = 'released', released_at = clock_timestamp(), released_by = session_user
+WHERE key = 'order-42' AND status = 'dlq' AND sequence IS NOT NULL
+RETURNING id, sequence, dlq_reason;
+```
+
+The returned sequences are the gaps; no row returned means the key was mistyped. A released message never goes back
+to `pending` (the database refuses it): its successors may already be out. Releasing does not unsend: if an earlier
+attempt to publish it went unconfirmed (a timeout, a lost connection), that attempt may have reached the broker, or
+may still reach it after the key's later messages. Consumers then see a message older than ones they already have,
+which their inbox does not mistake for a duplicate. Retention keeps released messages, like the DLQ.
 
 ## PostgreSQL: isolation level
 
