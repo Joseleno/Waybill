@@ -246,7 +246,7 @@ As sementes por `generate_series` (100 mil, backlog, transições) gravam `is_he
 
 ### 8c-2 — M ≥ 2 em rodadas
 
-Rascunho de Oct 13, 2026, depois do ponteiro de cabeça (PR #20), a revisar antes do código. Parte dos pontos levantados nas revisões de Oct 7; o ponteiro mudou o claim. Sondagem própria em PG 18 (container descartável, tabela reduzida às colunas do claim, índices iguais aos da migration), com o SQL em `SONDAGEM-8C2-CLAIM.sql`.
+Rascunho de Oct 13, 2026, depois do ponteiro de cabeça (PR #20), em revisão por um time antes do código. Decisões marcadas "autor" tomadas com ele nessa data. Parte dos pontos levantados nas revisões de Oct 7; o ponteiro mudou o claim. Sondagem própria em PG 18 (container descartável, tabela reduzida às colunas do claim, índices iguais aos da migration), com o SQL em `SONDAGEM-8C2-CLAIM.sql`.
 
 **O que o ponteiro mudou**
 
@@ -271,8 +271,8 @@ Rascunho de Oct 13, 2026, depois do ponteiro de cabeça (PR #20), a revisar ante
 | --- | --- |
 | Opção | `MaxPerKey` (M) em `WaybillDispatcherOptions`, default 1, de 1 a 100, acima de 1 só com `OrderByKey`. Por instância, fora de `settings`: não muda a correção, só a vazão |
 | Claim (sondado) | Uma instrução, em CTEs: (1) `heads`, as cabeças como na 8c-1 (`LIMIT B … FOR UPDATE SKIP LOCKED`); (2) `budget`, B menos as cabeças; (3) `series`, para cada cabeça com `sequence`, as próximas `least(M − 1, budget)` não terminais da chave por `LATERAL`, numeradas por `rank` e marcadas reivindicáveis (`pending` ou lease vencido, sem espera de `basic.return`), com o prefixo no snapshot por janela; (4) `ranked`, corte por (`rank`, cabeça) até o orçamento; (5) `locked`, `FOR UPDATE SKIP LOCKED` das cortadas, com as condições repetidas no nível da trava (EvalPlanQual); (6) `prefix`, a série só segue enquanto todas as anteriores da chave travaram; (7) o `UPDATE` de cabeças e prefixo, com as condições de novo. M = 1 usa o `ClaimOrderedSql` atual, sem mudança |
-| Corte por rodada (muda o plano de Oct 7) | O corte é por (`rank`, posição da cabeça), não por (posição da cabeça, `sequence`): todas as segundas mensagens antes de qualquer terceira. Cortar por rodada preserva o prefixo por construção, reparte o lote entre as chaves e deixa o teste `G4_CorteDoLote_NaoQuebraOPrefixo` como guarda, não como mecanismo |
-| Rodadas no dispatcher (decisão a confirmar) | O dispatcher chama `PublishAsync` uma vez por rodada; a rodada k leva a k-ésima mensagem de cada chave cuja rodada k − 1 foi confirmada, mais, na rodada 1, as mensagens sem chave. O `ITransport` não muda: cada chamada continua com no máximo uma mensagem por chave. A declaração "preservo a ordem dentro do lote" fica para a etapa 9, com o Kafka, que é quem a usaria |
+| Corte por rodada (autor; muda o plano de Oct 7) | O corte é por (`rank`, posição da cabeça), não por (posição da cabeça, `sequence`): todas as segundas mensagens antes de qualquer terceira. Cortar por rodada preserva o prefixo por construção, reparte o lote entre as chaves e deixa o teste `G4_CorteDoLote_NaoQuebraOPrefixo` como guarda, não como mecanismo |
+| Rodadas no dispatcher (autor) | O dispatcher chama `PublishAsync` uma vez por rodada; a rodada k leva a k-ésima mensagem de cada chave cuja rodada k − 1 foi confirmada, mais, na rodada 1, as mensagens sem chave. O `ITransport` não muda: cada chamada continua com no máximo uma mensagem por chave. A declaração "preservo a ordem dentro do lote" fica para a etapa 9, com o Kafka, que é quem a usaria |
 | Desfecho interno | Uma mensagem que não chega a ser enviada (rodada anterior da chave sem `Confirmed`, prazo, shutdown) volta a `pending` sem gastar tentativa, pelo `RetrySql`, com um desfecho interno do dispatcher fora do `PublishResult`. Uma rodada com `Returned` ou `Defect` de uma chave interrompe só aquela chave |
 | Prazo | T0 é o início da rodada 1 (relógio monotônico do `TimeProvider`) e D é a duração da rodada k − 1. A rodada k só começa se `PublishTimeout − (agora − T0) ≥ D` e recebe como prazo o que sobra. Assim o lote inteiro cabe no `PublishTimeout` e o lease (`PublishTimeout + LeaseMargin`) cobre a marcação |
 | Reação (ADR 0003) | O `React` recebe os resultados da rodada 1 e as falhas de conexão de qualquer rodada: conexão abre o breaker em qualquer rodada. Timeout ou nack numa rodada k > 1 não conta pressão (exceção registrada no ADR 0003), e um lote com rodada não iniciada conta como saudável para o lote crescer. No meio aberto, B = 1 e M não age |
@@ -281,7 +281,7 @@ Rascunho de Oct 13, 2026, depois do ponteiro de cabeça (PR #20), a revisar ante
 | Marcação | Um só `FinishAsync` no fim do lote, numa transação, como hoje. Ordem no `RETURNING` irrelevante: o C# agrupa por chave e ordena por `sequence` para montar as rodadas |
 | Laço | `MoreOfKeys` passa a olhar só a última linha reivindicada de cada chave, cujo sinal no `RETURNING` já diz "há mais atrás do que veio no lote". Sem mudança de SQL |
 | Vazão | Por chave, M mensagens por (claim + M idas de confirmação + marcação), descrita no `OPERATIONS.md` com a medida |
-| Issue #21 (decisão do autor) | Entram os três itens que esta PR toca: `lock_timeout` no `FinishAsync`, âncora da varredura em dois SQL e erro da varredura capturado com log próprio sem derrubar o ciclo. O `lock_timeout` tem uma troca a decidir na revisão. Esperar evita duplicata, porque nenhum outro claim leva a linha travada. Desistir libera a instância, mas republica o lote depois do lease. A favor de esperar: a espera normal é só o commit do produtor, e a longa já está documentada como limite |
+| Issue #21 (decisão do autor) | Entram os três itens que esta PR toca: `lock_timeout` no `FinishAsync`, âncora da varredura em dois SQL e erro da varredura capturado com log próprio sem derrubar o ciclo. No `lock_timeout`, o autor decidiu esperar, com documentação: nenhum outro claim leva a linha travada, então não há duplicata; a espera normal é só o commit do produtor, e a longa já está documentada como limite. O item fecha com um teste que prova que a espera termina sem duplicar |
 | Fora | Declaração de ordem do `ITransport` (etapa 9); série numa transação Kafka (etapa 9); M por chave ou adaptativo |
 
 **Testes previstos** (integração, salvo indicação)
@@ -307,7 +307,7 @@ Rascunho de Oct 13, 2026, depois do ponteiro de cabeça (PR #20), a revisar ante
 - Concorrência: a marcação concorrente e a troca de dono com M ≥ 2.
 - Caos: a propriedade com M ≥ 2 (sorteado por instância), com a invariante do ponteiro.
 - Unidade: `MaxPerKey` (limites e exigência de `OrderByKey`); montagem das rodadas a partir do lote.
-- Issue #21: `lock_timeout` conforme a decisão; `Repair_PlanoGenerico_UsaOIndice` (estrutural); `Repair_ErroNaVarredura_NaoDerrubaOCiclo`.
+- Issue #21: `Finish_EsperaOCommitDoProdutor_SemDuplicata`; `Repair_PlanoGenerico_UsaOIndice` (estrutural); `Repair_ErroNaVarredura_NaoDerrubaOCiclo`.
 
 **Mutações previstas:**
 - prefixo só no snapshot (sem o passo `prefix`);
