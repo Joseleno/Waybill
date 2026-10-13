@@ -34,6 +34,23 @@ public sealed class G4_Rodadas_Serie(PostgresFixture postgres)
         Assert.False(string.IsNullOrEmpty(why));
     }
 
+    // The head itself waits after a basic.return (ADR 0006): nothing of its key goes. Taken as a head only to be dropped
+    // by the UPDATE, it would have brought its successors along without it.
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public async Task G4_CabecaEmEspera_NadaDaChaveSai(int maxPerKey)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (database, store) = await KeyAsync(rows: 3, keys: ["K", "L"]);
+        await database.ExecuteAsync("UPDATE waybill.outbox SET next_attempt_at = clock_timestamp() + interval '1 hour', attempts = 1 WHERE key = 'K' AND sequence = 1");
+
+        var claimed = await store.ClaimAsync(Owner, 10, Lease, ct, partitions: 4, maxPerKey: maxPerKey);
+
+        Assert.DoesNotContain(claimed, c => c.Message.Key == "K");
+        Assert.Equal(maxPerKey, claimed.Count(c => c.Message.Key == "L"));
+    }
+
     // Locked by another session (a concurrent mark, a zombie's late hand-back): SKIP LOCKED passes over it, and the claim
     // must not take what comes after it.
     [Fact]
