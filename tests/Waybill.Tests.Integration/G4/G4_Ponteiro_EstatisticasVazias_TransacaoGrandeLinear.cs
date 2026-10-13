@@ -15,6 +15,8 @@ public sealed class G4_Ponteiro_EstatisticasVazias_TransacaoGrandeLinear(Postgre
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);
         await KeyLockHarness.EnableOrderingAsync(database);
+        // Truncated: the planner believes the table empty (no pages, no rows), the case where the sondagem saw it.
+        await database.ExecuteAsync("TRUNCATE waybill.outbox");
         await using var connection = new NpgsqlConnection(database.ConnectionString);
         await connection.OpenAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
@@ -35,7 +37,9 @@ public sealed class G4_Ponteiro_EstatisticasVazias_TransacaoGrandeLinear(Postgre
         var sequentialScans = (long)(await scans.ExecuteScalarAsync(ct))!;
         await transaction.CommitAsync(ct);
 
-        Assert.True(sequentialScans < 10, $"{sequentialScans} sequential scans of the outbox for 50 thousand inserted rows");
+        // A few (13 measured): each trigger query's first executions get a custom plan, made on a table believed empty;
+        // then the cached generic plan descends the index. One per row would be tens of thousands.
+        Assert.True(sequentialScans < 100, $"{sequentialScans} sequential scans of the outbox for 50 thousand inserted rows");
         Assert.Equal(5000, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE is_head"));
     }
 }

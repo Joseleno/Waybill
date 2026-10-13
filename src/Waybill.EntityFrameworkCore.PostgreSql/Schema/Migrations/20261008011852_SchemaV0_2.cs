@@ -167,6 +167,47 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     EXECUTE FUNCTION waybill.outbox_head_promote();
                 """);
 
+            // The head pointer, decided at the commit for a row inserted behind another transaction's unfinished row: that
+            // row may be finishing right now, its promotion unable to see this one. Lock the predecessor FOR SHARE SKIP
+            // LOCKED, re-checking it is unfinished. Locked: it stays unfinished until this commit ends, so whoever finishes
+            // it later waits for that and its promotion sees this row; the mark stays null. Skipped (the dispatcher or an
+            // operator is changing it) or finished: mark this row, at worst a harmless false positive. The producer never
+            // waits. The predecessor is chosen without a lock first, so SKIP LOCKED cannot slide to an older row.
+            migrationBuilder.Sql("""
+                CREATE OR REPLACE FUNCTION waybill.outbox_head_check() RETURNS trigger
+                LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, waybill AS $$
+                DECLARE
+                    predecessor uuid;
+                BEGIN
+                    SELECT h.id INTO predecessor FROM waybill.outbox h
+                    WHERE h.key = NEW.key AND h.sequence < NEW.sequence AND h.sequence IS NOT NULL
+                      AND h.status IN ('pending', 'claimed', 'dlq')
+                    ORDER BY h.sequence DESC
+                    LIMIT 1;
+                    IF predecessor IS NOT NULL THEN
+                        PERFORM 1 FROM waybill.outbox h
+                        WHERE h.id = predecessor AND h.status IN ('pending', 'claimed', 'dlq')
+                        FOR SHARE SKIP LOCKED;
+                        IF FOUND THEN
+                            RETURN NULL;
+                        END IF;
+                    END IF;
+                    UPDATE waybill.outbox SET is_head = true WHERE id = NEW.id AND is_head IS NOT TRUE;
+                    RETURN NULL;
+                END $$;
+
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'waybill.outbox'::regclass AND tgname = 'outbox_head_check') THEN
+                        CREATE CONSTRAINT TRIGGER outbox_head_check
+                            AFTER INSERT ON waybill.outbox
+                            DEFERRABLE INITIALLY DEFERRED
+                            FOR EACH ROW WHEN (NEW.sequence IS NOT NULL AND NEW.is_head IS NULL)
+                            EXECUTE FUNCTION waybill.outbox_head_check();
+                    END IF;
+                END $$;
+                """);
+
             migrationBuilder.Sql("ALTER TABLE waybill.outbox VALIDATE CONSTRAINT ck_outbox_status;", suppressTransaction: true);
 
             // An index left invalid by an interrupted CONCURRENTLY build would be kept by IF NOT EXISTS; drop it first.
@@ -229,6 +270,8 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                 DROP TRIGGER IF EXISTS outbox_head_promote ON waybill.outbox;
                 DROP TRIGGER IF EXISTS outbox_head_promote_on_delete ON waybill.outbox;
                 DROP FUNCTION IF EXISTS waybill.outbox_head_promote();
+                DROP TRIGGER IF EXISTS outbox_head_check ON waybill.outbox;
+                DROP FUNCTION IF EXISTS waybill.outbox_head_check();
                 DROP FUNCTION IF EXISTS waybill.outbox_sequence();
                 DROP FUNCTION IF EXISTS waybill.outbox_terminal_guard();
                 DROP INDEX IF EXISTS waybill.ix_outbox_key_sequence;

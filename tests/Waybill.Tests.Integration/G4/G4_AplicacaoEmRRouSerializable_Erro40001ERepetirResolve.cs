@@ -45,4 +45,33 @@ public sealed class G4_AplicacaoEmRRouSerializable_Erro40001ERepetirResolve(Post
 
         Assert.Equal(["K:3:1:3:3"], await KeyLockHarness.SequencesAsync(database));
     }
+
+    // The head pointer adds no failure of its own: outside READ COMMITTED a row is marked a head at once (a harmless false
+    // positive, the claim deciding the head anyway) instead of being checked at the commit, where locking a predecessor
+    // published after the snapshot would fail with 40001.
+    [Theory]
+    [InlineData(IsolationLevel.RepeatableRead)]
+    [InlineData(IsolationLevel.Serializable)]
+    public async Task G4_AplicacaoEmRRouSerializable_AntecessoraPublicadaDuranteATransacao_CommitSemErro(IsolationLevel isolation)
+    {
+        var database = await TestDatabase.CreateAsync(postgres);
+        await KeyLockHarness.EnableOrderingAsync(database);
+        await KeyLockHarness.EnqueueAsync(database, "app", "K"); // the head, sequence 1, unfinished
+        await using var services = database.Services();
+        await using var scope = services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var outbox = scope.ServiceProvider.GetRequiredService<IOutbox<AppDbContext>>();
+        var ct = TestContext.Current.CancellationToken;
+
+        await using (var transaction = await context.Database.BeginTransactionAsync(isolation, ct))
+        {
+            await context.Invoices.CountAsync(ct); // the snapshot is taken here
+            await database.ExecuteAsync("UPDATE waybill.outbox SET status = 'published', published_at = clock_timestamp() WHERE key = 'K' AND sequence = 1");
+            outbox.Enqueue(new InvoicePaid(Guid.NewGuid(), 1m), "K");
+            await context.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        }
+
+        Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE key = 'K' AND sequence = 2 AND is_head"));
+    }
 }
