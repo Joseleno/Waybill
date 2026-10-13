@@ -115,4 +115,42 @@ public sealed class OpcoesDoDispatcherTests
         var error = Assert.Throws<OptionsValidationException>(() => services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
         Assert.Contains("whole number of milliseconds", error.Message);
     }
+
+    [Fact]
+    public void Dispatcher_MaxPerKey_DefaultUm() => Assert.Equal(1, new WaybillDispatcherOptions().MaxPerKey);
+
+    // M ≥ 2 needs ordering: without it there are no keys' series to send in rounds, and a value above 1 left over from
+    // an ordered deployment would silently mean nothing.
+    [Theory]
+    [InlineData(false, 1, true)]
+    [InlineData(true, 1, true)]
+    [InlineData(true, 100, true)]
+    [InlineData(true, 0, false)]
+    [InlineData(true, 101, false)]
+    [InlineData(false, 2, false)]
+    [InlineData(false, 0, false)]
+    public void Dispatcher_MaxPerKey_DeUmACemESoComOrdenacao(bool orderByKey, int maxPerKey, bool valid)
+    {
+        using var services = new ServiceCollection()
+            .AddLogging()
+            .AddWaybill(o =>
+            {
+                o.MaxPayloadBytes = 1024;
+            })
+            .AddWaybillDispatcher(o =>
+            {
+                o.OrderByKey = orderByKey;
+                o.ConnectionString = "Host=localhost";
+                o.MaxPerKey = maxPerKey;
+            })
+            .BuildServiceProvider();
+
+        if (valid)
+        {
+            Assert.NotNull(services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+            return;
+        }
+        var error = Assert.Throws<OptionsValidationException>(() => services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+        Assert.Contains("WaybillDispatcherOptions.MaxPerKey", error.Message);
+    }
 }

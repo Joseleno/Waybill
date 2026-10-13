@@ -9,3 +9,5 @@ Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.Partitions.get 
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.Partitions.set -> void
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.OrderByKey.get -> bool
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.OrderByKey.set -> void
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxPerKey.get -> int
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxPerKey.set -> void

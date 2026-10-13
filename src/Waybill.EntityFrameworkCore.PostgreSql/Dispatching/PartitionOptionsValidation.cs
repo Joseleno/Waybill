@@ -9,6 +9,7 @@ namespace Waybill.EntityFrameworkCore.Dispatching;
 internal sealed class PartitionOptionsValidation : IValidateOptions<WaybillDispatcherOptions>
 {
     internal const int MaxPartitions = 1024;
+    internal const int MaxMaxPerKey = 100;
 
     public ValidateOptionsResult Validate(string? name, WaybillDispatcherOptions options)
     {
@@ -28,6 +29,13 @@ internal sealed class PartitionOptionsValidation : IValidateOptions<WaybillDispa
         // different and stop every dispatcher.
         if (options.OrderByKey && options.PartitionLease.Ticks % TimeSpan.TicksPerMillisecond != 0)
             return ValidateOptionsResult.Fail("WaybillDispatcherOptions.PartitionLease must be a whole number of milliseconds.");
+
+        if (options.MaxPerKey is < 1 or > MaxMaxPerKey)
+            return ValidateOptionsResult.Fail($"WaybillDispatcherOptions.MaxPerKey must be from 1 to {MaxMaxPerKey}.");
+
+        // Without ordering no key has a series to send in rounds: a value above 1 would silently mean nothing.
+        if (!options.OrderByKey && options.MaxPerKey > 1)
+            return ValidateOptionsResult.Fail("WaybillDispatcherOptions.MaxPerKey above 1 needs OrderByKey; set it back to 1 when ordering is off.");
 
         return ValidateOptionsResult.Success;
     }
