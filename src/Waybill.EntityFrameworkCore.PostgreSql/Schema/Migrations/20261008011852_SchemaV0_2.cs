@@ -15,12 +15,17 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // The ALTER TABLE takes an exclusive lock: behind a long transaction it would hold every producer waiting.
+            // is_head (the head pointer) has a constant default, so adding it touches only the catalog.
             migrationBuilder.Sql("""
+                SET LOCAL lock_timeout = '10s';
+
                 ALTER TABLE waybill.outbox
                     ADD COLUMN IF NOT EXISTS next_attempt_at timestamp with time zone,
                     ADD COLUMN IF NOT EXISTS lock_keys text[],
                     ADD COLUMN IF NOT EXISTS released_at timestamp with time zone,
-                    ADD COLUMN IF NOT EXISTS released_by text;
+                    ADD COLUMN IF NOT EXISTS released_by text,
+                    ADD COLUMN IF NOT EXISTS is_head boolean DEFAULT true;
 
                 CREATE TABLE IF NOT EXISTS waybill.settings (
                     id integer NOT NULL,
@@ -126,7 +131,27 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                 "(key, sequence) WHERE sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq')");
             CreateIndexConcurrently(migrationBuilder, "ix_outbox_blocked_keys",
                 "(key) WHERE status = 'dlq' AND sequence IS NOT NULL");
+
+            // The head pointer: the claim index keeps only rows a claim can take. Built beside the v0.1 one under a
+            // temporary name, swapped in by renames (a short lock), the old one dropped CONCURRENTLY. Every step can run
+            // again: a temporary index left behind by a run that had already swapped is dropped at the end.
+            CreateIndexConcurrently(migrationBuilder, "ix_outbox_claimable_head", $"(id) WHERE {ClaimablePredicate}");
+            migrationBuilder.Sql("""
+                SET LOCAL lock_timeout = '10s';
+                DO $$
+                BEGIN
+                    IF pg_get_indexdef('waybill.ix_outbox_claimable'::regclass) NOT LIKE '%is_head%' THEN
+                        ALTER INDEX waybill.ix_outbox_claimable RENAME TO ix_outbox_claimable_v01;
+                        ALTER INDEX waybill.ix_outbox_claimable_head RENAME TO ix_outbox_claimable;
+                    END IF;
+                END $$;
+                """);
+            migrationBuilder.Sql("DROP INDEX CONCURRENTLY IF EXISTS waybill.ix_outbox_claimable_v01;", suppressTransaction: true);
+            migrationBuilder.Sql("DROP INDEX CONCURRENTLY IF EXISTS waybill.ix_outbox_claimable_head;", suppressTransaction: true);
         }
+
+        // Repeated word for word by every SQL that walks the index (OutboxStore), so a generic plan can prove it applies.
+        private const string ClaimablePredicate = "status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)";
 
         private static void CreateIndexConcurrently(MigrationBuilder migrationBuilder, string name, string definition)
         {
@@ -160,6 +185,8 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                 DROP FUNCTION IF EXISTS waybill.outbox_terminal_guard();
                 DROP INDEX IF EXISTS waybill.ix_outbox_key_sequence;
                 DROP INDEX IF EXISTS waybill.ix_outbox_blocked_keys;
+                DROP INDEX IF EXISTS waybill.ix_outbox_claimable;
+                CREATE INDEX ix_outbox_claimable ON waybill.outbox (id) WHERE status IN ('pending', 'claimed');
 
                 ALTER TABLE waybill.outbox DROP CONSTRAINT IF EXISTS ck_outbox_status;
                 ALTER TABLE waybill.outbox ADD CONSTRAINT ck_outbox_status CHECK (status IN ('pending', 'claimed', 'published', 'dlq'));
@@ -167,7 +194,8 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     DROP COLUMN IF EXISTS next_attempt_at,
                     DROP COLUMN IF EXISTS lock_keys,
                     DROP COLUMN IF EXISTS released_at,
-                    DROP COLUMN IF EXISTS released_by;
+                    DROP COLUMN IF EXISTS released_by,
+                    DROP COLUMN IF EXISTS is_head;
 
                 DROP TABLE IF EXISTS waybill.outbox_keys;
                 DROP TABLE IF EXISTS waybill.settings;

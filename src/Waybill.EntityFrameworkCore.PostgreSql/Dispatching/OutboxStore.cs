@@ -36,10 +36,12 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     // the UPDATE: when FOR UPDATE meets a row another transaction changed and committed, PostgreSQL re-checks only the
     // predicates on the locked table (EvalPlanQual). A row waiting after a basic.return is not claimable until its
     // next_attempt_at (ADR 0006); the index cannot filter on the clock, so waiting rows are read and passed over.
+    // The candidates repeat ix_outbox_claimable's predicate word for word: a generic plan (auto-prepare) uses a partial
+    // index only when the query's own predicate proves it applies.
     private static string Claim(string candidateFilter = "", string rowFilter = "") => $"""
         WITH candidates AS MATERIALIZED (
             SELECT id FROM waybill.outbox
-            WHERE status IN ('pending', 'claimed')
+            WHERE status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)
               AND (status = 'pending' OR lease_until < clock_timestamp())
               AND (next_attempt_at IS NULL OR next_attempt_at <= clock_timestamp()){candidateFilter}
             ORDER BY id
@@ -77,20 +79,24 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     //   DLQ. Decided from the snapshot and not repeated on the UPDATE: an earlier row never leaves published or released
     //   (a trigger refuses it), and none appears after a later one is visible, since sequences follow commit order. With
     //   at most one row per key in the batch, a skipped or unclaimable head takes nothing behind it along.
+    //   Asked as "the key's least unfinished sequence", which the planner answers by one descent of ix_outbox_key_sequence
+    //   (min/max): as NOT EXISTS, a key dominating the statistics was probed by a sequential scan, row after row.
+    // - Head pointer: only marked rows (is_head) are candidates, so a long queue behind a stopped or busy head is never
+    //   read. The mark only narrows the candidates; the head is still decided here, from the snapshot.
     // - One instant per statement: the clock read once, for every row and for the lease it takes.
     internal static readonly string ClaimOrderedSql = """
         WITH now AS MATERIALIZED (SELECT clock_timestamp() AS t),
         candidates AS MATERIALIZED (
             SELECT o.id FROM waybill.outbox o, now
-            WHERE o.status IN ('pending', 'claimed')
+            WHERE o.status IN ('pending', 'claimed') AND (o.sequence IS NULL OR o.is_head)
               AND (o.status = 'pending' OR o.lease_until < now.t)
               AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= now.t)
               AND (o.key IS NULL OR EXISTS (
                     SELECT 1 FROM waybill.outbox_partitions p
                     WHERE p.partition = o.key_hash % $4 AND p.owner = $1 AND p.lease_until > now.t + $2))
-              AND (o.sequence IS NULL OR NOT EXISTS (
-                    SELECT 1 FROM waybill.outbox h
-                    WHERE h.key = o.key AND h.sequence < o.sequence AND h.status IN ('pending', 'claimed', 'dlq')))
+              AND (o.sequence IS NULL OR o.sequence = (
+                    SELECT min(h.sequence) FROM waybill.outbox h
+                    WHERE h.key = o.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq')))
             ORDER BY o.id
             LIMIT $3
             FOR UPDATE OF o SKIP LOCKED)
@@ -104,9 +110,9 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
                 SELECT 1 FROM waybill.outbox_partitions p
                 WHERE p.partition = o.key_hash % $4 AND p.owner = $1 AND p.lease_until > now.t + $2))
         RETURNING o.id, o.type, o.key, o.payload, o.content_type, o.headers, o.created_at, o.fence, o.sequence,
-                  o.sequence IS NOT NULL AND EXISTS (
-                      SELECT 1 FROM waybill.outbox s
-                      WHERE s.key = o.key AND s.sequence > o.sequence AND s.status IN ('pending', 'claimed', 'dlq'))
+                  o.sequence IS NOT NULL AND o.sequence < (
+                      SELECT max(s.sequence) FROM waybill.outbox s
+                      WHERE s.key = o.key AND s.sequence IS NOT NULL AND s.status IN ('pending', 'claimed', 'dlq'))
         """;
 
     // Every finishing statement is fenced (still claimed by this owner, with this fence) and returns what it changed.
@@ -147,11 +153,12 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     private const string ReleaseOwnedSql = "UPDATE waybill.outbox SET status = 'pending', lease_until = NULL WHERE owner = $1 AND status = 'claimed'";
 
     // The first row still in flight in claim order (ix_outbox_claimable), not min(created_at): with the broker down and a
-    // large backlog that would read every pending row on every sample. The age comes from the database clock.
-    private const string OldestPendingAgeSql = """
+    // large backlog that would read every pending row on every sample. The age comes from the database clock. With ordering
+    // on, a row waiting behind its key's head is not in the index: the age is that of the oldest row a claim could take.
+    internal const string OldestPendingAgeSql = """
         SELECT extract(epoch FROM clock_timestamp() - created_at)::float8
         FROM waybill.outbox
-        WHERE status IN ('pending', 'claimed')
+        WHERE status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)
         ORDER BY id
         LIMIT 1
         """;

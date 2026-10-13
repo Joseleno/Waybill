@@ -44,6 +44,14 @@ public sealed class SchemaTests(PostgresFixture postgres)
             """));
         Assert.Equal(2, await scalar("SELECT count(*) FROM pg_trigger WHERE tgrelid = 'waybill.outbox'::regclass AND tgname IN ('outbox_sequence', 'outbox_terminal_guard') AND tgenabled = 'O'"));
         Assert.Equal(1, await scalar("SELECT count(*) FROM pg_constraint WHERE conname = 'ck_outbox_status' AND convalidated AND pg_get_constraintdef(oid) LIKE '%released%'"));
+        // The head pointer: a mark that defaults to true (anything that skips the triggers is a harmless false positive),
+        // and the claim index holding only rows a claim can take, valid and under its v0.1 name.
+        Assert.Equal(1, await scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'waybill' AND table_name = 'outbox' AND column_name = 'is_head' AND column_default = 'true'"));
+        Assert.Equal(1, await scalar("""
+            SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+            WHERE c.relname = 'ix_outbox_claimable' AND i.indisvalid AND pg_get_indexdef(i.indexrelid) LIKE '%is_head%'
+            """));
+        Assert.Equal(0, await scalar("SELECT count(*) FROM pg_class WHERE relname LIKE 'ix_outbox_claimable_%'"));
     }
 
     [Fact]
