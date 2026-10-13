@@ -18,6 +18,34 @@ public static class OrderingHarness
         NpgsqlDataSource dataSource, ITransport transport, WaybillDispatcherOptions options, TimeProvider? time = null, LogSink? logs = null) =>
         DispatcherHarness.Create(dataSource, transport, options, time: time, orderByKey: true, logs: logs);
 
+    /// <summary>Shared buffers one ordered claim touches, from EXPLAIN (ANALYZE, BUFFERS), rolled back so nothing stays claimed.</summary>
+    public static async Task<long> ClaimBuffersAsync(NpgsqlDataSource dataSource, string owner, int partitions, int batchSize = 100)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using var command = new NpgsqlCommand("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + OutboxStore.ClaimOrderedSql, connection, transaction);
+        command.Parameters.Add(new NpgsqlParameter { Value = owner });
+        command.Parameters.Add(new NpgsqlParameter { Value = TimeSpan.FromSeconds(30), NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Interval });
+        command.Parameters.Add(new NpgsqlParameter { Value = batchSize });
+        command.Parameters.Add(new NpgsqlParameter { Value = partitions });
+        var plan = System.Text.Json.JsonDocument.Parse((string)(await command.ExecuteScalarAsync())!).RootElement[0].GetProperty("Plan");
+        await transaction.RollbackAsync();
+        return plan.GetProperty("Shared Hit Blocks").GetInt64() + plan.GetProperty("Shared Read Blocks").GetInt64();
+    }
+
+    /// <summary>
+    /// Marks rows written around the triggers (generate_series seeds with their sequences given) as the triggers would:
+    /// of each key, only its least unfinished row. A seed left at the column's default (true) would be a state the
+    /// triggers never produce, and the claim would read the whole queue.
+    /// </summary>
+    public static Task MarkHeadsAsync(TestDatabase database) =>
+        database.ExecuteAsync("""
+            UPDATE waybill.outbox o SET is_head = (o.sequence = (
+                SELECT min(h.sequence) FROM waybill.outbox h
+                WHERE h.key = o.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq')))
+            WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq')
+            """);
+
     /// <summary>The partition of each message, as the claim computes it: key_hash % P.</summary>
     public static async Task<Dictionary<Guid, int>> PartitionOfAsync(TestDatabase database, int partitions)
     {

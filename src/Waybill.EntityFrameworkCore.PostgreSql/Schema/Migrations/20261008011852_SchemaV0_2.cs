@@ -97,6 +97,21 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     INSERT INTO waybill.outbox_keys AS k (key, seq) VALUES (NEW.key, 1)
                     ON CONFLICT (key) DO UPDATE SET seq = k.seq + 1
                     RETURNING seq INTO NEW.sequence;
+                    -- The head pointer. Behind a row of this transaction (the last one numbered), never a head before the
+                    -- commit, and that row is invisible to the dispatcher: false, and nothing to check. Outside READ
+                    -- COMMITTED the check at commit would fail on a predecessor published meanwhile (40001): true, a
+                    -- harmless false positive. Behind an unfinished row of another transaction: decided at commit (null).
+                    IF current_setting('waybill.last_keyed', true) = NEW.key || ' ' || (NEW.sequence - 1) THEN
+                        NEW.is_head := false;
+                    ELSIF current_setting('transaction_isolation') <> 'read committed' THEN
+                        NEW.is_head := true;
+                    ELSIF (SELECT min(h.sequence) FROM waybill.outbox h
+                           WHERE h.key = NEW.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq')) < NEW.sequence THEN
+                        NEW.is_head := NULL;
+                    ELSE
+                        NEW.is_head := true;
+                    END IF;
+                    PERFORM set_config('waybill.last_keyed', NEW.key || ' ' || NEW.sequence, true);
                     RETURN NEW;
                 END $$;
 
@@ -120,6 +135,36 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     BEFORE UPDATE OF status ON waybill.outbox
                     FOR EACH ROW WHEN (OLD.status IN ('published', 'released') AND NEW.status IS DISTINCT FROM OLD.status)
                     EXECUTE FUNCTION waybill.outbox_terminal_guard();
+                """);
+
+            // The head pointer: when a key's row finishes (published, released) or is deleted unfinished, its key's first
+            // unfinished row becomes claimable. Not tied to the settings row, so a key whose rows were numbered keeps
+            // moving across turning ordering off and on. VOLATILE: each query takes a new snapshot, so a promotion that
+            // waited for a producer's commit sees that producer's row. SECURITY DEFINER: whoever finishes the row (the
+            // dispatcher, an operator's release) needs no right on the mark.
+            migrationBuilder.Sql("""
+                CREATE OR REPLACE FUNCTION waybill.outbox_head_promote() RETURNS trigger
+                LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, waybill AS $$
+                BEGIN
+                    UPDATE waybill.outbox s SET is_head = true
+                    WHERE s.id = (SELECT n.id FROM waybill.outbox n
+                                  WHERE n.key = OLD.key AND n.sequence IS NOT NULL AND n.status IN ('pending', 'claimed', 'dlq')
+                                  ORDER BY n.sequence
+                                  LIMIT 1)
+                      AND s.is_head IS NOT TRUE;
+                    RETURN NULL;
+                END $$;
+
+                CREATE OR REPLACE TRIGGER outbox_head_promote
+                    AFTER UPDATE OF status ON waybill.outbox
+                    FOR EACH ROW WHEN (OLD.sequence IS NOT NULL AND OLD.status IN ('pending', 'claimed', 'dlq')
+                                       AND NEW.status IN ('published', 'released'))
+                    EXECUTE FUNCTION waybill.outbox_head_promote();
+
+                CREATE OR REPLACE TRIGGER outbox_head_promote_on_delete
+                    AFTER DELETE ON waybill.outbox
+                    FOR EACH ROW WHEN (OLD.sequence IS NOT NULL AND OLD.status IN ('pending', 'claimed', 'dlq'))
+                    EXECUTE FUNCTION waybill.outbox_head_promote();
                 """);
 
             migrationBuilder.Sql("ALTER TABLE waybill.outbox VALIDATE CONSTRAINT ck_outbox_status;", suppressTransaction: true);
@@ -181,6 +226,9 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
 
                 DROP TRIGGER IF EXISTS outbox_sequence ON waybill.outbox;
                 DROP TRIGGER IF EXISTS outbox_terminal_guard ON waybill.outbox;
+                DROP TRIGGER IF EXISTS outbox_head_promote ON waybill.outbox;
+                DROP TRIGGER IF EXISTS outbox_head_promote_on_delete ON waybill.outbox;
+                DROP FUNCTION IF EXISTS waybill.outbox_head_promote();
                 DROP FUNCTION IF EXISTS waybill.outbox_sequence();
                 DROP FUNCTION IF EXISTS waybill.outbox_terminal_guard();
                 DROP INDEX IF EXISTS waybill.ix_outbox_key_sequence;

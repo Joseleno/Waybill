@@ -28,5 +28,8 @@ public sealed class G4_MesmaChaveNaMesmaTransacao_SequenciaNaOrdemDoEnqueue(Post
             SELECT count(*) FROM waybill.outbox
             WHERE key = 'order-1' AND sequence <> (convert_from(payload, 'UTF8')::jsonb ->> 'Amount')::int
             """));
+        // The head pointer: one head, the first; the rest of the burst sits behind it unmarked.
+        Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE key = 'order-1' AND sequence = 1 AND is_head"));
+        Assert.Equal(199, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE key = 'order-1' AND is_head IS NOT TRUE"));
     }
 }
