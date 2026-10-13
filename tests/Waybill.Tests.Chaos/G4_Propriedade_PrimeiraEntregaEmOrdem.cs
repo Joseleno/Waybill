@@ -36,20 +36,25 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
         var database = await TestDatabase.CreateAsync(postgres);
         var deliveries = new ConcurrentQueue<(long Order, OutgoingMessage Message)>();
         long deliveryCounter = 0;
-        var (lateCopies, lostCalls, returns, defects) = (0, 0, 0, 0);
+        var (lateCopies, lostCalls, returns, defects, sameKeyInCall) = (0, 0, 0, 0, 0);
         var calm = 0; // the drain at the end: no more stalls nor returns
 
         void Deliver(OutgoingMessage message) => deliveries.Enqueue((Interlocked.Increment(ref deliveryCounter), message));
 
+        // Within one call the broker stand-in delivers in any order, as RabbitMQ does with a batch published at once: only
+        // the rounds (M ≥ 2), one ordered message of a key per call, keep a key in order.
         var transport = new FakeTransport(async (_, batch, _) =>
         {
+            if (batch.Where(m => m.Sequence is not null).GroupBy(m => m.Key).Any(g => g.Count() > 1))
+                Interlocked.Increment(ref sameKeyInCall);
+            var order = Enumerable.Range(0, batch.Count).OrderBy(_ => Random.Shared.Next()).ToList();
             var roll = Random.Shared.NextDouble();
             if (Volatile.Read(ref calm) == 0 && roll < 0.04)
             {
                 Interlocked.Increment(ref lateCopies);
                 await Task.Delay(TimeSpan.FromMilliseconds(900), CancellationToken.None); // the dispatcher gave up long ago
-                foreach (var message in batch)
-                    Deliver(message);
+                foreach (var i in order)
+                    Deliver(batch[i]);
                 return batch.Select(_ => PublishResult.Confirmed).ToList();
             }
             if (Volatile.Read(ref calm) == 0 && roll < 0.08)
@@ -58,26 +63,27 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
                 await Task.Delay(TimeSpan.FromMilliseconds(900), CancellationToken.None); // never reached the broker
                 return batch.Select(_ => PublishResult.Retry).ToList();
             }
-            var results = new List<PublishResult>(batch.Count);
-            foreach (var message in batch)
+            var results = new PublishResult[batch.Count];
+            foreach (var i in order)
             {
+                var message = batch[i];
                 if (Amount(message) % 100 == 0)
                 {
                     Interlocked.Increment(ref defects);
-                    results.Add(PublishResult.Defect("refused by the broker stand-in"));
+                    results[i] = PublishResult.Defect("refused by the broker stand-in");
                 }
                 else if (Volatile.Read(ref calm) == 0 && Random.Shared.NextDouble() < 0.02)
                 {
                     Interlocked.Increment(ref returns);
-                    results.Add(new PublishResult(PublishStatus.Returned, "312 NO_ROUTE"));
+                    results[i] = new PublishResult(PublishStatus.Returned, "312 NO_ROUTE");
                 }
                 else
                 {
                     Deliver(message); // before the confirmation: the dispatcher marks only what the broker has
-                    results.Add(PublishResult.Confirmed);
+                    results[i] = PublishResult.Confirmed;
                 }
             }
-            return results;
+            return (IReadOnlyList<PublishResult>)results;
         });
         var options = OrderingHarness.Options(database, partitions: 8, partitionLease: TimeSpan.FromMilliseconds(700));
         options.BatchSize = 50;
@@ -96,7 +102,11 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
         {
             while (clock.Elapsed < duration)
             {
-                var dispatcher = OrderingHarness.Create(dataSource, transport, options);
+                // Each instance with its own M and batch: series cut by the batch, by the deadline, by a smaller M elsewhere.
+                var own = OrderingHarness.Copy(options);
+                own.MaxPerKey = Random.Shared.Next(1, 6);
+                own.BatchSize = Random.Shared.Next(1, 51);
+                var dispatcher = OrderingHarness.Create(dataSource, transport, own);
                 var lifetime = Stopwatch.StartNew();
                 var life = TimeSpan.FromMilliseconds(Random.Shared.Next(500, 3_000));
                 while (lifetime.Elapsed < life && clock.Elapsed < duration)
@@ -201,12 +211,13 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
             $"SELECT count(*) FROM waybill.outbox WHERE status = 'published' AND NOT (id = ANY('{{{string.Join(',', firstDeliveries.Select(d => d.Message.MessageId))}}}'::uuid[]))");
 
         TestContext.Current.SendDiagnosticMessage(
-            $"produced {amount}, published {published}, released {released} (delivered anyway {releasedDelivered}), deliveries {deliveries.Count} ({firstDeliveries.Count} first), late copies {lateCopies}, lost calls {lostCalls}, returns {returns}, defects {defects}, graceful {graceful}, deaths {deaths}, inversions {inversions}, unmarked heads {unmarkedHeads} in {samples} samples");
+            $"produced {amount}, published {published}, released {released} (delivered anyway {releasedDelivered}), deliveries {deliveries.Count} ({firstDeliveries.Count} first), late copies {lateCopies}, lost calls {lostCalls}, returns {returns}, defects {defects}, graceful {graceful}, deaths {deaths}, inversions {inversions}, unmarked heads {unmarkedHeads} in {samples} samples, calls with two of a key {sameKeyInCall}");
 
         Assert.Equal(0, unmarkedHeads);      // the head pointer: no key's first unfinished row ever seen unmarked
         Assert.Equal(0, await UnmarkedHeadsAsync(database));
         Assert.True(samples > 0);
         Assert.Equal(0, inversions);         // first copies per key in commit order, released messages aside
+        Assert.Equal(0, sameKeyInCall);      // rounds: never two ordered messages of one key in one call
         Assert.Equal(0, envelopeMismatches); // the transport saw the stored sequence (null when not ordered)
         Assert.Equal(0, stranded);           // nothing left that could still go: only what a DLQ head stops
         Assert.Equal(0, undelivered);        // nothing marked published that the broker never had
