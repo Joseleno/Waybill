@@ -42,6 +42,52 @@ Um commit por cenário provado, na ordem abaixo.
 - [x] Documentos: escopo (G4, linha "Ordenação"); `plano-v0.2.md` (8c-1/8c-2, cenários, três ADRs, nota para a etapa 10); ADR 0008, parte 1; `OPERATIONS.md` (custo medido, ativação, upgrade, rollback, liberação, diagnóstico, isolamento, crescimento de `outbox_keys`); CHANGELOG
 - [x] Revisão de código independente antes da PR: nenhum bloqueante; um importante (a lista em toda linha custava N × N chaves por `SaveChanges`, também desligada) corrigido com teste antes; menores registrados (aviso de interceptor ausente com a ordenação desligada é ruído aceito; ordem de upgrade documentada; relógio do `MessageId` no ADR)
 
+### Ponteiro de cabeça — PR entre a 8c-1 e a 8c-2
+
+Desenho e aceite: seção "Ponteiro de cabeça" do `PLAN.md`. Um commit por cenário provado, na ordem abaixo. Cada teste é escrito e visto falhando antes do código. Antes de mutar código, seguir as armadilhas.
+
+- [x] Desenho revisto pelo time de cinco revisores e pela sondagem (PG 18.6 e 15.19); decisões do autor no `PLAN.md`
+- [ ] **Coluna, índice e claim.**
+  - Na `SchemaV0_2` (refeita): `is_head boolean DEFAULT true`; `ix_outbox_claimable` substituído (nome temporário com `CONCURRENTLY`, troca, `DROP` do antigo, mesmo nome final, `Up` idempotente com `indisvalid`); `Down` volta ao predicado da v0.1. `lock_timeout` no `Up`.
+  - Coluna no `WaybillSchemaContext`, no snapshot e no `Designer`; nada no modelo do usuário.
+  - Em `OutboxStore`: a cláusula `(sequence IS NULL OR is_head)` no `ClaimSql`, no `ClaimOrderedSql` e no `OldestPendingAgeSql`; a cabeça decidida por `min(sequence)`; o sinal de chave quente revisto.
+  - Testes: `G4_Ponteiro_PlanoGenerico_UsaOIndice`; `G4_OrdenacaoDesligada_SemContadorNemFiltro` reescrito; upgrade, migração interrompida no índice e `Down` ampliados.
+- [ ] **Marca no INSERT e promoção.**
+  - No `outbox_sequence`, depois de numerar: `false` pela dedup (`waybill.last_keyed`), `true` fora de READ COMMITTED, NULL com antecessora visível, `true` nos outros casos.
+  - Função `outbox_head_promote` (VOLATILE, `SECURITY DEFINER`): `AFTER UPDATE OF status` para terminal e `AFTER DELETE` de não terminal, com `WHEN` em `sequence`, sem `settings`.
+  - Consultas dos triggers por descida de índice.
+  - Helper de sementes com marca coerente para os testes por `generate_series`.
+  - Testes: `G4_ChaveQuenteSozinha_DrenoLinear`; `G4_ChaveBloqueadaComCemMilAFrente` como teoria de 10 mil e 100 mil, com teto constante e liberação seguida do claim; `G4_Ponteiro_DeleteDaCabeca_SucessoraViraCabeca`; `G4_Ponteiro_EstatisticasVazias_TransacaoGrandeLinear`; `G4_MesmaChaveNaMesmaTransacao` com uma cabeça por chave.
+- [ ] **Verificação no commit.**
+  - Constraint trigger diferido `outbox_head_check` (`SECURITY DEFINER`): escolhe a antecessora sem trava, trava o id com `FOR SHARE SKIP LOCKED` e refaz o filtro.
+  - Barreira de teste estendida com fase diferida (nome posterior) e filtro por status.
+  - Testes: publicação antes do commit do produtor; marcação esperando o commit; marcação em voo (teoria: commit e rollback); produtor de duas chaves contra marcação em lote; liberação concorrente; `G4_Ponteiro_RajadaNaTransacao_SoAPrimeiraDecideNoCommit`; RR/SERIALIZABLE ampliado; papel só com INSERT ampliado; `Limite_SetConstraintsImmediate_MarcacaoEsperaOProdutor`.
+- [ ] **Desligar e religar.**
+  - O SQL `ordering-reset` do `OPERATIONS.md` marca as não terminais com `sequence` na mesma transação.
+  - Testes: `G4_Ponteiro_DesligarEReligar_ChavesAndam`; `Operacao_ReiniciarOrdenacao` ampliado.
+- [ ] **Checagens do dispatcher.**
+  - `tgenabled` cobre os triggers novos (`PartitionStore`).
+  - Recusa de `session_replication_role = replica` no startup, como o `IsolationLevelCheck`.
+  - Teste: `G4_TriggerDesligado_ErroCritico` ampliado (cada trigger, e a sessão replica).
+- [ ] **Rede de varredura.**
+  - Reparo incremental nas partições assumidas e a cada `PartitionLease`.
+  - Contador `waybill.outbox.heads_repaired` e log de erro com chave e `sequence`.
+  - No `OPERATIONS.md`, `unmarked-heads` e `mark-heads`, e `is_head` em `key-rows`.
+  - Testes: `G4_Ponteiro_Rede_ReparaCabecaSemMarca`; `Operacao_MarcarCabecas`; `Operacao_ConsultasDeDiagnostico` ampliado.
+- [ ] **Caos.**
+  - No teste de propriedade: a invariante "a menor não terminal de cada chave tem `is_head`", amostrada numa instrução e conferida no fim, mais um produtor numa chave quente durante a drenagem.
+  - Rodar o caos curto.
+- [ ] **Mutações** da lista do `PLAN.md`: cada uma quebra um teste nomeado, registrado no commit.
+- [ ] **Documentos.**
+  - ADR 0008, parte 1b: atores externos e como cada um é coberto, e a tabela de custo.
+  - `OPERATIONS.md`: "nunca apague, libere"; limites de espera; RR; escrita extra no autovacuum; upgrade com `lock_timeout`; custo medido de novo.
+  - Escopo: a frase do custo linear.
+  - `plano-v0.2.md`: etapa 8 com cinco PRs e o gatilho de corte da 11.
+  - CHANGELOG.
+- [ ] **Verificação completa e revisão independente antes da PR.**
+  - Unidade; integração no PG 18 e no 15; caos curto; exemplos; pack.
+  - O achado à parte (Hash Join no plano genérico) fica registrado.
+
 ### 8c-2 — M ≥ 2 em rodadas
 
 Desenho fechado no início do PR, a partir da seção 8c-2 do `PLAN.md` e da mudança do `ITransport` da etapa 9.
