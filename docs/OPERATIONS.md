@@ -174,10 +174,20 @@ COMMIT;
 
 - **`REPEATABLE READ` and `SERIALIZABLE`.** Two such transactions enqueuing the same key at the same time: one fails
   with 40001 (EF reports it as a transient failure). Retrying it succeeds. `READ COMMITTED`, PostgreSQL's default, just
-  waits.
-- **The numbering trigger must stay enabled.** A dispatcher that orders stops with a critical log if
-  `waybill.outbox_sequence` is missing or disabled. Sessions with `session_replication_role = replica` (some restore
-  and replication tools) skip it: messages they write are not numbered and not ordered.
+  waits. The head pointer adds no failure there: a message written at those levels is marked claimable at once, which
+  on a hot key only makes the claim look at more candidates.
+- **Waybill's triggers must stay enabled.** `outbox_sequence` numbers keyed messages; `outbox_head_check`,
+  `outbox_head_promote` and `outbox_head_promote_on_delete` keep each key's first unfinished message marked claimable.
+  A dispatcher that orders stops with a critical log if any is missing or disabled, or if its own sessions run with
+  `session_replication_role = replica`. Other sessions with `replica` (some restore and replication tools) skip them:
+  messages they write are not numbered and not ordered, and changes they make may leave a key unmarked (see
+  "Unmarked heads" below).
+- **The dispatcher may wait for a producer's commit.** A producer whose message sits behind another transaction's
+  unfinished one checks that one at its commit, locking it for an instant; the dispatcher publishing it at that moment
+  waits for the commit to end. That is short, unless the application holds its transaction past that point:
+  `SET CONSTRAINTS ALL IMMEDIATE` (the check then runs at the insert and the lock lasts the whole transaction), slow
+  deferred constraints of its own, synchronous replication, or `PREPARE TRANSACTION`. Order is kept; the batch waits, and
+  a lease that runs out meanwhile publishes those messages again (duplicates, never loss).
 
 ### What it costs
 
@@ -192,9 +202,10 @@ absolute numbers:
 | Three keys out of twenty per transaction | baseline | about 600 per second, no deadlock |
 
 Publishing: one message per key per batch, so a key's throughput is about one message per round trip to the broker.
-The claim reads and passes over the queued rows of a key whose head waits (in the DLQ, or behind a long queue of its
-own): about 12 µs per row, so 120 ms per claim with 10 thousand rows queued behind one key and 1.2 s with 100
-thousand. Watch `waybill.outbox.blocked_keys` and release or requeue stopped keys promptly.
+The claim reads only each key's first unfinished message, never the queue behind it: with 100 thousand messages stopped
+behind a dead-lettered one, a claim of 100 messages reads about 4,500 buffers (p50 5.6 ms), and one hot key drains at
+the same cost per message whatever its queue. Publishing a message with others of its key behind it also marks the next
+one claimable: one more row update. Watch `waybill.outbox.blocked_keys` and release or requeue stopped keys promptly.
 
 `waybill.outbox_keys` keeps one row per key ever ordered, about 130 bytes each (10 million keys, about 1.3 GB). It is
 never cleaned: a key starting again at 1 would look like a regression to its consumers. Its size:
@@ -206,8 +217,11 @@ SELECT pg_size_pretty(pg_total_relation_size('waybill.outbox_keys'));
 ### Upgrading and rolling back
 
 The v0.2 migration builds its indexes `CONCURRENTLY`, outside the migration's transaction: run it over a direct
-connection (not a pooler in transaction mode), and expect it to wait for transactions already open. If it stops halfway,
-run it again: every step is idempotent and an index left invalid is rebuilt. Afterwards, nothing should be listed here:
+connection (not a pooler in transaction mode), and expect it to wait for transactions already open. Its short
+exclusive locks on the outbox (new columns, triggers, the swap of the claim index) give up after 10 seconds instead of
+holding every producer behind a long transaction. If it stops halfway, run it again: every step is idempotent and an
+index left invalid is rebuilt. The claim index is rebuilt with a narrower predicate, which a 0.1 dispatcher's claim
+cannot use: deploy the v0.2 dispatchers right after the migration. Afterwards, nothing should be listed here:
 
 ```sql
 SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
@@ -340,7 +354,9 @@ updates, so each message leaves dead tuples and dead index entries behind. Vacuu
 ALTER TABLE waybill.outbox SET (autovacuum_vacuum_scale_factor = 0.01, autovacuum_vacuum_threshold = 1000);
 ```
 
-Do not set a `fillfactor` on the outbox: it only helps HOT updates, and they cannot happen here.
+Do not set a `fillfactor` on the outbox: it only helps HOT updates, and they cannot happen here. With ordering by
+key, marking a key's next message claimable is one more such update per message published with others of its key
+behind it.
 
 A long-running transaction anywhere in the database (a report, an idle-in-transaction session, a standby with
 `hot_standby_feedback` running a long query) holds back the vacuum horizon. While it is open, dead tuples pile up and
