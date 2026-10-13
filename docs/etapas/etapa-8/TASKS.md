@@ -84,10 +84,99 @@ Desenho e aceite: seção "Ponteiro de cabeça" do `PLAN.md`. Um commit por cen�
   - Escopo: a frase do custo linear.
   - `plano-v0.2.md`: etapa 8 com cinco PRs e o gatilho de corte da 11.
   - CHANGELOG.
-- [ ] **Verificação completa e revisão independente antes da PR.**
+- [x] **Verificação completa e revisão independente antes da PR** (PR #20, mergeado em Oct 13).
   - Unidade; integração no PG 18 e no 15; caos curto; exemplos; pack.
   - O achado à parte (Hash Join no plano genérico) fica registrado.
 
 ### 8c-2 — M ≥ 2 em rodadas
 
-Desenho fechado no início do PR, a partir da seção 8c-2 do `PLAN.md` e da mudança do `ITransport` da etapa 9.
+Desenho e aceite: seção 8c-2 do `PLAN.md`, revista pelo time de quatro revisores, com as decisões do autor. Um commit por cenário provado, na ordem abaixo. Cada teste é escrito e visto falhando antes do código. Antes de mutar código, seguir as armadilhas.
+
+- [x] Desenho sondado e revisto; decisões do autor no `PLAN.md` (Oct 13); issue #21 com os falsos positivos persistentes.
+- [ ] **Opção `MaxPerKey`.**
+  - Validação de 1 a 100, exigindo `OrderByKey`, em `PartitionOptionsValidation`.
+  - XML doc e `PublicAPI.Unshipped.txt`.
+  - Teste de unidade.
+- [ ] **Harnesses.**
+  - `FakeTransport` registra os lotes por chamada.
+  - `OrderingHarness` ganha `maxPerKey` e clona as opções.
+  - Relógio de teste pelo `search_path`: um `clock_timestamp()` que espera numa trava consultiva.
+  - Teste próprio do relógio; `G4_PosseNoLimite_UmInstantePorInstrucao`.
+- [ ] **Promoção em laço** (refaz a `SchemaV0_2`).
+  - `outbox_head_promote` em laço com `FOR NO KEY UPDATE`.
+  - Trigger de UPDATE só com `OLD.is_head IS TRUE`.
+  - Testes:
+    - `G4_Ponteiro_TerminacoesConcorrentesNaMesmaChave_PromoveAMenor` (teoria);
+    - `G4_Ponteiro_FinishComSerie_UmaPromocaoPorChave`;
+    - os testes do ponteiro continuam verdes.
+- [ ] **JIT desligado** na conexão do dispatcher (`G4_Rodadas_DispatcherSemJit`).
+- [ ] **SQL de série**, a partir de trechos comuns com o `ClaimOrderedSql`.
+  - Os testes G4 do claim em teoria M ∈ {1, 3}.
+  - O instante único e o plano genérico ampliados.
+  - `G4_Rodadas_PlanoGenerico_SemLacoQuadraticoNemSeqScan`.
+- [ ] **Cenários do claim**, um commit cada:
+  - snapshot contra trava;
+  - antecessora do meio;
+  - não reivindicável não gasta vaga;
+  - lote cheio de cabeças;
+  - corte por rodada;
+  - sucessora com id menor;
+  - maior que a cadeia;
+  - falso positivo;
+  - liberada no meio;
+  - lote grande linear;
+  - série não lê além do orçamento;
+  - dreno linear com M = 100.
+- [ ] **Montagem das rodadas** como função pura, com teste de unidade:
+  - `sequence` nula;
+  - buraco de `rank`;
+  - linha repetida.
+- [ ] **Rodadas no dispatcher.**
+  - Desfecho interno pelo `RetrySql`; um `FinishAsync`, repetido em 40P01 e 40001.
+  - Defeito local na rodada.
+  - `MoreOfKeys`.
+  - Testes:
+    - rodadas seguem `sequence`;
+    - linhas sem `sequence`;
+    - `Retry` encerra o lote;
+    - `Returned` e defeito;
+    - cabeça e sucessora no mesmo lote;
+    - laço.
+- [ ] **Prazo, reação e M efetivo.**
+  - `TimeProvider` em todo o relógio; T0 antes do claim.
+  - Exceção do `React`.
+  - M efetivo.
+  - Teste de caos do blackhole ajustado.
+  - Testes:
+    - rodada tardia;
+    - prazo zero;
+    - timeout e nack na rodada 2;
+    - conexão na rodada 2;
+    - M efetivo;
+    - meio aberto.
+- [ ] **Shutdown e exceção entre rodadas.**
+- [ ] **Concorrência com M ≥ 2:** troca de dono com zumbi na sucessora.
+- [ ] **Caos.**
+  - M e B sorteados por instância.
+  - Entrega embaralhada dentro da chamada.
+  - "Uma ordenada por chave em cada chamada".
+  - Finish preso além do `PartitionLease`.
+  - Rodar o caos curto.
+- [ ] **Mutações** da tabela do `PLAN.md`, cada uma registrada no commit.
+- [ ] **Medição:**
+  - vazão por chave para o `OPERATIONS.md`;
+  - `G4_Backlog_ClaimOrdenadoMedido` em teoria M ∈ {1, 10};
+  - `Limite_FalsosPositivosPersistentes`.
+- [ ] **Issue #21** (PR próprio se o prazo apertar).
+  - `Limite_SetConstraintsImmediate` ampliado.
+  - Âncora da varredura em dois SQL.
+  - Erro da varredura capturado.
+- [ ] **Documentos.**
+  - ADR 0008, parte 2, e a frase da deduplicação.
+  - ADR 0003.
+  - `OPERATIONS.md`.
+  - Escopo.
+  - `plano-v0.2.md`, com o ponto de controle de Oct 28.
+  - XML doc do `ITransport`.
+  - CHANGELOG.
+- [ ] **Verificação completa e revisão independente antes da PR.** Unidade; integração no PG 18 e no 15; caos curto; exemplos; pack. O merge sai até cerca de Oct 30.
