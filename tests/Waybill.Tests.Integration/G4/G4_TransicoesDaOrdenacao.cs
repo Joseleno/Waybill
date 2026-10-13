@@ -66,8 +66,14 @@ public sealed class G4_TransicoesDaOrdenacao(PostgresFixture postgres)
         Assert.Equal(5, await database.CountAsync("published"));
     }
 
-    [Fact]
-    public async Task G4_TriggerDesligado_ErroCritico()
+    // The numbering trigger, and the head pointer's: without the check at the commit or a promotion, a key's next row is
+    // never marked and the key stops for good.
+    [Theory]
+    [InlineData("outbox_sequence")]
+    [InlineData("outbox_head_check")]
+    [InlineData("outbox_head_promote")]
+    [InlineData("outbox_head_promote_on_delete")]
+    public async Task G4_TriggerDesligado_ErroCritico(string trigger)
     {
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);
@@ -75,12 +81,27 @@ public sealed class G4_TransicoesDaOrdenacao(PostgresFixture postgres)
         var dispatcher = OrderingHarness.Create(dataSource, new FakeTransport(), OrderingHarness.Options(database, partitions: 4));
         Assert.Null(await dispatcher.CheckOrderingAsync(atStartup: true, ct));
 
-        await database.ExecuteAsync("ALTER TABLE waybill.outbox DISABLE TRIGGER outbox_sequence");
-        Assert.Contains("outbox_sequence", await dispatcher.CheckOrderingAsync(atStartup: false, ct));
-        Assert.Contains("ENABLE TRIGGER", await dispatcher.CheckOrderingAsync(atStartup: true, ct));
+        await database.ExecuteAsync($"ALTER TABLE waybill.outbox DISABLE TRIGGER {trigger}");
+        Assert.Contains(trigger, await dispatcher.CheckOrderingAsync(atStartup: false, ct));
+        Assert.Contains($"ENABLE TRIGGER {trigger}", await dispatcher.CheckOrderingAsync(atStartup: true, ct));
 
-        await database.ExecuteAsync("ALTER TABLE waybill.outbox ENABLE TRIGGER outbox_sequence");
+        await database.ExecuteAsync($"ALTER TABLE waybill.outbox ENABLE TRIGGER {trigger}");
         Assert.Null(await dispatcher.CheckOrderingAsync(atStartup: false, ct));
+    }
+
+    // In a session with session_replication_role = replica no ordinary trigger fires: the dispatcher's own marking would
+    // publish a head without promoting the next row of its key.
+    [Fact]
+    public async Task G4_SessaoReplica_ErroCritico()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        var asReplica = new NpgsqlConnectionStringBuilder(database.ConnectionString) { Options = "-c session_replication_role=replica" };
+        await using var dataSource = NpgsqlDataSource.Create(asReplica.ConnectionString);
+        var dispatcher = OrderingHarness.Create(dataSource, new FakeTransport(), OrderingHarness.Options(database, partitions: 4));
+
+        Assert.Contains("session_replication_role", await dispatcher.CheckOrderingAsync(atStartup: true, ct));
+        Assert.Contains("session_replication_role", await dispatcher.CheckOrderingAsync(atStartup: false, ct));
     }
 
     // The old owner claimed the head and paused; the partition lease is forced to run out before the row's, and another

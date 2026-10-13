@@ -122,11 +122,19 @@ internal sealed partial class OutboxDispatcher
                 + $"has {Ordering.Partitions} and {Ordering.PartitionLease}. Every dispatcher must use the same values; change them with all "
                 + "dispatchers stopped, as OPERATIONS.md shows";
 
-        // Without the trigger, keyed messages are written unnumbered and would go out in any order (ADR 0008).
-        return await _partitions.NumberingTriggerEnabledAsync(cancellationToken).ConfigureAwait(false)
-            ? null
-            : "the trigger waybill.outbox_sequence, which numbers keyed messages while ordering is on, is missing or disabled. "
-                + "Run WaybillSchema.MigrateAsync, or ALTER TABLE waybill.outbox ENABLE TRIGGER outbox_sequence";
+        // Without the numbering trigger, keyed messages are written unnumbered and would go out in any order; without the
+        // head pointer's, a key's next message is never marked claimable and the key stops (ADR 0008).
+        var off = await _partitions.OrderingTriggersOffAsync(cancellationToken).ConfigureAwait(false);
+        if (off.Count > 0)
+            return $"the trigger(s) {string.Join(", ", off.Select(t => "waybill." + t))}, which ordering by key relies on, are missing or "
+                + "disabled. Run WaybillSchema.MigrateAsync, or " + string.Join("; ", off.Select(t => $"ALTER TABLE waybill.outbox ENABLE TRIGGER {t}"));
+
+        // The dispatcher's own marking must fire the promotion of a key's next message.
+        var role = await _partitions.SessionReplicationRoleAsync(cancellationToken).ConfigureAwait(false);
+        return role == "replica"
+            ? "session_replication_role is 'replica' for this dispatcher's sessions, so publishing a message would not mark the next "
+                + "message of its key claimable. Set it back to 'origin' for the dispatcher's role or connection string"
+            : null;
     }
 
     /// <summary>Runs one cycle.</summary>
