@@ -191,6 +191,21 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         FROM (SELECT 1) AS one LEFT JOIN repaired r ON true
         """;
 
+    // With ordering off, the claim takes numbered rows only when marked, and nothing finishes the heads that would mark
+    // the rest. The reset SQL marks them, but cannot see a row a producer wrote while settings existed and had not yet
+    // committed; a dispatcher that does not order marks what is left. Empty once the numbered backlog drained.
+    private const string MarkNumberedSql = """
+        UPDATE waybill.outbox SET is_head = true
+        WHERE sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq') AND is_head IS NOT TRUE
+        """;
+
+    /// <summary>Marks every unfinished numbered row claimable (ordering off); returns how many it marked.</summary>
+    public async Task<int> MarkNumberedClaimableAsync(CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(MarkNumberedSql);
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Repairs one slice of keys after <paramref name="after"/> (null: from the first key); see <see cref="RepairHeadsSql"/>.</summary>
     /// <returns>Where the next slice starts (null once the walk reached the last key), and the rows marked.</returns>
     public async Task<(string? Next, List<(string Key, long Sequence)> Repaired)> RepairHeadsAsync(

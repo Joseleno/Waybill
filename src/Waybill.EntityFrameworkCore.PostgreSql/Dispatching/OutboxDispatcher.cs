@@ -126,10 +126,15 @@ internal sealed partial class OutboxDispatcher
 
         if (!_ordered)
         {
-            return await _partitions.ReadSettingsAsync(cancellationToken).ConfigureAwait(false) is null
-                ? null
-                : "another dispatcher orders by key (waybill.settings exists) and this one does not, so it would claim keyed rows "
+            if (await _partitions.ReadSettingsAsync(cancellationToken).ConfigureAwait(false) is not null)
+                return "another dispatcher orders by key (waybill.settings exists) and this one does not, so it would claim keyed rows "
                     + "outside any partition. Set OrderByKey on every instance, or stop them all and turn ordering off as OPERATIONS.md shows";
+
+            // Rows numbered by a transaction still open when ordering was turned off, which the reset could not mark.
+            var marked = await _store.MarkNumberedClaimableAsync(cancellationToken).ConfigureAwait(false);
+            if (marked > 0)
+                LogNumberedMarked(_logger, marked);
+            return null;
         }
 
         var stored = atStartup
@@ -342,4 +347,8 @@ internal sealed partial class OutboxDispatcher
             + "leaves it so: something changed the outbox outside it (a disabled trigger, a session in replica mode, a restore, a manual "
             + "UPDATE). See OPERATIONS.md, \"Unmarked heads\".")]
     private static partial void LogHeadRepaired(ILogger logger, string key, long sequence);
+
+    [LoggerMessage(EventId = 18, Level = LogLevel.Information,
+        Message = "Ordering by key is off: {Count} message(s) numbered while it was on, by transactions still open when it was turned off, are now claimable.")]
+    private static partial void LogNumberedMarked(ILogger logger, int count);
 }

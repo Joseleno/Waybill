@@ -40,4 +40,39 @@ public sealed class G4_Ponteiro_DesligarEReligar_ChavesAndam(PostgresFixture pos
 
         Assert.Equal([4L, 5L], transport.Received.Where(m => m.Key == "J").Select(m => m.Sequence ?? -1));
     }
+
+    // The reset's UPDATE cannot see a row a producer has inserted and not yet committed: written while settings still
+    // existed, behind a dead-lettered head, it is numbered and left undecided, and stays so after its commit. With
+    // ordering off nothing finishes that head, so nothing would mark the row. A dispatcher that does not order marks
+    // such rows itself, at startup and every PartitionLease, once no instance orders.
+    [Fact]
+    public async Task G4_Ponteiro_DesligarComProdutorEmVoo_DispatcherSemOrdenacaoMarcaASobra()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
+        var ordered = OrderingHarness.Create(dataSource, new FakeTransport(), OrderingHarness.Options(database, partitions: 1));
+        Assert.Null(await ordered.CheckOrderingAsync(atStartup: true, ct));
+        await ordered.RunOnceAsync(ct);
+        await DispatcherHarness.EnqueueAsync(database, 1, key: _ => "K");
+        await database.ExecuteAsync("UPDATE waybill.outbox SET status = 'dlq', dlq_reason = 'defect' WHERE key = 'K'");
+
+        await using (var barrier = await Barrier.InstallAsync(database, "waybill.outbox", "INSERT"))
+        {
+            var producer = KeyLockHarness.EnqueueAsync(database, KeyLockHarness.BarrierApp, "K");
+            await barrier.WaitForAsync(atBarrier: 1, onLocks: 0);
+            await database.ExecuteAsync(OperationsDoc.Sql("ordering-reset"));
+            await barrier.ReleaseAsync();
+            await producer;
+        }
+        Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE key = 'K' AND sequence = 2 AND is_head IS NULL"));
+
+        var transport = new FakeTransport();
+        var unordered = DispatcherHarness.Create(dataSource, transport, DispatcherHarness.Options(database));
+        Assert.Null(await unordered.CheckOrderingAsync(atStartup: true, ct));
+        await unordered.RunOnceAsync(ct);
+
+        Assert.Single(transport.Received); // unordered: the envelope carries no sequence
+        Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE key = 'K' AND sequence = 2 AND status = 'published'"));
+    }
 }
