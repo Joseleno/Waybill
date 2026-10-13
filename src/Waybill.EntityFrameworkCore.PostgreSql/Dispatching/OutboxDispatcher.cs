@@ -193,7 +193,7 @@ internal sealed partial class OutboxDispatcher
         var batch = new Batch(claimed);
         try
         {
-            await PublishRoundsAsync(batch, started).ConfigureAwait(false);
+            await PublishRoundsAsync(batch, started, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -254,7 +254,7 @@ internal sealed partial class OutboxDispatcher
     // M ≥ 2 (PLAN.md 8c-2): one call per round; round k carries the k-th message of each key, and only of keys whose
     // message of round k − 1 was confirmed. The first copy of a key's message therefore reaches the broker after the
     // first copy of every earlier one. With M = 1, or without ordering, there is one round: the batch as before.
-    private async Task PublishRoundsAsync(Batch batch, long started)
+    private async Task PublishRoundsAsync(Batch batch, long started, CancellationToken cancellationToken)
     {
         var plan = Rounds.Build(batch.Claimed);
         foreach (var rejected in plan.Rejected)
@@ -268,7 +268,9 @@ internal sealed partial class OutboxDispatcher
         var previous = TimeSpan.Zero; // how long the last round took
         for (var k = 0; k < plan.Rounds.Count; k++)
         {
-            if (batch.Ended)
+            // Shutdown: no round starts after the host asked to stop, the first one included; checked, never thrown, so
+            // the marking below records what earlier rounds published.
+            if (batch.Ended || cancellationToken.IsCancellationRequested)
                 return;
             var remaining = _options.PublishTimeout - _time.GetElapsedTime(started);
             if (k > 0 && !Rounds.MayStart(remaining, previous))
@@ -306,7 +308,8 @@ internal sealed partial class OutboxDispatcher
             // Round 1 has the whole PublishTimeout, as a batch always had; a later round, what is left of it.
             var roundStarted = _time.GetTimestamp();
             var results = await PublishAsync(toPublish.Select(r => r.Message).ToList(), k == 0 ? _options.PublishTimeout : remaining).ConfigureAwait(false);
-            previous = _time.GetElapsedTime(roundStarted);
+
+            // Recorded before anything else can throw: a round the broker confirmed must be marked as published.
             for (var j = 0; j < toPublish.Count; j++)
             {
                 var (row, result) = (toPublish[j], results[j]);
@@ -319,6 +322,7 @@ internal sealed partial class OutboxDispatcher
             // A later round had only what the earlier ones left of the deadline: its confirmation timeout says nothing
             // about the broker. A nack, a connection failure or anything else does (ADR 0003).
             batch.React.AddRange(k == 0 ? results : results.Where(r => !(r.Status == PublishStatus.Retry && r.Failure == TransportFailure.ConfirmTimeout)));
+            previous = _time.GetElapsedTime(roundStarted);
         }
         batch.Whole = !batch.Ended;
     }
