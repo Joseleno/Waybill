@@ -141,11 +141,18 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
             // unfinished row becomes claimable. Not tied to the settings row, so a key whose rows were numbered keeps
             // moving across turning ordering off and on. VOLATILE: each query takes a new snapshot, so a promotion that
             // waited for a producer's commit sees that producer's row. SECURITY DEFINER: whoever finishes the row (the
-            // dispatcher, an operator's release) needs no right on the mark.
+            // dispatcher, an operator's release) needs no right on the mark. Only in READ COMMITTED: at a stricter level the
+            // queries see the transaction's snapshot, and a producer's row committed meanwhile would be left unmarked. The
+            // dispatcher already runs in READ COMMITTED; an operator's release or delete at another level is refused.
             migrationBuilder.Sql("""
                 CREATE OR REPLACE FUNCTION waybill.outbox_head_promote() RETURNS trigger
                 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, waybill AS $$
                 BEGIN
+                    IF current_setting('transaction_isolation') <> 'read committed' THEN
+                        RAISE EXCEPTION 'Finishing or deleting message % of ordered key % needs READ COMMITTED, and this transaction is %: the next message of the key could be left unclaimable. Run it again in READ COMMITTED.',
+                            OLD.id, OLD.key, current_setting('transaction_isolation')
+                            USING ERRCODE = 'object_not_in_prerequisite_state';
+                    END IF;
                     UPDATE waybill.outbox s SET is_head = true
                     WHERE s.id = (SELECT n.id FROM waybill.outbox n
                                   WHERE n.key = OLD.key AND n.sequence IS NOT NULL AND n.status IN ('pending', 'claimed', 'dlq')

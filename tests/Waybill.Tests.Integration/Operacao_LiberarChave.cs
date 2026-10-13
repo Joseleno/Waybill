@@ -38,6 +38,28 @@ public sealed class Operacao_LiberarChave(PostgresFixture postgres)
         Assert.Equal(0, await scenario.BlockedKeysAsync(ct));
     }
 
+    // Finishing a key's head marks the next message, and that needs to see messages committed during the transaction:
+    // at REPEATABLE READ or SERIALIZABLE the snapshot is older, a producer's message committed meanwhile would be left
+    // unmarked and the key would stop. The database refuses it, and the release runs again in READ COMMITTED.
+    [Theory]
+    [InlineData("REPEATABLE READ")]
+    [InlineData("SERIALIZABLE")]
+    public async Task Operacao_LiberarForaDeReadCommitted_Recusa(string isolation)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scenario = await DlqScenario.StartAsync(postgres);
+        await scenario.Dispatcher.RunOnceAsync(ct);
+
+        await using var connection = await scenario.DataSource.OpenConnectionAsync(ct);
+        await using (var begin = new NpgsqlCommand($"BEGIN ISOLATION LEVEL {isolation}", connection))
+            await begin.ExecuteNonQueryAsync(ct);
+        await using var release = new NpgsqlCommand(OperationsDoc.Sql("key-release"), connection);
+        var error = await Assert.ThrowsAsync<PostgresException>(() => release.ExecuteNonQueryAsync(ct));
+
+        Assert.Contains("READ COMMITTED", error.MessageText);
+        Assert.Equal("1:dlq,2:pending,3:pending", await scenario.StatusesAsync("order-42"));
+    }
+
     private static async Task<List<long>> SequencesAsync(NpgsqlDataSource dataSource, List<Guid> ids)
     {
         var sequences = new List<long>();
