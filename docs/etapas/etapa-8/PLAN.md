@@ -164,6 +164,86 @@ O filtro de cabeça repetido no `UPDATE` externo não se repete por desenho (ADR
 
 **Pronto quando (8c-1):** os cenários acima verdes no PG 15 e 18; cada mutação quebra um teste nomeado; ADR 0008 (parte 1), escopo, `plano-v0.2.md` e `OPERATIONS.md` atualizados; propriedade e backlog com três execuções agendadas verdes antes de fechar a etapa 8.
 
+### Ponteiro de cabeça — PR entre a 8c-1 e a 8c-2
+
+Desenho revisto em Oct 13, 2026: um time de cinco revisores (concorrência, desempenho, EF e produtor, operação, testes e escopo) e uma sondagem em PG 18.6 e 15.19, com o esquema das migrations e o SQL do claim copiado literalmente. As decisões marcadas "autor" foram tomadas com ele nessa data. A abordagem sem estado (cabeça achada por chave a cada claim) foi descartada: com 500 mil chaves ativas, milhões de buffers por claim.
+
+**Fatos medidos na sondagem**
+
+- **Chave quente sozinha, claim da 8c-1.** Cada claim descarta as n − 1 sucessoras: 1 mil, 2.077 buffers e 2,0 ms; 10 mil, 20.553 e 13,8 ms; 100 mil, 203.694 e 109 ms. Com uma chave dominando as estatísticas, o planner sonda o `NOT EXISTS` por Seq Scan e atravessa as linhas publicadas: drenar 4 mil levou 1.010 s, com o claim crescendo cerca de 8× por dobra. Forçando o índice, o crescimento é O(n²). `ANALYZE` não muda o plano.
+- **Cabeça na DLQ com 100 mil sucessoras e 5 mil chaves pendentes.** 305 mil buffers e p50 de 1.320 ms hoje; com a marca, 2.933 buffers e 2,3 ms. O PG 15 dá o mesmo.
+- **Com a marca e a cabeça decidida por `min(sequence)`** (Index Only Scan por MinMax), drenar uma chave sozinha custa o mesmo por linha de 1 mil a 8 mil (razões 0,91, 0,99 e 1,01), e o claim fica em cerca de 0,75 ms por linha.
+- **Intercalações forçadas** (barreira num constraint trigger diferido de nome posterior):
+  - (a) O produtor trava a antecessora no commit. A marcação do dispatcher espera e termina logo depois do commit do produtor, e a promoção marca a linha dele.
+  - (b) Com a marcação sem commit, o produtor commita sem esperar e se marca.
+  - (c) Em RR ou SERIALIZABLE, o commit dá 40001.
+  - (d) Com `SET CONSTRAINTS ALL IMMEDIATE`, a marcação espera a transação inteira do produtor.
+  - Nenhuma deixou cabeça sem marca.
+- **Triggers diferidos** disparam por linha, em ordem de nome, com as linhas em ordem de inserção.
+- **Rajada de 200 linhas de uma chave numa transação.** Verificando no commit só a primeira linha da chave, o custo fica igual ao de hoje: 90,8 kB de WAL contra 105,6, e commit de 2,5 ms. Verificando todas, o commit vai a 6,6 ms.
+- **Ordenação desligada,** WAL medido de forma determinística (`full_page_writes` e autovacuum desligados): diferença de ±0,2%. A tupla cresce 1 byte.
+- **Plano genérico** (`force_generic_plan`): os três SQL usam o índice substituído, sem Sort.
+- **Estatísticas vazias** (tabela recém-criada ou depois de TRUNCATE): as consultas dos triggers viram Seq Scan, e uma transação grande fica O(n²). Uma de 50 mil linhas levou 18,9 s.
+
+**Desenho**
+
+| Tema | Decisão |
+| --- | --- |
+| Marca | Coluna `is_head boolean DEFAULT true`, fora do modelo do usuário: fica só no `OutboxRow` interno e no snapshot do `WaybillSchemaContext`, e a API pública não muda. `true` é candidata (a cabeça, ou um falso positivo inofensivo). `false` quer dizer que a antecessora é linha da própria transação. NULL quer dizer que havia antecessora de outra transação no INSERT, e a decisão fica para o commit. Só `true` entra no claim. Todo caminho que pula o trigger grava `true`, então o erro vira falso positivo e nunca chave presa |
+| Segurança | A marca só restringe as candidatas. O claim continua decidindo a cabeça no snapshot. Um falso positivo custa uma sonda. Um falso negativo trava a chave, e é isso que o desenho evita |
+| Cabeça no claim (autor: corrigir neste PR) | `o.sequence = (SELECT min(h.sequence) FROM waybill.outbox h WHERE h.key = o.key AND h.status IN ('pending','claimed','dlq'))` no lugar do `NOT EXISTS`. Para uma linha não terminal, as duas formas são equivalentes. O planner resolve o `min` por MinMax em `ix_outbox_key_sequence`, mesmo com uma chave dominando as estatísticas. O sinal de chave quente do `RETURNING` passa pela mesma revisão |
+| Índice | `ix_outbox_claimable` passa a ser `(id) WHERE status IN ('pending','claimed') AND (sequence IS NULL OR is_head)`. Substitui o atual e mantém o nome (o REINDEX do ADR 0004 não muda). A mesma cláusula, no mesmo texto, entra no `ClaimSql`, no `ClaimOrderedSql` e no `OldestPendingAgeSql`. Sem a cláusula, o `ClaimSql` varre a fila pelo `pk_outbox`. Com a ordenação desligada, o índice tem o mesmo conteúdo da 8c-1 |
+| Marca no INSERT | No trigger do contador, depois de numerar: `false` se a antecessora é a `sequence − 1` desta transação, lembrada no GUC local `waybill.last_keyed` (última chave e sequência numeradas, desfeito com o savepoint); `true` fora de READ COMMITTED (autor); NULL se há antecessora não terminal visível; `true` nos outros casos. Limite: chaves alternadas na mesma transação perdem a dedup e pagam a verificação por linha. O custo continua correto |
+| Verificação no commit | Constraint trigger `AFTER INSERT DEFERRABLE INITIALLY DEFERRED` com `WHEN (NEW.sequence IS NOT NULL AND NEW.is_head IS NULL)`. Escolhe sem trava a antecessora não terminal mais alta e trava esse id com `FOR SHARE SKIP LOCKED`, refazendo o filtro de status. Se não achar a linha ou se ela estiver travada, grava `is_head = true` na própria linha. Se achar e travar, deixa NULL |
+| Por que a verificação não perde cabeça | Se o produtor travou a antecessora antes da marcação, a marcação espera o fim do commit dele. A promoção, função VOLATILE com snapshot novo por instrução, vê então a linha do produtor. Se a marcação travou primeiro, o produtor pula a antecessora e se marca. O produtor nunca espera o dispatcher, então não há ciclo |
+| Promoção | `AFTER UPDATE OF status`, de não terminal para terminal, e `AFTER DELETE` de linha não terminal. Os dois com `sequence IS NOT NULL` no `WHEN`, sem depender de `settings`. Marcam a menor não terminal seguinte da chave, se `is_head IS NOT TRUE`. Cobrem a publicação, a liberação, desligar e religar a ordenação, e o DELETE manual (hoje o DELETE destrava a chave; com a marca, sem promoção, a prenderia) |
+| Desligar | O SQL de desligar grava `is_head = true` em toda linha não terminal com `sequence`, na mesma transação que apaga `settings`. Sem isso, o `ClaimSql` não vê as sucessoras: na sondagem, de 130 mil pendentes só 5 mil ficavam visíveis. Religar deixa falsos positivos, inofensivos |
+| Privilégios | As funções novas são `SECURITY DEFINER` com `SET search_path = pg_catalog, waybill`, como a `outbox_sequence`. Motivo: `FOR SHARE` e o UPDATE da marca exigem o privilégio UPDATE, e um papel só com INSERT falharia no COMMIT, só quando a antecessora sai durante a transação |
+| Planos dos triggers | As consultas dos triggers são escritas para descida de índice (`min`, `ORDER BY … LIMIT 1` em `ix_outbox_key_sequence`). Se a medição com estatísticas vazias não bastar, `SET enable_seqscan = off` nas funções |
+| Rede (autor) | O dispatcher repara cabeças sem marca nas partições que assume e a cada `PartitionLease`, de forma incremental (uma fatia de chaves por ciclo, com cursor). Cada reparo incrementa o contador `waybill.outbox.heads_repaired` e gera um log de erro com a chave e a `sequence`. Em funcionamento normal o contador fica em zero: um reparo indica ação externa (trigger desligado, sessão replica, restore). O `OPERATIONS.md` ganha a consulta `unmarked-heads` e o SQL `mark-heads`, executados por teste |
+| Verificação de triggers | A checagem de `tgenabled`, feita no startup e a cada `PartitionLease`, passa a cobrir os triggers novos. O dispatcher recusa sessão com `session_replication_role = replica` |
+| Espera do dispatcher | A marcação pode esperar o commit de um produtor. Normalmente é só o fim do commit. A espera fica longa com `SET CONSTRAINTS ALL IMMEDIATE`, FK diferida lenta da aplicação, replicação síncrona ou `PREPARE TRANSACTION`. Esses casos vão como limite no `OPERATIONS.md`, e o do IMMEDIATE tem teste. A ordem não quebra: a espera segura o lote, e o lease vencido republica (duplicata, nunca perda) |
+| RR/SERIALIZABLE (autor) | Sem trava e sem verificação: a linha nasce `true`. Nenhum 40001 novo. Numa chave quente, um produtor em RR põe falsos positivos no claim |
+| Migration (autor) | Refaz a `SchemaV0_2`. A coluna tem default constante, então o `ADD COLUMN` só mexe em metadados. O índice é criado com `CREATE INDEX CONCURRENTLY` e nome temporário, depois troca de lugar com o antigo e recebe o nome dele. Os triggers são recriados de forma idempotente: `CREATE CONSTRAINT TRIGGER` não tem `OR REPLACE`, então o `Up` confere `pg_trigger` antes. O `Down` remove os objetos novos. Bancos de desenvolvimento que já aplicaram a versão da 8c-1 precisam ser recriados (nota no handoff). O `Up` usa `lock_timeout`, e o `OPERATIONS.md` explica por quê |
+| Fora | M ≥ 2: na 8c-2, uma marca falso positiva pode trazer ao lote uma sucessora de outra cabeça, e a 8c-2 deduplica. Hash Join sobre Seq Scan no UPDATE externo do claim em plano genérico: já existe na 8c-1 e só aparece com auto-prepare. Fica registrado como achado e é corrigido à parte |
+
+**Testes que provam**
+
+Intercalação forçada como na 8c-1, com a barreira estendida em duas coisas: uma fase diferida (constraint trigger de teste com nome posterior ao da verificação) e um filtro por status, para parar só na marcação.
+
+| Teste | Cenário | Resultado esperado | Mutação que pega |
+| --- | --- | --- | --- |
+| `G4_Ponteiro_PublicacaoAntesDoCommitDoProdutor_SucessoraViraCabeca` | O produtor insere S e para na barreira do AFTER INSERT. O dispatcher marca H `published` e commita. Solta o produtor | S marcada; o claim seguinte leva S | tirar a verificação no commit |
+| `G4_Ponteiro_MarcacaoEsperaOCommitDoProdutor_PromocaoVeASucessora` | O produtor para na barreira diferida, com H já travada `FOR SHARE`. O dispatcher marca H. Espera observada; solta | S marcada pela promoção do dispatcher | `FOR KEY SHARE` no lugar de `FOR SHARE`; promoção `STABLE` |
+| `G4_Ponteiro_MarcacaoEmVooQuandoProdutorCommita_FalsoPositivoInofensivo` (teoria: o dispatcher commita ou desfaz) | O dispatcher atualiza H e para; o produtor commita | Commit: S sai. Rollback: S marcada, e o claim leva H, não S | tirar a decisão de cabeça do claim, confiando só na marca |
+| `G4_Ponteiro_ProdutorDeDuasChavesContraMarcacaoEmLote_SemDeadlock` | Produtor com S_A e S_B; o dispatcher trava H_B e depois H_A | Nenhum 40P01; dois commits | tirar o `SKIP LOCKED` |
+| `G4_Ponteiro_LiberacaoConcorrente_SucessoraViraCabeca` | Como o primeiro, com o SQL `key-release` | A chave flui | promover só em `published` |
+| `G4_Ponteiro_DeleteDaCabeca_SucessoraViraCabeca` | DELETE manual da cabeça na DLQ | A sucessora sai no claim seguinte | tirar a promoção no DELETE |
+| `G4_Ponteiro_DesligarEReligar_ChavesAndam` | Ligar, enfileirar, desligar pelo SQL do `OPERATIONS.md`, drenar parte, religar | Toda chave anda nos dois modos | promoção condicionada a `settings`; desligar sem marcar |
+| `G4_Ponteiro_RajadaNaTransacao_SoAPrimeiraDecideNoCommit` | 200 linhas de uma chave num `SaveChanges`, com antecessora de outra transação | Só a primeira fica NULL até o commit; as outras nascem `false`; depois do commit, uma cabeça por chave | tirar a dedup |
+| `G4_AplicacaoEmRRouSerializable_…` (ampliada) | Antecessora publicada durante a transação RR | Commit sem erro; linha `true` | travar também fora de READ COMMITTED |
+| `G4_PapelSoComInsert_Enfileira` (ampliado) | Antecessora publicada entre o INSERT e o commit | Commit sem erro | tirar o `SECURITY DEFINER` |
+| `Limite_SetConstraintsImmediate_MarcacaoEsperaOProdutor` | A aplicação faz `SET CONSTRAINTS ALL IMMEDIATE` e segura a transação | A marcação espera; depois do commit a ordem se mantém, como o `OPERATIONS.md` descreve | — |
+| `G4_ChaveQuenteSozinha_DrenoLinear` (teoria: 1 mil e 4 mil) | Uma chave, n pendentes, estatísticas com a chave dominante | Buffers por claim iguais nos dois tamanhos | tirar a marca do claim; `NOT EXISTS` no lugar do `min` |
+| `G4_ChaveBloqueadaComCemMilAFrente_ClaimContinuaFluindo` (teoria: 10 mil e 100 mil) | Como na 8c-1, com sementes de marca coerente | Buffers por claim abaixo de uma constante e iguais nos dois tamanhos; a liberação de uma cabeça seguida do claim da próxima | tirar a marca do claim |
+| `G4_Ponteiro_PlanoGenerico_UsaOIndice` (estrutural) | `EXPLAIN` dos três SQL com `force_generic_plan` | Index Scan em `ix_outbox_claimable`, sem Seq Scan nem Sort | esquecer a cláusula num SQL |
+| `G4_Ponteiro_EstatisticasVazias_TransacaoGrandeLinear` | Tabela recém-criada, 50 mil linhas de uma chave numa transação | Termina dentro de um teto | consulta de trigger que vira Seq Scan |
+| `G4_Ponteiro_Rede_ReparaCabecaSemMarca` | Marca apagada com o trigger desligado; o dispatcher assume a partição | Reparada; contador em 1; log com chave e `sequence` | tirar a varredura |
+| `G4_TriggerDesligado_ErroCritico` (ampliado) | Cada trigger novo desligado; sessão replica | Erro crítico | tirar um trigger da checagem |
+| `Operacao_MarcarCabecas` e `Operacao_ConsultasDeDiagnostico` (ampliada) | `unmarked-heads` e `mark-heads` do `OPERATIONS.md`, como escritos | Acham e marcam; a consulta da chave mostra `is_head` | — |
+| `G4_OrdenacaoDesligada_SemContadorNemFiltro` (reescrito) | Sem `settings` | Os `WHEN` dos triggers novos exigem `sequence`; a linha entra nos mesmos índices da 8c-1 | promoção sem `WHEN` |
+| `G4_Propriedade_PrimeiraEntregaEmOrdem` (caos, ampliado) | Mais um produtor numa chave quente durante a drenagem | Invariante amostrada numa instrução e conferida no fim: a menor não terminal de cada chave tem `is_head` | qualquer falso negativo |
+
+As sementes por `generate_series` (100 mil, backlog, transições) gravam `is_head` coerente por um helper. Sem isso, os testes medem um estado impossível.
+
+**Mutações** (cada uma quebra um teste nomeado): tirar a verificação no commit; `FOR KEY SHARE`; promoção `STABLE`; tirar o `SKIP LOCKED`; promover só em `published`; tirar a promoção no DELETE; condicionar a promoção a `settings`; desligar sem marcar; tirar a dedup; travar fora de READ COMMITTED; tirar o `SECURITY DEFINER`; tirar a marca do claim; `NOT EXISTS` no lugar do `min`; esquecer a cláusula num SQL; tirar a varredura; tirar um trigger da checagem.
+
+**Corrida sem teste determinístico:** a janela dentro do COMMIT, entre sair do ProcArray e soltar o `FOR SHARE`. Depende do mesmo invariante do PG que a 8c-1 já usa, e fica coberta pela invariante do teste de caos.
+
+**Documentos:** o ADR 0008 ganha a seção "parte 1b", com cada ator externo e como é coberto; o `OPERATIONS.md` ganha desligar, `unmarked-heads`, `mark-heads`, "nunca apague, libere", os limites de espera, RR, a escrita extra no autovacuum, o upgrade com `lock_timeout` e a tabela de custo medida de novo; o escopo troca a frase do custo linear; o `plano-v0.2.md` registra a etapa 8 com cinco PRs e o gatilho de corte da etapa 11; o CHANGELOG é atualizado.
+
+**Pronto quando:** os cenários verdes no PG 15 e 18; cada mutação quebra um teste nomeado; o claim de `G4_ChaveBloqueadaComCemMilAFrente` com p50 ≤ 50 ms e buffers que não dependem do tamanho da fila; a invariante verde no caos curto; WAL com a ordenação desligada igual ao da 8c-1, com margem de 1%.
+
 ### 8c-2 — M ≥ 2 em rodadas
 
 Mais perto da linha de corte do plano. Desenho a fechar no início do PR, com base nestes pontos já levantados:
