@@ -235,14 +235,16 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         LIMIT 1
         """;
 
-    // The head pointer's safety net (ADR 0008). Walks, in key order from after $1 (null: from the first), the next $2
-    // keys with an unfinished numbered row, jumping from key to key in ix_outbox_key_sequence (a recursive CTE, read only
-    // as far as the slice needs), and marks each key's first unfinished row left unmarked, in the partitions $4 of P = $3
-    // this instance holds. Waybill itself never leaves one so: whatever this marks, something outside it changed the outbox.
-    internal const string RepairHeadsSql = """
+    // The head pointer's safety net (ADR 0008). Walks, in key order from the first key or from after a cursor, the next
+    // keys of a slice that have an unfinished numbered row, jumping from key to key in ix_outbox_key_sequence (a recursive
+    // CTE, read only as far as the slice needs), and marks each key's first unfinished row left unmarked, in the partitions
+    // of P this instance holds. Waybill itself never leaves one so: whatever this marks, something outside it changed the
+    // outbox. Two statements, with and without the cursor: as one, with "cursor IS NULL OR key > cursor", a generic plan
+    // (auto-prepare) could not seek to the cursor, and read the index from the first key on (issue #21).
+    private static string RepairHeads(string cursor, int first) => $"""
         WITH RECURSIVE walk AS (
             (SELECT o.key FROM waybill.outbox o
-             WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq') AND ($1::text IS NULL OR o.key > $1)
+             WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq'){cursor}
              ORDER BY o.key LIMIT 1)
             UNION ALL
             SELECT (SELECT o.key FROM waybill.outbox o
@@ -250,18 +252,24 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
                     ORDER BY o.key LIMIT 1)
             FROM walk w
             WHERE w.key IS NOT NULL),
-        slice AS MATERIALIZED (SELECT key FROM walk WHERE key IS NOT NULL LIMIT $2),
+        slice AS MATERIALIZED (SELECT key FROM walk WHERE key IS NOT NULL LIMIT ${first}),
         repaired AS (
             UPDATE waybill.outbox o SET is_head = true
             FROM slice s
             WHERE o.id = (SELECT h.id FROM waybill.outbox h
                           WHERE h.key = s.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq')
                           ORDER BY h.sequence LIMIT 1)
-              AND o.is_head IS NOT TRUE AND o.key_hash % $3 = ANY ($4)
+              AND o.is_head IS NOT TRUE AND o.key_hash % ${first + 1} = ANY (${first + 2})
             RETURNING o.key, o.sequence)
         SELECT (SELECT max(key) FROM slice), (SELECT count(*) FROM slice), r.key, r.sequence
         FROM (SELECT 1) AS one LEFT JOIN repaired r ON true
         """;
+
+    /// <summary>The sweep from the first key: $1 slice, $2 P, $3 the partitions held.</summary>
+    internal static readonly string RepairHeadsFirstSql = RepairHeads("", 1);
+
+    /// <summary>The sweep from after a key: $1 that key, $2 slice, $3 P, $4 the partitions held.</summary>
+    internal static readonly string RepairHeadsAfterSql = RepairHeads(" AND o.key > $1", 2);
 
     // With ordering off, the claim takes numbered rows only when marked, and nothing finishes the heads that would mark
     // the rest. The reset SQL marks them, but cannot see a row a producer wrote while settings existed and had not yet
@@ -278,13 +286,14 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Repairs one slice of keys after <paramref name="after"/> (null: from the first key); see <see cref="RepairHeadsSql"/>.</summary>
+    /// <summary>Repairs one slice of keys after <paramref name="after"/> (null: from the first key); see <see cref="RepairHeadsAfterSql"/>.</summary>
     /// <returns>Where the next slice starts (null once the walk reached the last key), and the rows marked.</returns>
     public async Task<(string? Next, List<(string Key, long Sequence)> Repaired)> RepairHeadsAsync(
         string? after, int slice, int partitions, int[] held, CancellationToken cancellationToken)
     {
-        await using var command = dataSource.CreateCommand(RepairHeadsSql);
-        command.Parameters.Add(new NpgsqlParameter { Value = (object?)after ?? DBNull.Value, NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text });
+        await using var command = dataSource.CreateCommand(after is null ? RepairHeadsFirstSql : RepairHeadsAfterSql);
+        if (after is not null)
+            command.Parameters.Add(new NpgsqlParameter { Value = after, NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text });
         command.Parameters.Add(new NpgsqlParameter { Value = slice });
         command.Parameters.Add(new NpgsqlParameter { Value = partitions });
         command.Parameters.Add(new NpgsqlParameter { Value = held });

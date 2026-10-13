@@ -176,7 +176,16 @@ internal sealed partial class OutboxDispatcher
         {
             HeldPartitions = await Partitions.MaintainAsync(Owner, Ordering, cancellationToken).ConfigureAwait(false);
             _lastUpkeep = _time.GetTimestamp();
-            await RepairHeadsAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await RepairHeadsAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // The sweep is a safety net: a failure of its own must not stop the claim, nor back the dispatcher off as a
+                // database outage would. The next upkeep tries again from the same cursor.
+                LogSweepFailed(_logger, exception);
+            }
         }
 
         if (_breaker.IsOpen)
@@ -522,4 +531,8 @@ internal sealed partial class OutboxDispatcher
     [LoggerMessage(EventId = 21, Level = LogLevel.Warning,
         Message = "The rounds of a batch ran out of PublishTimeout ({PublishTimeout}): MaxPerKey is down to {MaxPerKey} for now, and doubles back as batches run whole. The broker confirms slowly for the messages of a key.")]
     private static partial void LogMaxPerKeyReduced(ILogger logger, int maxPerKey, TimeSpan publishTimeout);
+
+    [LoggerMessage(EventId = 22, Level = LogLevel.Error,
+        Message = "The sweep for unmarked key heads failed; the cycle goes on, and the next partition upkeep tries again.")]
+    private static partial void LogSweepFailed(ILogger logger, Exception exception);
 }
