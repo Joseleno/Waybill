@@ -26,6 +26,7 @@ public sealed class Operacao_ConsultasDeDiagnostico(PostgresFixture postgres)
         Assert.Equal([1L, 2L, 3L], rows.Select(r => (long)r[0]));
         Assert.Equal(["dlq", "pending", "pending"], rows.Select(r => (string)r[2]));
         Assert.All(rows, r => Assert.Equal(scenario.Dispatcher.Owner, r[8]));
+        Assert.Equal([true, false, false], rows.Select(r => (bool)r[9])); // the head pointer: only the head is claimable
     }
 
     private static async Task<List<object[]>> RowsAsync(NpgsqlDataSource dataSource, string sql)

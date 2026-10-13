@@ -163,6 +163,58 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         LIMIT 1
         """;
 
+    // The head pointer's safety net (ADR 0008). Walks, in key order from after $1 (null: from the first), the next $2
+    // keys with an unfinished numbered row, jumping from key to key in ix_outbox_key_sequence (a recursive CTE, read only
+    // as far as the slice needs), and marks each key's first unfinished row left unmarked, in the partitions $4 of P = $3
+    // this instance holds. Waybill itself never leaves one so: whatever this marks, something outside it changed the outbox.
+    internal const string RepairHeadsSql = """
+        WITH RECURSIVE walk AS (
+            (SELECT o.key FROM waybill.outbox o
+             WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq') AND ($1::text IS NULL OR o.key > $1)
+             ORDER BY o.key LIMIT 1)
+            UNION ALL
+            SELECT (SELECT o.key FROM waybill.outbox o
+                    WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq') AND o.key > w.key
+                    ORDER BY o.key LIMIT 1)
+            FROM walk w
+            WHERE w.key IS NOT NULL),
+        slice AS MATERIALIZED (SELECT key FROM walk WHERE key IS NOT NULL LIMIT $2),
+        repaired AS (
+            UPDATE waybill.outbox o SET is_head = true
+            FROM slice s
+            WHERE o.id = (SELECT h.id FROM waybill.outbox h
+                          WHERE h.key = s.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq')
+                          ORDER BY h.sequence LIMIT 1)
+              AND o.is_head IS NOT TRUE AND o.key_hash % $3 = ANY ($4)
+            RETURNING o.key, o.sequence)
+        SELECT (SELECT max(key) FROM slice), (SELECT count(*) FROM slice), r.key, r.sequence
+        FROM (SELECT 1) AS one LEFT JOIN repaired r ON true
+        """;
+
+    /// <summary>Repairs one slice of keys after <paramref name="after"/> (null: from the first key); see <see cref="RepairHeadsSql"/>.</summary>
+    /// <returns>Where the next slice starts (null once the walk reached the last key), and the rows marked.</returns>
+    public async Task<(string? Next, List<(string Key, long Sequence)> Repaired)> RepairHeadsAsync(
+        string? after, int slice, int partitions, int[] held, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(RepairHeadsSql);
+        command.Parameters.Add(new NpgsqlParameter { Value = (object?)after ?? DBNull.Value, NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text });
+        command.Parameters.Add(new NpgsqlParameter { Value = slice });
+        command.Parameters.Add(new NpgsqlParameter { Value = partitions });
+        command.Parameters.Add(new NpgsqlParameter { Value = held });
+        string? last = null;
+        long walked = 0;
+        var repaired = new List<(string, long)>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            last = reader.IsDBNull(0) ? null : reader.GetString(0);
+            walked = reader.GetInt64(1);
+            if (!reader.IsDBNull(2))
+                repaired.Add((reader.GetString(2), reader.GetInt64(3)));
+        }
+        return (walked < slice ? null : last, repaired);
+    }
+
     /// <summary>Claims up to a batch. With <c>partitions</c> (P, ordering by key), only keyed rows of partitions this owner holds (ADR 0007), and of each key only its head (ADR 0008).</summary>
     public async Task<List<ClaimedMessage>> ClaimAsync(
         string owner, int batchSize, TimeSpan lease, CancellationToken cancellationToken, int? partitions = null)

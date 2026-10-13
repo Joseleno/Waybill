@@ -45,6 +45,7 @@ internal sealed partial class OutboxDispatcher
     private readonly PartitionStore? _partitions;
     private readonly bool _ordered;
     private readonly TimeProvider _time;
+    private readonly OutboxMetrics? _metrics;
     private long? _lastUpkeep; // TimeProvider timestamp of the last partition upkeep that succeeded
 
     public OutboxDispatcher(
@@ -54,10 +55,12 @@ internal sealed partial class OutboxDispatcher
         IOptions<WaybillDispatcherOptions> dispatcherOptions,
         ILogger<OutboxDispatcher> logger,
         TimeProvider? timeProvider = null,
-        PartitionStore? partitions = null)
+        PartitionStore? partitions = null,
+        OutboxMetrics? metrics = null)
     {
         _store = store;
         _partitions = partitions;
+        _metrics = metrics;
         _ordered = dispatcherOptions.Value.OrderByKey;
         _transport = transport;
         _waybillOptions = waybillOptions;
@@ -92,6 +95,23 @@ internal sealed partial class OutboxDispatcher
         || _time.GetElapsedTime(_lastUpkeep.Value) >= (_options.PartitionLease - _options.Lease) / 4;
 
     private PartitionStore Partitions => _partitions ?? throw new InvalidOperationException("Ordering by key needs the partition store.");
+
+    // The head pointer's safety net (ADR 0008): one slice of keys per partition upkeep, so a full pass over K keys takes
+    // K / RepairSlice upkeeps. Each slice is a few index descents per key.
+    internal const int RepairSlice = 2_000;
+    private string? _repairAfter; // where the next slice starts; null: from the first key
+
+    private async Task RepairHeadsAsync(CancellationToken cancellationToken)
+    {
+        if (HeldPartitions.Count == 0)
+            return;
+        var (next, repaired) = await _store.RepairHeadsAsync(
+            _repairAfter, RepairSlice, _options.Partitions, [.. HeldPartitions.Keys], cancellationToken).ConfigureAwait(false);
+        _repairAfter = next;
+        foreach (var (key, sequence) in repaired)
+            LogHeadRepaired(_logger, key, sequence);
+        _metrics?.RecordHeadsRepaired(repaired.Count);
+    }
 
     /// <summary>
     /// Checks that this instance agrees with the others on ordering (ADR 0007): with <c>OrderByKey</c>, the stored P and
@@ -146,6 +166,7 @@ internal sealed partial class OutboxDispatcher
         {
             HeldPartitions = await Partitions.MaintainAsync(Owner, Ordering, cancellationToken).ConfigureAwait(false);
             _lastUpkeep = _time.GetTimestamp();
+            await RepairHeadsAsync(cancellationToken).ConfigureAwait(false);
         }
 
         if (_breaker.IsOpen)
@@ -315,4 +336,10 @@ internal sealed partial class OutboxDispatcher
     [LoggerMessage(EventId = 16, Level = LogLevel.Warning,
         Message = "The broker is slow or pushing back: the batch size is now {BatchSize}. The breaker stays closed.")]
     private static partial void LogBatchReduced(ILogger logger, int batchSize);
+
+    [LoggerMessage(EventId = 17, Level = LogLevel.Error,
+        Message = "The first unfinished message of key {Key} (sequence {Sequence}) was not marked claimable, and is now. Waybill never "
+            + "leaves it so: something changed the outbox outside it (a disabled trigger, a session in replica mode, a restore, a manual "
+            + "UPDATE). See OPERATIONS.md, \"Unmarked heads\".")]
+    private static partial void LogHeadRepaired(ILogger logger, string key, long sequence);
 }

@@ -15,8 +15,8 @@ public static class OrderingHarness
         });
 
     internal static OutboxDispatcher Create(
-        NpgsqlDataSource dataSource, ITransport transport, WaybillDispatcherOptions options, TimeProvider? time = null, LogSink? logs = null) =>
-        DispatcherHarness.Create(dataSource, transport, options, time: time, orderByKey: true, logs: logs);
+        NpgsqlDataSource dataSource, ITransport transport, WaybillDispatcherOptions options, TimeProvider? time = null, LogSink? logs = null, OutboxMetrics? metrics = null) =>
+        DispatcherHarness.Create(dataSource, transport, options, time: time, orderByKey: true, logs: logs, metrics: metrics);
 
     /// <summary>Shared buffers one ordered claim touches, from EXPLAIN (ANALYZE, BUFFERS), rolled back so nothing stays claimed.</summary>
     public static async Task<long> ClaimBuffersAsync(NpgsqlDataSource dataSource, string owner, int partitions, int batchSize = 100)

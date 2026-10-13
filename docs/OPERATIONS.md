@@ -252,7 +252,7 @@ Everything not yet published of one key, and the dispatcher that holds its parti
 <!-- key-rows -->
 ```sql
 SELECT o.sequence, o.id, o.status, o.attempts, o.next_attempt_at, o.lease_until, o.owner, o.dlq_reason,
-       p.owner AS partition_owner
+       p.owner AS partition_owner, o.is_head
 FROM waybill.outbox o
 LEFT JOIN waybill.settings s ON true
 LEFT JOIN waybill.outbox_partitions p ON p.partition = o.key_hash % s.partitions
@@ -279,6 +279,46 @@ to `pending` (the database refuses it): its successors may already be out. Relea
 attempt to publish it went unconfirmed (a timeout, a lost connection), that attempt may have reached the broker, or
 may still reach it after the key's later messages. Consumers then see a message older than ones they already have,
 which their inbox does not mistake for a duplicate. Retention keeps released messages, like the DLQ.
+
+Never delete a message of a key to get it moving: release it. A deleted message leaves no record of the gap, and an
+unconfirmed attempt to publish it may still arrive.
+
+### Unmarked heads
+
+The claim reads only the first unfinished message of each key, marked by `is_head` (with `is_head` false or null the
+message waits behind an earlier one of its key). Waybill keeps that mark itself: when a message is written, when its
+transaction commits, and when the one before it is published, released or deleted. Something outside Waybill can
+leave a key's first message unmarked, and the key then stops without a DLQ message to show for it: one of Waybill's
+triggers disabled, an `UPDATE` run with `session_replication_role = replica`, a restore of part of the table, a
+hand-written `UPDATE` of `is_head`.
+
+Each dispatcher that orders by key walks a slice of 2,000 keys of its partitions on every partition upkeep and marks
+any such message, with an error log naming the key and the sequence. **`waybill.outbox.heads_repaired`** (meter
+`Waybill`) counts them, and stays at zero unless something changed the outbox outside Waybill: alert on any increase.
+A full pass over K keys takes K / 2,000 upkeeps, about every `(PartitionLease − Lease) / 4`. To find and mark them at
+once:
+
+<!-- unmarked-heads -->
+```sql
+SELECT o.key, o.sequence, o.id, o.status
+FROM waybill.outbox o
+WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq') AND o.is_head IS NOT TRUE
+  AND o.sequence = (SELECT min(h.sequence) FROM waybill.outbox h
+                    WHERE h.key = o.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq'))
+ORDER BY o.key;
+```
+
+<!-- mark-heads -->
+```sql
+UPDATE waybill.outbox o SET is_head = true
+WHERE o.sequence IS NOT NULL AND o.status IN ('pending', 'claimed', 'dlq') AND o.is_head IS NOT TRUE
+  AND o.sequence = (SELECT min(h.sequence) FROM waybill.outbox h
+                    WHERE h.key = o.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq'))
+RETURNING o.key, o.sequence;
+```
+
+Marking is always safe: the claim still checks that a message is its key's first, so a mark too many costs one more
+look and nothing goes out of order. Both read every unfinished numbered message.
 
 ## PostgreSQL: isolation level
 
