@@ -75,4 +75,17 @@ public sealed class RodadasTests
         Assert.Equal([a1, a2, again], plan.Rejected.Select(r => r.Row).OrderBy(r => r.Sequence));
         Assert.All(plan.Rejected, r => Assert.Contains("twice", r.Reason));
     }
+
+    // A round starts only with time left, and at least as much as the round before took: the next one, about as long,
+    // would otherwise run past the batch's deadline and the lease. A round before which nothing ran (D = 0) still needs
+    // time left: a call with no time at all could only time out, its outcome unknown.
+    [Theory]
+    [InlineData(5, 15, false)]
+    [InlineData(15, 15, true)]
+    [InlineData(16, 15, true)]
+    [InlineData(0, 0, false)]
+    [InlineData(1, 0, true)]
+    [InlineData(-1, 0, false)]
+    public void Rodadas_SoComecaComTempoParaOutraIgual(int remainingSeconds, int previousSeconds, bool starts) =>
+        Assert.Equal(starts, Rounds.MayStart(TimeSpan.FromSeconds(remainingSeconds), TimeSpan.FromSeconds(previousSeconds)));
 }

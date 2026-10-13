@@ -13,6 +13,13 @@ internal sealed record RoundPlan(IReadOnlyList<IReadOnlyList<ClaimedMessage>> Ro
 /// </summary>
 internal static class Rounds
 {
+    /// <summary>
+    /// Whether a round may start with <paramref name="remaining"/> of the batch's deadline left: only with time left, and at
+    /// least as much as the previous round took (<paramref name="previous"/>), so the next one, about as long, ends before
+    /// the deadline and the lease. With no time left a call could only time out, its outcome unknown.
+    /// </summary>
+    public static bool MayStart(TimeSpan remaining, TimeSpan previous) => remaining > TimeSpan.Zero && remaining >= previous;
+
     public static RoundPlan Build(IReadOnlyList<ClaimedMessage> claimed)
     {
         var rejected = new List<RejectedRow>();

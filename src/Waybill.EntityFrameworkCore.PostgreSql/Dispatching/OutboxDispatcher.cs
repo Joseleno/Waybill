@@ -47,6 +47,7 @@ internal sealed partial class OutboxDispatcher
     private readonly TimeProvider _time;
     private readonly OutboxMetrics? _metrics;
     private long? _lastUpkeep; // TimeProvider timestamp of the last partition upkeep that succeeded
+    private int _maxPerKey; // the effective M: MaxPerKey, brought down when rounds run out of time
 
     public OutboxDispatcher(
         OutboxStore store,
@@ -69,6 +70,7 @@ internal sealed partial class OutboxDispatcher
         _time = timeProvider ?? TimeProvider.System;
         _breaker = new CircuitBreaker(timeProvider ?? TimeProvider.System, _options.PollingInterval, WaybillDispatcherService.MaxBackoff);
         _batchSizer = new BatchSizer(_options.BatchSize);
+        _maxPerKey = _ordered ? Math.Max(1, _options.MaxPerKey) : 1;
     }
 
     /// <summary>Unique per process incarnation: a restarted or zombie process never shares it.</summary>
@@ -78,6 +80,9 @@ internal sealed partial class OutboxDispatcher
     public TimeSpan BreakerRemaining => _breaker.Remaining;
 
     internal int CurrentBatchSize => _batchSizer.Current;
+
+    /// <summary>The effective M (ordering by key): <c>MaxPerKey</c>, or less while rounds run out of time.</summary>
+    internal int CurrentMaxPerKey => _maxPerKey;
 
     /// <summary>Whether this instance orders by key, and so holds partitions it must renew.</summary>
     public bool OrdersByKey => _ordered;
@@ -181,7 +186,7 @@ internal sealed partial class OutboxDispatcher
         var batchSize = _breaker.IsHalfOpen ? 1 : _batchSizer.Current; // half-open: probe with a single message
         var claimed = await _store.ClaimAsync(
             Owner, batchSize, _options.Lease, cancellationToken, _ordered ? _options.Partitions : null,
-            _ordered ? _options.MaxPerKey : 1).ConfigureAwait(false);
+            _maxPerKey).ConfigureAwait(false);
         if (claimed.Count == 0)
             return new DispatchCycle(0, DispatchOutcome.Idle, batchSize);
 
@@ -196,6 +201,7 @@ internal sealed partial class OutboxDispatcher
             // published must say so, and what was not goes back as it was.
             await FinishAsync(batch).ConfigureAwait(false);
         }
+        AdaptMaxPerKey(batch);
 
         return new DispatchCycle(claimed.Count, React(batch.React), batchSize, batch.MoreOfKeys);
     }
@@ -218,6 +224,12 @@ internal sealed partial class OutboxDispatcher
 
         /// <summary>A message must be published again: no round starts after this one.</summary>
         public bool Ended { get; set; }
+
+        /// <summary>Rounds that ran; set when the deadline left no time for the next one.</summary>
+        public int? CutAfter { get; set; }
+
+        /// <summary>Every round ran.</summary>
+        public bool Whole { get; set; }
 
         public bool MoreOfKeys =>
             Claimed.Where(c => c.Sequence is not null && !Finished.Contains(c.Message.Key!))
@@ -253,11 +265,17 @@ internal sealed partial class OutboxDispatcher
         }
 
         var maxPayloadBytes = _waybillOptions.Value.MaxPayloadBytes;
+        var previous = TimeSpan.Zero; // how long the last round took
         for (var k = 0; k < plan.Rounds.Count; k++)
         {
+            if (batch.Ended)
+                return;
             var remaining = _options.PublishTimeout - _time.GetElapsedTime(started);
-            if (batch.Ended || (k > 0 && remaining <= TimeSpan.Zero))
-                break;
+            if (k > 0 && !Rounds.MayStart(remaining, previous))
+            {
+                batch.CutAfter = k;
+                return;
+            }
 
             var toPublish = new List<ClaimedMessage>();
             foreach (var row in plan.Rounds[k])
@@ -280,9 +298,15 @@ internal sealed partial class OutboxDispatcher
                 }
             }
             if (toPublish.Count == 0)
+            {
+                previous = TimeSpan.Zero;
                 continue;
+            }
 
+            // Round 1 has the whole PublishTimeout, as a batch always had; a later round, what is left of it.
+            var roundStarted = _time.GetTimestamp();
             var results = await PublishAsync(toPublish.Select(r => r.Message).ToList(), k == 0 ? _options.PublishTimeout : remaining).ConfigureAwait(false);
+            previous = _time.GetElapsedTime(roundStarted);
             for (var j = 0; j < toPublish.Count; j++)
             {
                 var (row, result) = (toPublish[j], results[j]);
@@ -292,7 +316,29 @@ internal sealed partial class OutboxDispatcher
                 if (result.Status == PublishStatus.Retry)
                     batch.Ended = true;
             }
-            batch.React.AddRange(results);
+            // A later round had only what the earlier ones left of the deadline: its confirmation timeout says nothing
+            // about the broker. A nack, a connection failure or anything else does (ADR 0003).
+            batch.React.AddRange(k == 0 ? results : results.Where(r => !(r.Status == PublishStatus.Retry && r.Failure == TransportFailure.ConfirmTimeout)));
+        }
+        batch.Whole = !batch.Ended;
+    }
+
+    // M follows the deadline, as the batch size follows the broker: rounds that keep running out of time bring it down to
+    // the rounds that fit, so successors are not claimed only to be handed back; a batch that runs whole doubles it back.
+    private void AdaptMaxPerKey(Batch batch)
+    {
+        if (!_ordered)
+            return;
+        if (batch.CutAfter is { } ran)
+        {
+            var reduced = Math.Max(1, ran);
+            if (reduced < _maxPerKey)
+                LogMaxPerKeyReduced(_logger, reduced, _options.PublishTimeout);
+            _maxPerKey = Math.Min(_maxPerKey, reduced);
+        }
+        else if (batch.Whole)
+        {
+            _maxPerKey = Math.Min(_options.MaxPerKey, _maxPerKey * 2);
         }
     }
 
@@ -468,4 +514,8 @@ internal sealed partial class OutboxDispatcher
     [LoggerMessage(EventId = 20, Level = LogLevel.Warning,
         Message = "Recording a batch's outcome failed with {SqlState} (deadlock or serialization failure) and runs again; its statements are fenced.")]
     private static partial void LogFinishRetried(ILogger logger, string sqlState);
+
+    [LoggerMessage(EventId = 21, Level = LogLevel.Warning,
+        Message = "The rounds of a batch ran out of PublishTimeout ({PublishTimeout}): MaxPerKey is down to {MaxPerKey} for now, and doubles back as batches run whole. The broker confirms slowly for the messages of a key.")]
+    private static partial void LogMaxPerKeyReduced(ILogger logger, int maxPerKey, TimeSpan publishTimeout);
 }
