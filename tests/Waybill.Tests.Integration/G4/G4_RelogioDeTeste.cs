@@ -31,9 +31,12 @@ public sealed class G4_RelogioDeTeste(PostgresFixture postgres)
     }
 
     // The ordered claim reads the clock once: the partition it checks is held past the lease it takes, measured from the
-    // same instant (ADR 0007), and every row is claimable at that one instant (ADR 0008).
-    [Fact]
-    public async Task G4_PosseNoLimite_UmInstantePorInstrucao()
+    // same instant (ADR 0007), and every row is claimable at that one instant (ADR 0008). With M ≥ 2 too: the successors
+    // are judged at the instant their heads were.
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public async Task G4_PosseNoLimite_UmInstantePorInstrucao(int maxPerKey)
     {
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);
@@ -44,9 +47,9 @@ public sealed class G4_RelogioDeTeste(PostgresFixture postgres)
         await DispatcherHarness.EnqueueAsync(database, 9, key: i => "ABC"[i % 3].ToString());
         await using var clock = await TestClock.InstallAsync(database);
 
-        var claimed = await new OutboxStore(clock.DataSource).ClaimAsync(dispatcher.Owner, 100, TimeSpan.FromSeconds(30), ct, partitions: 4);
+        var claimed = await new OutboxStore(clock.DataSource).ClaimAsync(dispatcher.Owner, 100, TimeSpan.FromSeconds(30), ct, partitions: 4, maxPerKey: maxPerKey);
 
-        Assert.Equal(3, claimed.Count);
+        Assert.Equal(3 * maxPerKey, claimed.Count);
         Assert.Equal(1, await clock.ReadsAsync());
     }
 

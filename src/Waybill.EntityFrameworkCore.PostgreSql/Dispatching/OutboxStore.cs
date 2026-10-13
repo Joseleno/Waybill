@@ -4,8 +4,11 @@ using NpgsqlTypes;
 
 namespace Waybill.EntityFrameworkCore.Dispatching;
 
-/// <summary>A claimed row: its message, its fencing token and, when ordered by key, its sequence and whether more rows of its key wait behind it.</summary>
-internal sealed record ClaimedMessage(OutgoingMessage Message, long Fence, long? Sequence = null, bool MoreOfKey = false);
+/// <summary>
+/// A claimed row: its message, its fencing token and, when ordered by key, its sequence, whether more rows of its key wait
+/// behind it, and its round: 0 for a head or an unordered row, k for the k-th row after its key's head in the batch (M ≥ 2).
+/// </summary>
+internal sealed record ClaimedMessage(OutgoingMessage Message, long Fence, long? Sequence = null, bool MoreOfKey = false, int Rank = 0);
 
 /// <summary>The basic.return budget and the growing wait between returns (ADR 0006).</summary>
 internal sealed record ReturnPolicy(int MaxReturns, TimeSpan Backoff, TimeSpan MaxBackoff)
@@ -84,36 +87,105 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
     // - Head pointer: only marked rows (is_head) are candidates, so a long queue behind a stopped or busy head is never
     //   read. The mark only narrows the candidates; the head is still decided here, from the snapshot.
     // - One instant per statement: the clock read once, for every row and for the lease it takes.
-    internal static readonly string ClaimOrderedSql = """
-        WITH now AS MATERIALIZED (SELECT clock_timestamp() AS t),
-        candidates AS MATERIALIZED (
-            SELECT o.id FROM waybill.outbox o, now
+    // - The UPDATE finds its rows by primary key from an array: joined with the CTE, a generic plan hashed a sequential
+    //   scan of the whole outbox (8c-2 review: 75 to 133 ms with 200 thousand rows waiting).
+    // Both ordered claims are built from the fragments below, so a protection cannot be in one and missing in the other.
+    private const string Now = "now AS MATERIALIZED (SELECT clock_timestamp() AS t)";
+
+    private const string HeldPartition = """
+        (o.key IS NULL OR EXISTS (
+                SELECT 1 FROM waybill.outbox_partitions p
+                WHERE p.partition = o.key_hash % $4 AND p.owner = $1 AND p.lease_until > now.t + $2))
+        """;
+
+    private const string HeadCandidates = $"""
+        SELECT o.id, o.key, o.sequence FROM waybill.outbox o, now
             WHERE o.status IN ('pending', 'claimed') AND (o.sequence IS NULL OR o.is_head)
               AND (o.status = 'pending' OR o.lease_until < now.t)
               AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= now.t)
-              AND (o.key IS NULL OR EXISTS (
-                    SELECT 1 FROM waybill.outbox_partitions p
-                    WHERE p.partition = o.key_hash % $4 AND p.owner = $1 AND p.lease_until > now.t + $2))
+              AND {HeldPartition}
               AND (o.sequence IS NULL OR o.sequence = (
                     SELECT min(h.sequence) FROM waybill.outbox h
                     WHERE h.key = o.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq')))
             ORDER BY o.id
             LIMIT $3
-            FOR UPDATE OF o SKIP LOCKED)
+            FOR UPDATE OF o SKIP LOCKED
+        """;
+
+    // Claimable at this instant: repeated on the locked row, where EvalPlanQual re-checks only the locked table's own
+    // predicates, and on the UPDATE.
+    private const string RowClaimable = """
+        (o.status = 'pending' OR (o.status = 'claimed' AND o.lease_until < now.t))
+              AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= now.t)
+        """;
+
+    private static string ClaimOrdered(string with, string claimed) => $"""
+        WITH {Now},
+        {with}
         UPDATE waybill.outbox o
         SET status = 'claimed', owner = $1, fence = o.fence + 1, lease_until = now.t + $2
-        FROM candidates c, now
-        WHERE o.id = c.id
-          AND (o.status = 'pending' OR (o.status = 'claimed' AND o.lease_until < now.t))
-          AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= now.t)
-          AND (o.key IS NULL OR EXISTS (
-                SELECT 1 FROM waybill.outbox_partitions p
-                WHERE p.partition = o.key_hash % $4 AND p.owner = $1 AND p.lease_until > now.t + $2))
+        FROM now
+        WHERE o.id = ANY ((SELECT array_agg(id) FROM {claimed})::uuid[])
+          AND {RowClaimable}
+          AND {HeldPartition}
         RETURNING o.id, o.type, o.key, o.payload, o.content_type, o.headers, o.created_at, o.fence, o.sequence,
                   o.sequence IS NOT NULL AND o.sequence < (
                       SELECT max(s.sequence) FROM waybill.outbox s
                       WHERE s.key = o.key AND s.sequence IS NOT NULL AND s.status IN ('pending', 'claimed', 'dlq'))
         """;
+
+    internal static readonly string ClaimOrderedSql = ClaimOrdered($"""
+        heads AS MATERIALIZED (
+            {HeadCandidates})
+        """, "heads");
+
+    // M ≥ 2 (PLAN.md 8c-2; $5 = M): the heads as above, then, of each head with a sequence, the next unfinished rows of its
+    // key, read from ix_outbox_key_sequence, up to M − 1 and up to its share of what the heads left of the batch.
+    // - series: claimable at this instant, judged in the statement's snapshot; a row that is not (another owner's live
+    //   lease, a wait after basic.return, the DLQ) ends its key's series there.
+    // - ranked: cut by round, every second row before any third, so a series is never cut in its middle.
+    // - locked: locked one by one, by primary key, re-checked on the locked row; a row skipped or changed meanwhile
+    //   (EvalPlanQual) ends its key's series there too.
+    // The successors are never decided by the mark: is_head only narrows the heads.
+    internal static readonly string ClaimSeriesSql = ClaimOrdered($"""
+        heads AS MATERIALIZED (
+            {HeadCandidates}),
+        budget AS MATERIALIZED (
+            SELECT $3 - count(*) AS n,
+                   greatest(count(*) FILTER (WHERE h.sequence < (
+                       SELECT max(m.sequence) FROM waybill.outbox m
+                       WHERE m.key = h.key AND m.sequence IS NOT NULL AND m.status IN ('pending', 'claimed', 'dlq'))), 1) AS k
+            FROM heads h),
+        series AS (
+            SELECT n.id, h.id AS head, n.rank, bool_and(n.claimable) OVER (PARTITION BY h.id ORDER BY n.rank) AS unbroken
+            FROM heads h, budget b, now,
+            LATERAL (
+                SELECT s.id, row_number() OVER (ORDER BY s.sequence) AS rank,
+                       (s.status = 'pending' OR (s.status = 'claimed' AND s.lease_until < now.t))
+                         AND (s.next_attempt_at IS NULL OR s.next_attempt_at <= now.t) AS claimable
+                FROM (SELECT x.id, x.sequence, x.status, x.lease_until, x.next_attempt_at FROM waybill.outbox x
+                      WHERE x.key = h.key AND x.sequence > h.sequence AND x.sequence IS NOT NULL
+                        AND x.status IN ('pending', 'claimed', 'dlq')
+                      ORDER BY x.sequence
+                      LIMIT least($5 - 1, (b.n + b.k - 1) / b.k)) s) n
+            WHERE h.sequence IS NOT NULL AND b.n > 0),
+        ranked AS MATERIALIZED (
+            SELECT q.id, q.head, q.rank
+            FROM (SELECT id, head, rank, row_number() OVER (ORDER BY rank, head) AS cut FROM series WHERE unbroken) q, budget b
+            WHERE q.cut <= b.n),
+        locked AS MATERIALIZED (
+            SELECT l.id, r.head, r.rank
+            FROM ranked r, now,
+            LATERAL (SELECT o.id FROM waybill.outbox o
+                     WHERE o.id = r.id
+                       AND {RowClaimable}
+                     FOR UPDATE SKIP LOCKED) l),
+        claimed AS (
+            SELECT id FROM heads
+            UNION ALL
+            SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY head ORDER BY rank) = rank AS unbroken FROM locked) p
+            WHERE unbroken)
+        """, "claimed");
 
     // Every finishing statement is fenced (still claimed by this owner, with this fence) and returns what it changed.
     private const string Fenced = "o.id = m.id AND o.fence = m.fence AND o.owner = $1 AND o.status = 'claimed'";
@@ -230,16 +302,23 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         return (walked < slice ? null : last, repaired);
     }
 
-    /// <summary>Claims up to a batch. With <c>partitions</c> (P, ordering by key), only keyed rows of partitions this owner holds (ADR 0007), and of each key only its head (ADR 0008).</summary>
+    /// <summary>
+    /// Claims up to a batch. With <c>partitions</c> (P, ordering by key), only keyed rows of partitions this owner holds
+    /// (ADR 0007), and of each key its head (ADR 0008) and, with <paramref name="maxPerKey"/> (M) above 1, up to M − 1
+    /// rows after it (PLAN.md 8c-2), ranked by sequence.
+    /// </summary>
     public async Task<List<ClaimedMessage>> ClaimAsync(
-        string owner, int batchSize, TimeSpan lease, CancellationToken cancellationToken, int? partitions = null)
+        string owner, int batchSize, TimeSpan lease, CancellationToken cancellationToken, int? partitions = null, int maxPerKey = 1)
     {
-        await using var command = dataSource.CreateCommand(partitions is null ? ClaimSql : ClaimOrderedSql);
+        var series = partitions is not null && maxPerKey > 1 && batchSize > 1;
+        await using var command = dataSource.CreateCommand(partitions is null ? ClaimSql : series ? ClaimSeriesSql : ClaimOrderedSql);
         command.Parameters.Add(new NpgsqlParameter { Value = owner });
         command.Parameters.Add(new NpgsqlParameter { Value = lease, NpgsqlDbType = NpgsqlDbType.Interval });
         command.Parameters.Add(new NpgsqlParameter { Value = batchSize });
         if (partitions is not null)
             command.Parameters.Add(new NpgsqlParameter { Value = partitions.Value });
+        if (series)
+            command.Parameters.Add(new NpgsqlParameter { Value = maxPerKey });
 
         var claimed = new List<ClaimedMessage>(batchSize);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -262,9 +341,22 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
                 : new ClaimedMessage(message, reader.GetInt64(7)));
         }
 
-        // RETURNING has no order guarantee; publish in id (UUIDv7, roughly enqueue) order. Guid.CompareTo matches
-        // PostgreSQL's uuid order.
-        claimed.Sort((a, b) => a.Message.MessageId.CompareTo(b.Message.MessageId));
+        // A key's rows in the batch are its head and a run of the rows right after it: the claim locked every one of them
+        // and its UPDATE repeats the predicates they were locked under, so none drops out of the middle. Their rank is
+        // their place in sequence order.
+        if (series)
+        {
+            foreach (var key in claimed.Where(c => c.Sequence is not null).GroupBy(c => c.Message.Key).Where(g => g.Count() > 1).ToList())
+            {
+                var rank = 0;
+                foreach (var row in key.OrderBy(c => c.Sequence).ToList())
+                    claimed[claimed.IndexOf(row)] = row with { Rank = rank++ };
+            }
+        }
+
+        // RETURNING has no order guarantee; publish round by round, each in id (UUIDv7, roughly enqueue) order.
+        // Guid.CompareTo matches PostgreSQL's uuid order.
+        claimed.Sort((a, b) => a.Rank != b.Rank ? a.Rank.CompareTo(b.Rank) : a.Message.MessageId.CompareTo(b.Message.MessageId));
         return claimed;
     }
 

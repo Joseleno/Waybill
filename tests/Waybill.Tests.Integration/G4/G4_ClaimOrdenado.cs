@@ -85,10 +85,14 @@ public sealed class G4_ClaimOrdenado(PostgresFixture postgres)
         Assert.All(transport.Received, m => Assert.Null(m.Key));
     }
 
-    // The clock is read once: every row of the claim, and the lease it takes, see the same instant.
-    [Fact]
-    public void G4_ClaimOrdenado_UmInstantePorInstrucao() =>
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(OutboxStore.ClaimOrderedSql, @"clock_timestamp\(\)"));
+    // The clock is read once: every row of the claim, and the lease it takes, see the same instant. Also in the series
+    // claim (M ≥ 2), whose successors are read in a LATERAL that must not read it again.
+    [Theory]
+    [InlineData("ClaimOrderedSql")]
+    [InlineData("ClaimSeriesSql")]
+    public void G4_ClaimOrdenado_UmInstantePorInstrucao(string statement) =>
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(
+            statement == "ClaimOrderedSql" ? OutboxStore.ClaimOrderedSql : OutboxStore.ClaimSeriesSql, @"clock_timestamp\(\)"));
 
     private static async Task<List<long>> SequencesOfAsync(TestDatabase database, IReadOnlyList<OutgoingMessage> messages)
     {

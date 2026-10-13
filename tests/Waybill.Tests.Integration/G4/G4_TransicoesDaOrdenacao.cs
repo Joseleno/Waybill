@@ -106,8 +106,11 @@ public sealed class G4_TransicoesDaOrdenacao(PostgresFixture postgres)
 
     // The old owner claimed the head and paused; the partition lease is forced to run out before the row's, and another
     // instance takes the partition. Nothing of the key moves while the head's lease is valid; then it all goes, in order.
-    [Fact]
-    public async Task G4_TrocaDeDonoComLinhasEmVoo_ChaveEsperaOLeaseDasLinhas()
+    // With M ≥ 2 the old owner's claim took the head and its successor at once; neither moves until their lease runs out.
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public async Task G4_TrocaDeDonoComLinhasEmVoo_ChaveEsperaOLeaseDasLinhas(int maxPerKey)
     {
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);
@@ -116,8 +119,8 @@ public sealed class G4_TransicoesDaOrdenacao(PostgresFixture postgres)
         Assert.Null(await old.CheckOrderingAsync(atStartup: true, ct));
         await old.RunOnceAsync(ct); // holds the only partition
         await DispatcherHarness.EnqueueAsync(database, 2, key: _ => "order-42");
-        var inFlight = await new OutboxStore(dataSource).ClaimAsync(old.Owner, 10, TimeSpan.FromSeconds(30), ct, partitions: 1);
-        Assert.Equal([1L], inFlight.Select(c => c.Sequence!.Value)); // the head, then the old owner pauses
+        var inFlight = await new OutboxStore(dataSource).ClaimAsync(old.Owner, 10, TimeSpan.FromSeconds(30), ct, partitions: 1, maxPerKey: maxPerKey);
+        Assert.Equal(maxPerKey == 1 ? new long[] { 1 } : new long[] { 1, 2 }, inFlight.Select(c => c.Sequence!.Value)); // then the old owner pauses
         await database.ExecuteAsync("UPDATE waybill.outbox_partitions SET lease_until = clock_timestamp() - interval '1 second'");
 
         var transport = new FakeTransport();
