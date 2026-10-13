@@ -138,13 +138,19 @@ COMMIT;
 
 To turn ordering off, stop every dispatcher, clear the ordering state, and start them without `OrderByKey`. From then
 on, messages are not numbered. Never delete `waybill.outbox_keys`: turned on again, each key continues from its last
-sequence, where starting again at 1 would look like a regression to its consumers.
+sequence, where starting again at 1 would look like a regression to its consumers. The `UPDATE` makes every unfinished
+numbered message claimable without ordering: one waiting behind its key's head is otherwise left out of the claim, and
+behind a dead-lettered head (which stops nothing once ordering is off) it would never go.
 
 <!-- ordering-reset -->
 ```sql
+BEGIN;
+UPDATE waybill.outbox SET is_head = true
+WHERE sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq') AND is_head IS NOT TRUE;
 DELETE FROM waybill.outbox_partitions;
 DELETE FROM waybill.outbox_instances;
 DELETE FROM waybill.settings;
+COMMIT;
 ```
 
 ### Before turning it on

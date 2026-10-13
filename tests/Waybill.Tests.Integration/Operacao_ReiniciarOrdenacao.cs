@@ -31,6 +31,8 @@ public sealed partial class Operacao_ReiniciarOrdenacao(PostgresFixture postgres
 
         // The counters stay, and with ordering off the old DLQ row stops nothing, so no blocked key is reported.
         Assert.Equal(2, await database.ScalarAsync("SELECT seq FROM waybill.outbox_keys WHERE key = 'order-42'"));
+        // Every unfinished numbered row is marked, so the claim without ordering sees it.
+        Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq') AND is_head IS NOT TRUE"));
         using (var metrics = new OutboxMetrics(null))
         {
             await new OldestPendingSampler(new OutboxStore(dataSource), metrics).SampleAsync(ct);
