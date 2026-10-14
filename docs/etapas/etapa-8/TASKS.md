@@ -93,28 +93,28 @@ Desenho e aceite: seção "Ponteiro de cabeça" do `PLAN.md`. Um commit por cen�
 Desenho e aceite: seção 8c-2 do `PLAN.md`, revista pelo time de quatro revisores, com as decisões do autor. Um commit por cenário provado, na ordem abaixo. Cada teste é escrito e visto falhando antes do código. Antes de mutar código, seguir as armadilhas.
 
 - [x] Desenho sondado e revisto; decisões do autor no `PLAN.md` (Oct 13); issue #21 com os falsos positivos persistentes.
-- [ ] **Opção `MaxPerKey`.**
+- [x] **Opção `MaxPerKey`.**
   - Validação de 1 a 100, exigindo `OrderByKey`, em `PartitionOptionsValidation`.
   - XML doc e `PublicAPI.Unshipped.txt`.
   - Teste de unidade.
-- [ ] **Harnesses.**
+- [x] **Harnesses.**
   - `FakeTransport` registra os lotes por chamada.
   - `OrderingHarness` ganha `maxPerKey` e clona as opções.
   - Relógio de teste pelo `search_path`: um `clock_timestamp()` que espera numa trava consultiva.
   - Teste próprio do relógio; `G4_PosseNoLimite_UmInstantePorInstrucao`.
-- [ ] **Promoção em laço** (refaz a `SchemaV0_2`).
+- [x] **Promoção em laço** (refaz a `SchemaV0_2`).
   - `outbox_head_promote` em laço com `FOR NO KEY UPDATE`.
   - Trigger de UPDATE só com `OLD.is_head IS TRUE`.
   - Testes:
     - `G4_Ponteiro_TerminacoesConcorrentesNaMesmaChave_PromoveAMenor` (teoria);
     - `G4_Ponteiro_FinishComSerie_UmaPromocaoPorChave`;
     - os testes do ponteiro continuam verdes.
-- [ ] **JIT desligado** na conexão do dispatcher (`G4_Rodadas_DispatcherSemJit`).
-- [ ] **SQL de série**, a partir de trechos comuns com o `ClaimOrderedSql`.
+- [x] **JIT desligado** na conexão do dispatcher (`G4_Rodadas_DispatcherSemJit`).
+- [x] **SQL de série**, a partir de trechos comuns com o `ClaimOrderedSql`.
   - Os testes G4 do claim em teoria M ∈ {1, 3}.
   - O instante único e o plano genérico ampliados.
   - `G4_Rodadas_PlanoGenerico_SemLacoQuadraticoNemSeqScan`.
-- [ ] **Cenários do claim**, um commit cada:
+- [x] **Cenários do claim**, um commit cada:
   - snapshot contra trava;
   - antecessora do meio;
   - não reivindicável não gasta vaga;
@@ -127,11 +127,11 @@ Desenho e aceite: seção 8c-2 do `PLAN.md`, revista pelo time de quatro revisor
   - lote grande linear;
   - série não lê além do orçamento;
   - dreno linear com M = 100.
-- [ ] **Montagem das rodadas** como função pura, com teste de unidade:
+- [x] **Montagem das rodadas** como função pura, com teste de unidade:
   - `sequence` nula;
   - buraco de `rank`;
   - linha repetida.
-- [ ] **Rodadas no dispatcher.**
+- [x] **Rodadas no dispatcher.**
   - Desfecho interno pelo `RetrySql`; um `FinishAsync`, repetido em 40P01 e 40001.
   - Defeito local na rodada.
   - `MoreOfKeys`.
@@ -142,7 +142,7 @@ Desenho e aceite: seção 8c-2 do `PLAN.md`, revista pelo time de quatro revisor
     - `Returned` e defeito;
     - cabeça e sucessora no mesmo lote;
     - laço.
-- [ ] **Prazo, reação e M efetivo.**
+- [x] **Prazo, reação e M efetivo.**
   - `TimeProvider` em todo o relógio; T0 antes do claim.
   - Exceção do `React`.
   - M efetivo.
@@ -154,24 +154,24 @@ Desenho e aceite: seção 8c-2 do `PLAN.md`, revista pelo time de quatro revisor
     - conexão na rodada 2;
     - M efetivo;
     - meio aberto.
-- [ ] **Shutdown e exceção entre rodadas.**
-- [ ] **Concorrência com M ≥ 2:** troca de dono com zumbi na sucessora.
-- [ ] **Caos.**
+- [x] **Shutdown e exceção entre rodadas.**
+- [x] **Concorrência com M ≥ 2:** troca de dono com zumbi na sucessora.
+- [x] **Caos.**
   - M e B sorteados por instância.
   - Entrega embaralhada dentro da chamada.
   - "Uma ordenada por chave em cada chamada".
   - Finish preso além do `PartitionLease`.
   - Rodar o caos curto.
-- [ ] **Mutações** da tabela do `PLAN.md`, cada uma registrada no commit.
-- [ ] **Medição:**
+- [x] **Mutações** da tabela do `PLAN.md`, cada uma registrada no commit.
+- [x] **Medição:**
   - vazão por chave para o `OPERATIONS.md`;
   - `G4_Backlog_ClaimOrdenadoMedido` em teoria M ∈ {1, 10};
   - `Limite_FalsosPositivosPersistentes`.
-- [ ] **Issue #21** (PR próprio se o prazo apertar).
+- [x] **Issue #21** (PR próprio se o prazo apertar).
   - `Limite_SetConstraintsImmediate` ampliado.
   - Âncora da varredura em dois SQL.
   - Erro da varredura capturado.
-- [ ] **Documentos.**
+- [x] **Documentos.**
   - ADR 0008, parte 2, e a frase da deduplicação.
   - ADR 0003.
   - `OPERATIONS.md`.

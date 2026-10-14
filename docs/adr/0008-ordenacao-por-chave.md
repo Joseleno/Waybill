@@ -1,6 +1,6 @@
 # ADR 0008 — Ordenação por chave: numeração no banco e cabeça por chave
 
-- Status: aceito (parte 1, com M = 1, e parte 1b, o ponteiro de cabeça; a parte 2, M ≥ 2 em rodadas, entra com a 8c-2)
+- Status: aceito (parte 1, com M = 1; parte 1b, o ponteiro de cabeça; parte 2, M ≥ 2 em rodadas)
 - Data: 2026-10-08 (parte 1b: 2026-10-13)
 - Etapa: 8c-1 (terceiro PR da ordenação por chave, v0.2); parte 1b no PR seguinte
 
@@ -199,7 +199,7 @@ O desenho passou por um time de cinco revisores (concorrência, desempenho, EF e
 - **Espera do dispatcher.** A marcação pode esperar o fim do commit de um produtor que travou a antecessora. É curto, exceto com `SET CONSTRAINTS ALL IMMEDIATE`, FK diferida lenta da aplicação, replicação síncrona ou `PREPARE TRANSACTION`, documentados como limite. A ordem não quebra; um lease vencido republica.
 - **RR e SERIALIZABLE.** Nenhum 40001 novo; numa chave quente, produtores nesses níveis põem falsos positivos no claim.
 - **Estatísticas vazias.** Depois de um TRUNCATE, as primeiras execuções das consultas dos triggers leem a tabela (13 varreduras numa transação de 50 mil linhas), e o plano genérico desce o índice em seguida.
-- **Fora daqui.** Na 8c-2, uma marca falso positiva pode trazer ao lote uma sucessora de outra cabeça, e a 8c-2 deduplica. O Hash Join com Seq Scan no `UPDATE` externo do claim em plano genérico vem da parte 1, só aparece com auto-prepare e fica para corrigir à parte.
+- **Fora daqui.** Previa-se que, na 8c-2, uma marca falso positiva trouxesse ao lote uma sucessora de outra cabeça, a deduplicar. Não traz: a cabeça é decidida por `min(sequence)`, e um falso positivo nunca vira cabeça (parte 2, item 18). O Hash Join com Seq Scan no `UPDATE` externo do claim em plano genérico, que vinha da parte 1, foi corrigido na parte 2 (item 18).
 
 ### Testes que provam (parte 1b)
 
@@ -228,3 +228,123 @@ O desenho passou por um time de cinco revisores (concorrência, desempenho, EF e
 - **Varredura.** Sem ela, falha o teste da rede; sem o filtro de partição, o das fatias.
 - **Estatísticas vazias.** Consulta do trigger sem descida de índice: falha o teste delas.
 - **Checagens.** Cada trigger fora da checagem é pego pelo caso dele no teste do trigger desligado.
+
+## Parte 2 — M ≥ 2 em rodadas
+
+### Contexto
+
+Com M = 1, uma chave anda uma mensagem por ciclo: claim, ida ao broker e marcação. A G4 não depende de M; M só amortiza o claim e a marcação de uma chave ocupada. O desenho foi sondado em PG 18 e revisto por um time de quatro revisores (concorrência, desempenho, dispatcher e ADR 0003, testes e escopo), dois deles com sondagem no esquema real em PG 18.6 e 15.19. As decisões e as medidas estão no `PLAN.md` da etapa 8 (seção 8c-2); o SQL validado, em `SONDAGEM-8C2-CLAIM.sql` e `SONDAGEM-8C2-PROMOCAO.sql`.
+
+### Decisão
+
+18. **Claim em série.** `MaxPerKey` (M, de 1 a 100, acima de 1 só com a ordenação) leva, de cada cabeça, até M − 1 linhas seguintes da chave, numa instrução:
+    - as cabeças vêm exatamente como na parte 1. Os dois SQL saem dos mesmos trechos em C#, para que nenhuma proteção exista num e falte no outro;
+    - as sucessoras vêm de `ix_outbox_key_sequence`, por descida a partir da cabeça, até a parte da cabeça no que sobrou do lote (`ceil(sobra / cabeças com sucessora)`), com o prefixo decidido no snapshot: a primeira que não pode sair (lease vivo de outro dono, espera de `basic.return`, DLQ) encerra a série;
+    - o corte é por rodada (todas as segundas antes de qualquer terceira), o que reparte o lote e nunca corta uma série no meio;
+    - cada sucessora é travada por chave primária, com as condições repetidas na trava; uma pulada ou mudada entre o snapshot e a trava (EvalPlanQual) encerra a série ali;
+    - o `UPDATE` acha as linhas por `= ANY(array)` em vez de juntar com a CTE, o que tirou o Hash Join sobre Seq Scan dos dois SQL em plano genérico.
+
+    Uma marca falso positiva nunca vira cabeça (`min(sequence)`), então nenhuma linha vem duas vezes. Com M efetivo 1, inclusive no meio aberto (lote de 1), vale o SQL da parte 1.
+19. **Rodadas no dispatcher.** O lote é publicado em uma chamada ao transporte por rodada; a rodada k leva a k-ésima mensagem de cada chave, e só das chaves cuja mensagem da rodada k − 1 foi confirmada. A confirmação antes da rodada seguinte é o mecanismo da ordem: o RabbitMQ publica um lote com `Task.WhenAll`, sem ordem entre as mensagens. Cada chamada leva no máximo uma mensagem com `sequence` por chave; linhas sem `sequence` vão todas na rodada 1. O `ITransport` não muda de assinatura; a declaração "preservo a ordem dentro do lote", que o Kafka usaria, fica para a etapa 9. O contrato do transporte passa a dizer o que já valia com M = 1: `Confirmed` quer dizer que o broker ordena a mensagem antes de qualquer outra publicada depois.
+20. **Encerramento.** Qualquer `Retry` numa rodada (de qualquer causa, resultado inválido, exceção ou contagem errada) encerra o lote: nenhuma rodada nova para chave nenhuma. Sob pressão ou com a conexão caindo, mais publicações seriam só mais duplicatas. `Returned` ou `Defect` encerra só a própria chave. O que não chega a ser enviado volta a `pending` sem gastar tentativa e nunca chega ao `React`. Um defeito de tamanho é decidido na rodada da linha, não antes do lote.
+21. **Prazo.** O lote inteiro divide um `PublishTimeout`, contado de antes do claim pelo `TimeProvider`. A rodada 1 tem o `PublishTimeout` inteiro, como sempre; a rodada k só começa se sobra tempo e se o que sobra é ao menos o que a rodada k − 1 levou, e recebe o que sobra como prazo. Assim todas as rodadas e a marcação cabem no lease. Os timers continuam no relógio de parede.
+22. **Reação (ADR 0003).** O `React` recebe a rodada 1 inteira e, das rodadas seguintes, tudo menos o `ConfirmTimeout`: o prazo de uma rodada tardia foi o que sobrou, e o estouro dela não diz nada do broker. Nack, conexão e causa não declarada contam em qualquer rodada. Um lote com rodada não iniciada conta como saudável.
+23. **M efetivo.** Como o lote segue o broker, M segue o prazo. Quando o prazo corta uma rodada, M cai para as rodadas que couberam, com um log; quando um lote roda inteiro, dobra de volta até `MaxPerKey`. Sem isso, com o broker lento, as sucessoras seriam reivindicadas e devolvidas a cada ciclo, sem sinal.
+24. **Shutdown e falhas entre rodadas.** O pedido de parada é conferido antes de cada rodada, a primeira inclusive, e nunca lançado. O resultado de cada rodada é gravado assim que chega, e a marcação roda num `finally`: o que foi confirmado vira `published` mesmo quando algo lança depois. Devolvido no shutdown, seria republicado pelo próximo dono, até M cópias por chave a cada deploy. A marcação repete em 40P01 e 40001, porque as instruções são cercadas por fence.
+25. **Promoção em laço** (refaz a `SchemaV0_2`). A revisão achou que duas terminações concorrentes da mesma chave deixavam a chave sem cabeça marcada: o zumbi publica m2 enquanto o novo dono publica m1, ou um `DELETE` de m2 (este já com M = 1). A promoção de m1 mirava m2, esperava a outra transação, e o EvalPlanQual não reavaliava o alvo. Agora a promoção:
+    - lê a menor não terminal da chave e sai se ela vem antes da linha terminada, porque quem terminar essa promove;
+    - senão, trava o alvo com `FOR NO KEY UPDATE`, que espera quem está mexendo nele, e refaz o status;
+    - se o alvo terminou no meio, procura de novo.
+
+    O trigger de `UPDATE` só dispara quando a linha terminada estava marcada. Assim, uma série publicada num `UPDATE` promove uma vez, a partir da cabeça, e não uma vez por linha, percorrendo as que a própria instrução acabou de publicar.
+26. **Sessões do dispatcher sem JIT.** Com fila grande, o custo estimado do claim em plano genérico passava do `jit_above_cost`, e o PostgreSQL compilava o claim a cada execução: cerca de 0,5 s por claim com 200 mil linhas na fila. A conexão própria do dispatcher leva `-c jit=off`, antes das opções da aplicação, que continuam valendo.
+
+### Alternativas descartadas (parte 2)
+
+| Alternativa | Por que não |
+| --- | --- |
+| Corte por chave (a primeira cabeça leva suas M − 1 antes da segunda) | Favorece a chave mais antiga e exige verificação de prefixo; o corte por rodada preserva o prefixo por construção |
+| Prefixo por junção entre a lista cortada e a travada | Quadrático em plano genérico: 809 mil comparações e 115 ms com B = 1000, 2,7 s com B = 5000 |
+| Travar as sucessoras antes do corte | 900 travas sem uso num lote cheio de cabeças |
+| Declarar a ordem no `ITransport` já | O único transporte que a usaria é o Kafka da etapa 9; desenhar antes seria adivinhar |
+| `lock_timeout` na marcação | Desistir libera a instância, mas republica o lote depois do lease. Esperar não duplica: nenhum outro claim leva a linha travada (decisão do autor) |
+| M fixo com o broker lento | Sucessoras reivindicadas e devolvidas a cada ciclo, sem sinal |
+| Prazo e timers no `TimeProvider` | Os timers no relógio falso penduram os testes que falseiam só o relógio do breaker e dependem de timeout real |
+
+### Consequências (parte 2)
+
+- **Vazão de uma chave.** Uma chave anda M mensagens por (claim + M idas ao broker + marcação). Medido com uma chave sozinha, 600 mensagens e confirmação de 2 ms por chamada: 144 mensagens/s com M = 1 e 387 com M = 20 (600 e 30 ciclos).
+- **Custo do claim.** Cerca de 27 buffers por linha reivindicada em todos os formatos medidos; 20 a 26 ms com B = 1000 e 138 ms com B = 5000; backlog de 550 mil, p50 de 5,3 ms com M = 1 e 7,6 ms com M = 10.
+- **O lote pode sair abaixo do ótimo** com séries desiguais, pelo teto por cabeça. Inofensivo.
+- **Duplicatas multiplicadas por M.** Um crash ou uma falha da marcação depois de r rodadas republica até r mensagens por chave, contra uma com M = 1. A G4 permite: são cópias posteriores.
+- **Falsos positivos persistentes.** Um produtor em RR numa chave quente, ou religar a ordenação com chaves paradas na DLQ, marca todas as linhas, e o claim volta ao custo de antes do ponteiro: 405 mil buffers com 2 mil chaves paradas e 50 atrás de cada, contra 2,5 mil só com as cabeças. A ordem continua certa. Rebaixar essas marcas pela varredura ficou na issue #21.
+- **Rede.** A âncora da varredura em plano genérico não conseguia buscar o cursor e lia o índice desde a primeira chave: 1.390 buffers numa fatia de 10 chaves, agora 124. Dois SQL, com e sem cursor. Uma falha da varredura é logada e não derruba o ciclo.
+
+### Testes que provam (parte 2)
+
+- **Claim** (`G4_Rodadas_Serie`, `G4_Rodadas_Claim`):
+  - antecessora do meio, no snapshot e travada;
+  - mudança entre o snapshot e a trava, forçada pelo relógio de teste no `search_path`;
+  - sucessora que não gasta vaga;
+  - lote cheio de cabeças, sem trava (`xmax = 0`);
+  - corte por rodada;
+  - sucessora com `id` menor;
+  - cadeia menor que M;
+  - falso positivo;
+  - liberada no meio;
+  - cabeça em espera de `basic.return`.
+- **Testes da parte 1 em M ∈ {1, 3}:** dono antigo da partição; troca de dono em voo; marcação ou devolução concorrente; chave na DLQ; instante único, agora por contagem de leituras do relógio.
+- **Plano e custo** (`G4_Rodadas_PlanoGenerico_SemLacoQuadraticoNemSeqScan`, `G4_Rodadas_Custo`): sem laço quadrático, Seq Scan ou sort em disco nos dois SQL; custo linear no lote; série que não lê além da sua parte; chave quente com M = 100.
+- **Rodadas** (`G4_Rodadas_Dispatcher`, `G4_Rodadas_Prazo`, `G4_Rodadas_Shutdown`):
+  - ordem por `sequence`;
+  - linhas sem `sequence`;
+  - `Retry` de cada causa encerrando o lote;
+  - `Returned` e defeito na série;
+  - promoção depois da marcação da série;
+  - laço;
+  - marcação repetida em 40P01 e 40001;
+  - rodada tardia;
+  - pressão só fora do prazo;
+  - conexão na rodada 2;
+  - M efetivo caindo e voltando;
+  - meio aberto;
+  - shutdown e exceção entre rodadas.
+- **Promoção** (`G4_Ponteiro_Promocao`): terminações concorrentes nas duas ordens, com falso positivo, `DELETE` e liberação; terminações simultâneas sem deadlock; uma promoção por série.
+- **Concorrência:** `G4_TrocaDeDono_ZumbiComFenceNaSucessora`.
+- **Caos:** `G4_Propriedade_PrimeiraEntregaEmOrdem` com M e lote sorteados por instância, entrega em qualquer ordem dentro da chamada e nenhuma chamada com duas mensagens ordenadas de uma chave.
+- **Medidas:** `G4_Rodadas_VazaoPorChave_Medida`; `Limite_FalsosPositivosPersistentes_ClaimLeAFilaDasChavesParadas`; `G4_Backlog_ClaimOrdenadoMedido` com M = 1 e 10 (agendado).
+- **Issue #21:** `G4_Ponteiro_Rede_PlanoGenerico_UsaOIndice`; `G4_Ponteiro_Rede_ErroNaVarredura_NaoDerrubaOCiclo`; `Limite_SetConstraintsImmediate_EsperaLongaSemDuplicata`.
+
+**Verificado por mutação (parte 2).** Cada uma quebra um teste nomeado:
+- **Claim:**
+  - prefixo por junção;
+  - `UPDATE` juntado à CTE;
+  - sem as condições na trava;
+  - sem prefixo no snapshot;
+  - sem prefixo depois da trava;
+  - corte por chave;
+  - trava antes do corte;
+  - rank por `id`;
+  - sem teto por cabeça;
+  - cabeças sem a espera de `basic.return`, que só caiu depois do teste da cabeça em espera: com M ≥ 2, a cabeça descartada pelo `UPDATE` deixaria passar as sucessoras;
+  - cabeças só pela marca;
+  - liberada bloqueando;
+  - relógio lido de novo na série.
+- **Promoção:**
+  - sem refazer o status;
+  - parar num alvo marcado;
+  - sem a saída por antecessora, que só caiu com o teste das terminações simultâneas;
+  - trigger em toda linha.
+- **Dispatcher:**
+  - prazo por rodada;
+  - `Retry` encerrando só a chave;
+  - shutdown lançado;
+  - M fixo;
+  - `MoreOfKeys` sem as devolvidas, contando as paradas ou por qualquer linha;
+  - defeito antes do lote;
+  - não enviada gastando tentativa;
+  - sem repetir a marcação;
+  - rodada k sem conferir a k − 1;
+  - `React` contando toda rodada;
+  - início sem "≥ D";
+  - série inteira numa chamada, pega pelo caos.

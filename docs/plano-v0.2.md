@@ -69,7 +69,8 @@ Dividida em dois PRs, porque a G4 não depende de M:
   - ADR 0008, parte 1.
 - **Entre 8c-1 e 8c-2: ponteiro de cabeça.** Medido na 8c-1: o claim lê e pula as linhas de uma chave com fila longa à frente, de forma linear (1,19 s com 100 mil linhas); a sondagem do desenho achou o mesmo numa chave quente sozinha (O(n²) para drenar). Uma marca por linha (`is_head`), decidida no INSERT e no commit do produtor e passada adiante quando uma linha termina, deixa no claim só as cabeças; o dispatcher repara marcas deixadas faltando por ação externa. ADR 0008, parte 1b. Com ele, a etapa 8 sai em cinco PRs (8a, 8b, 8c-1, ponteiro, 8c-2) em vez de três. **Gatilho de corte:** se a 8c-2 não fechar dentro das três semanas da etapa somadas a uma de folga, a etapa 11 sai da v0.2, como manda a linha de corte.
 - **8c-2, M ≥ 2 em rodadas.**
-  - A k-ésima mensagem de cada chave sai na rodada k, como política do transporte, a ser desenhada com a mudança do `ITransport` da etapa 9.
+  - A k-ésima mensagem de cada chave sai na rodada k. As rodadas ficam no dispatcher, uma chamada ao transporte por rodada (decisão do autor, Oct 13, 2026); a declaração "preservo a ordem dentro do lote", que o Kafka usaria para mandar a série numa transação só, fica para a etapa 9.
+  - Ponto de controle em Oct 28, 2026: o autor decide se a etapa 11 sai da v0.2, registrado aqui e na tabela "Funcionalidades por versão" do escopo; o merge da 8c-2 precisa sair até cerca de Oct 30, para o job agendado rodar antes de Nov 3.
   - ADR 0008, parte 2, e a exceção de pressão no ADR 0003.
 
 **Testes que provam**
@@ -109,7 +110,7 @@ Entrega o segundo transporte e a única forma de ordem estrita do escopo: o brok
 - Um producer transacional por partição do lease, com `transactional.id` derivado da partição. A instância que assume a partição chama `InitTransactions` e fenceia o dono anterior
 - Lote publicado numa transação Kafka por partição; a marcação no banco vem depois do commit da transação, com o fencing de sempre
 - Lease maior que `transaction.timeout.ms` mais uma margem, validado no startup, como a regra do timeout de confirmação
-- Mudança no `ITransport` para levar a partição e o `epoch`, e um resultado para "fenceado"
+- Mudança no `ITransport` para levar a partição e o `epoch`, e um resultado para "fenceado", e a declaração de que o transporte preserva a ordem dentro de um lote: com ela, o Kafka recebe a série de uma chave (M ≥ 2) numa chamada e numa transação só, em vez de uma rodada por chamada (8c-2)
 - Classificação das falhas do Kafka, no formato da tabela do ADR 0003: o que é defeito, o que é transporte, o que faz o papel do `basic.return`
 - Exemplo de consumidor com Confluent.Kafka e inbox, em `isolation.level=read_committed`
 - Kafka nos testes de integração e de caos, com Testcontainers
