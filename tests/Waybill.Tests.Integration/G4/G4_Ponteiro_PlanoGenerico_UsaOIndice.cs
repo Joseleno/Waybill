@@ -11,7 +11,7 @@ namespace Waybill.Tests.Integration.G4;
 [Collection(PostgresCollection.Name)]
 public sealed class G4_Ponteiro_PlanoGenerico_UsaOIndice(PostgresFixture postgres)
 {
-    public static TheoryData<string> Statements => ["ClaimOrderedSql", "ClaimSql", "OldestPendingAgeSql"];
+    public static TheoryData<string> Statements => ["ClaimOrderedSql", "ClaimSeriesSql", "ClaimSql", "OldestPendingAgeSql"];
 
     [Theory]
     [MemberData(nameof(Statements))]
@@ -34,7 +34,8 @@ public sealed class G4_Ponteiro_PlanoGenerico_UsaOIndice(PostgresFixture postgre
         var plan = await GenericPlanAsync(database, statement);
 
         Assert.Contains("ix_outbox_claimable", plan);
-        Assert.DoesNotContain("Sort", plan);
+        // The heads come in index order; the series claim sorts only its own small sets (ranks, the cut).
+        Assert.DoesNotContain(statement == "ClaimSeriesSql" ? "Sort Key: o.id" : "Sort", plan);
         Assert.DoesNotContain("Seq Scan on outbox h", plan); // the head
         Assert.DoesNotContain("Seq Scan on outbox s", plan); // the hot-key signal
     }
@@ -44,6 +45,7 @@ public sealed class G4_Ponteiro_PlanoGenerico_UsaOIndice(PostgresFixture postgre
         var (sql, types, arguments) = statement switch
         {
             "ClaimOrderedSql" => (OutboxStore.ClaimOrderedSql, "(text, interval, integer, integer)", "('instance', '30 seconds', 100, 4)"),
+            "ClaimSeriesSql" => (OutboxStore.ClaimSeriesSql, "(text, interval, integer, integer, integer)", "('instance', '30 seconds', 100, 4, 10)"),
             "ClaimSql" => (OutboxStore.ClaimSql, "(text, interval, integer)", "('instance', '30 seconds', 100)"),
             _ => (OutboxStore.OldestPendingAgeSql, "", ""),
         };

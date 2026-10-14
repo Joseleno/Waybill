@@ -8,7 +8,8 @@ namespace Waybill.Tests.Integration.G4;
 // The ordered claim against a large backlog (ADR 0008), measured for OPERATIONS.md: 500 thousand pending rows over 10
 // thousand keys, plus a hot key of 50 thousand ahead of them in id order; the ordered claim, and the claim without
 // ordering for comparison. Measured on Oct 8, 2026: 3.8 ms against 297 ms, the hot key's queue read and passed over on
-// every claim, as with a stopped key (G4_ChaveBloqueadaComCemMilAFrente). Scheduled job only.
+// every claim, as with a stopped key (G4_ChaveBloqueadaComCemMilAFrente). With the head pointer the queue is not read;
+// with M = 10 the claim also takes up to nine successors of each head (PLAN.md 8c-2). Scheduled job only.
 [Collection(PostgresCollection.Name)]
 public sealed class G4_Backlog_ClaimOrdenadoMedido(PostgresFixture postgres)
 {
@@ -16,9 +17,11 @@ public sealed class G4_Backlog_ClaimOrdenadoMedido(PostgresFixture postgres)
     private const int Hot = 50_000;
     private const int Samples = 10;
 
-    [Fact]
+    [Theory]
     [Trait("Category", "Long")]
-    public async Task G4_Backlog_QuinhentasMilPendentes_LatenciaDoClaimMedida()
+    [InlineData(1)]
+    [InlineData(10)]
+    public async Task G4_Backlog_QuinhentasMilPendentes_LatenciaDoClaimMedida(int maxPerKey)
     {
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);
@@ -33,6 +36,7 @@ public sealed class G4_Backlog_ClaimOrdenadoMedido(PostgresFixture postgres)
             FROM generate_series(1, {Spread + Hot}) g;
             INSERT INTO waybill.outbox_keys SELECT key, max(sequence) FROM waybill.outbox GROUP BY key;
             """);
+        await OrderingHarness.MarkHeadsAsync(database); // as the triggers would: only each key's first row
         await database.ExecuteAsync("VACUUM ANALYZE waybill.outbox");
         await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
         var store = new OutboxStore(dataSource);
@@ -41,9 +45,9 @@ public sealed class G4_Backlog_ClaimOrdenadoMedido(PostgresFixture postgres)
         var all = OrderingHarness.Create(dataSource, new FakeTransport(), OrderingHarness.Options(database, partitions: 16));
         Assert.Null(await all.CheckOrderingAsync(atStartup: true, ct));
         await all.RunOnceAsync(ct); // takes all 16 partitions (and publishes a first batch)
-        var orderedMs = await MeasureAsync(() => store.ClaimAsync(all.Owner, 100, TimeSpan.FromSeconds(30), ct, partitions: 16), store, all.Owner);
+        var orderedMs = await MeasureAsync(() => store.ClaimAsync(all.Owner, 100, TimeSpan.FromSeconds(30), ct, partitions: 16, maxPerKey: maxPerKey), store, all.Owner);
 
-        var line = $"backlog {Spread + Hot} (10000 keys + a hot key of {Hot}): claim p50 unordered {unorderedMs:F1} ms, ordered {orderedMs:F1} ms";
+        var line = $"backlog {Spread + Hot} (10000 keys + a hot key of {Hot}): claim p50 unordered {unorderedMs:F1} ms, ordered with M = {maxPerKey} {orderedMs:F1} ms";
         TestContext.Current.TestOutputHelper?.WriteLine(line);
         TestContext.Current.SendDiagnosticMessage(line);
         Assert.Equal(16, all.HeldPartitions.Count);

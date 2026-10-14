@@ -20,6 +20,9 @@ public sealed class FakeTransport(Func<int, IReadOnlyList<OutgoingMessage>, Canc
 
     public ConcurrentQueue<OutgoingMessage> Received { get; } = new();
 
+    /// <summary>The batch of each call, in call order: with ordering by key and M ≥ 2, one round per call.</summary>
+    public ConcurrentQueue<IReadOnlyList<OutgoingMessage>> Batches { get; } = new();
+
     public int Calls => Volatile.Read(ref _calls);
 
     public static Task<IReadOnlyList<PublishResult>> ConfirmAll(IReadOnlyList<OutgoingMessage> batch) =>
@@ -28,6 +31,7 @@ public sealed class FakeTransport(Func<int, IReadOnlyList<OutgoingMessage>, Canc
     public Task<IReadOnlyList<PublishResult>> PublishAsync(IReadOnlyList<OutgoingMessage> batch, CancellationToken cancellationToken)
     {
         var call = Interlocked.Increment(ref _calls);
+        Batches.Enqueue([.. batch]);
         foreach (var message in batch)
             Received.Enqueue(message);
         return behavior is null ? ConfirmAll(batch) : behavior(call, batch, cancellationToken);

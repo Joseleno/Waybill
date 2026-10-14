@@ -26,7 +26,7 @@ Any number of instances may run either service against the same database.
 | `WaybillRetentionOptions.BatchSize` | 1000 | Rows deleted per statement; a pass repeats until a batch comes back short. |
 | `WaybillDispatcherOptions.BatchSize` | 100 | Most messages claimed and published per cycle. Timeouts and nacks halve the batch in use, down to 1; healthy batches double it back. |
 | `WaybillDispatcherOptions.PollingInterval` | 1 second | Wait before the next cycle when the last one did not fill a batch. Also the first open period of the circuit breaker, which doubles up to 30 seconds. |
-| `WaybillDispatcherOptions.PublishTimeout` | 20 seconds | How long the dispatcher waits for the broker to confirm a batch. Past it, the batch is handed back and published again: a duplicate is possible, a loss is not. |
+| `WaybillDispatcherOptions.PublishTimeout` | 20 seconds | How long the dispatcher waits for the broker to confirm a batch. Past it, the batch is handed back and published again: a duplicate is possible, a loss is not. With `MaxPerKey` above 1 it covers all the rounds of a batch together: a round starts only if what is left is at least what the previous round took. |
 | `WaybillDispatcherOptions.LeaseMargin` | 10 seconds | Added to `PublishTimeout` to form the claim lease (30 seconds by default), so the lease always outlives the publish wait. A crashed instance's rows become claimable again after the lease. |
 | `WaybillDispatcherOptions.MaxReturns` | 5 | How many times a message may come back unroutable (`basic.return`) before it goes to the DLQ. |
 | `WaybillDispatcherOptions.ReturnBackoff` | 1 minute | How long a message waits after its first return before it is published again. The wait doubles with each return, up to `MaxReturnBackoff`. With the defaults a message waits 1 + 2 + 4 + 8 = 15 minutes in all before its fifth return sends it to the DLQ: time to create the missing binding. Zero publishes it again on the next cycle, as in 0.1. |
@@ -34,12 +34,13 @@ Any number of instances may run either service against the same database.
 | `WaybillDispatcherOptions.OrderByKey` | off | Ordering by key, being built for v0.2. Set on the dispatchers only; the applications that enqueue need no setting. See [Ordering by key](#ordering-by-key). |
 | `WaybillDispatcherOptions.Partitions` | 16 | With `OrderByKey`: how many partitions (P) keys are spread over. From 1 to 1024; the same on every dispatcher. |
 | `WaybillDispatcherOptions.PartitionLease` | 60 seconds | With `OrderByKey`: how long a dispatcher holds a partition without renewing it, so how long the keys of a crashed dispatcher wait. At least twice the claim lease, a whole number of milliseconds, and the same on every dispatcher. Without `OrderByKey`: how often the dispatcher checks that no other one orders. Always positive and at most one day. |
+| `WaybillDispatcherOptions.MaxPerKey` | 1 | With `OrderByKey`: how many messages of one key a batch may carry (M). Above 1 the batch goes out in rounds, a key's next message only after the broker confirmed its previous one; see [What it costs](#what-it-costs). From 1 to 100; above 1 only with `OrderByKey`. It may differ between dispatchers. Above `BatchSize` it has no further effect. |
 | `WaybillDispatcherOptions.MetricsInterval` | 15 seconds | How often the pending-age gauge is sampled. |
 
 All options are validated at startup; a zero or negative retention fails the host instead of deleting everything.
 
-On shutdown, the dispatcher stops claiming, waits for the batch in flight up to `PublishTimeout`, and hands back the
-rows it still holds. The host's `HostOptions.ShutdownTimeout` (30 seconds by default) bounds that wait: keep it above
+On shutdown, the dispatcher stops claiming, waits for the batch in flight up to `PublishTimeout` (with rounds, the round
+in flight; no other round starts), records what the broker confirmed, and hands back the rows it still holds. The host's `HostOptions.ShutdownTimeout` (30 seconds by default) bounds that wait: keep it above
 `PublishTimeout`, or a message of the batch in flight may be published and handed back, and then published again.
 
 ## What to monitor
@@ -106,8 +107,10 @@ Ordering by key is new in v0.2 (not released yet) and is off by default. With `O
 are published in commit order: per key, the first copy of each message to reach the broker arrives after the first
 copy of every earlier one. Later copies (a republication after a lease ran out, an attempt left unconfirmed) can arrive
 at any time and carry the same message id, which the consumers' inbox recognizes. Each ordered message carries its
-position in the key, `sequence`, in the `waybill-sequence` header. Messages without a key are never ordered. One message
-per key is published at a time; several per key in one batch come later in v0.2.
+position in the key, `sequence`, in the `waybill-sequence` header. Messages without a key are never ordered. With
+`MaxPerKey` at 1 (the default) a batch carries one message per key; above 1, up to that many, published in rounds: each
+call to the broker carries at most one ordered message of a key, and a key's next message goes out only after the
+broker confirmed its previous one.
 
 With `OrderByKey` on, each key belongs to a partition, `key_hash % Partitions`, and each partition is held by one
 dispatcher at a time. Dispatchers share the partitions evenly (at most `ceil(Partitions / live dispatchers)` each),
@@ -138,11 +141,15 @@ DELETE FROM waybill.outbox_instances;
 COMMIT;
 ```
 
-To turn ordering off, stop every dispatcher, clear the ordering state, and start them without `OrderByKey`. From then
-on, messages are not numbered. Never delete `waybill.outbox_keys`: turned on again, each key continues from its last
-sequence, where starting again at 1 would look like a regression to its consumers. The `UPDATE` makes every unfinished
-numbered message claimable without ordering: one waiting behind its key's head is otherwise left out of the claim, and
-behind a dead-lettered head (which stops nothing once ordering is off) it would never go.
+To turn ordering off, stop every dispatcher, clear the ordering state, and start them without `OrderByKey` (and with
+`MaxPerKey` back at 1, which needs ordering). From then on, messages are not numbered. Never delete
+`waybill.outbox_keys`: turned on again, each key continues from its last sequence, where starting again at 1 would look
+like a regression to its consumers. The `UPDATE` makes every unfinished numbered message claimable without ordering:
+one waiting behind its key's head is otherwise left out of the claim, and behind a dead-lettered head (which stops
+nothing once ordering is off) it would never go. Before turning ordering on again, release or requeue the keys the DLQ
+stops (see "A key stopped by the DLQ"): every row of such a key stays marked claimable, and while they wait the claim
+reads them all on every cycle, as it did before the head pointer (measured: 2,000 stopped keys with 50 messages behind
+each, about 405 thousand buffers per claim instead of 2,500).
 
 <!-- ordering-reset -->
 ```sql
@@ -178,7 +185,7 @@ COMMIT;
   with 40001 (EF reports it as a transient failure). Retrying it succeeds. `READ COMMITTED`, PostgreSQL's default, just
   waits. The head pointer adds no failure there, at a price: a message written at those levels is marked claimable at
   once, so on a hot key fed at those levels the claim reads the key's whole queue again, as it did before the head
-  pointer. Finishing or deleting a message of an ordered key by hand (a release, a `DELETE`) at those levels is refused:
+  pointer, until the key drains. Enqueue ordered keys in `READ COMMITTED`. Finishing or deleting a message of an ordered key by hand (a release, a `DELETE`) at those levels is refused:
   run it in `READ COMMITTED`.
 - **Waybill's triggers must stay enabled.** `outbox_sequence` numbers keyed messages; `outbox_head_check`,
   `outbox_head_promote` and `outbox_head_promote_on_delete` keep each key's first unfinished message marked claimable.
@@ -193,7 +200,10 @@ COMMIT;
   deferred constraints of its own, synchronous replication, or `PREPARE TRANSACTION`. Order is kept, but the
   dispatcher instance waits with its batch, for as long as that transaction stays open: meanwhile it neither claims
   nor renews its partitions, and the messages of the batch its marking already reached stay locked. Another instance
-  takes over its partitions once their lease runs out; its own messages go once the transaction ends.
+  takes over its partitions once their lease runs out; its own messages go once the transaction ends. The wait has no
+  timeout, on purpose: no other claim takes a message the marking holds, so nothing is published twice while it lasts.
+  Past `PartitionLease`, the messages of the batch the marking had not yet reached can be claimed and published again
+  by the new owner: duplicates, never out of order.
 
 ### What it costs
 
@@ -207,7 +217,14 @@ absolute numbers:
 | The same, with 2 ms of work after the `SaveChanges` | — | about 170 per second: the key stays locked meanwhile |
 | Three keys out of twenty per transaction | baseline | about 600 per second, no deadlock |
 
-Publishing: one message per key per batch, so a key's throughput is about one message per round trip to the broker.
+Publishing: with `MaxPerKey` at 1, one message per key per batch, so a key's throughput is about one message per cycle
+(claim, round trip to the broker, marking). With `MaxPerKey` M, a cycle moves up to M messages of a key, one round trip
+each, with one claim and one marking for them all. Measured with one key alone and a broker taking 2 ms per call: 144
+messages per second with M = 1, 387 with M = 20. All the rounds of a batch share `PublishTimeout`: when they run out of
+it, the dispatcher lowers M on its own (a warning says so) and raises it back to `MaxPerKey` as batches run whole. A
+dispatcher that crashes, or whose marking fails, after r rounds lets up to r messages of a key be published again by
+the next owner, where M = 1 lets one: later copies, which the G4 allows and the inbox absorbs.
+
 The claim reads only each key's first unfinished message, never the queue behind it: with 100 thousand messages stopped
 behind a dead-lettered one, a claim of 100 messages reads about 4,500 buffers (p50 5.6 ms), and one hot key drains at
 the same cost per message whatever its queue. Publishing a message with others of its key behind it also marks the next
@@ -340,6 +357,17 @@ RETURNING o.key, o.sequence;
 
 Marking is always safe: the claim still checks that a message is its key's first, so a mark too many costs one more
 look and nothing goes out of order. Both read every unfinished numbered message.
+
+## PostgreSQL: JIT
+
+With a backlog, the claim's estimated cost passes `jit_above_cost`, and PostgreSQL would compile it on every run (about
+half a second per claim with 200 thousand messages waiting). The dispatcher turns JIT off on each connection of its own
+(`SET jit = off`), with no startup parameter. Behind a pooler in transaction mode (PgBouncer, RDS Proxy) a session
+setting does not follow the transaction to the server: set it for the role the dispatcher connects as instead.
+
+```sql
+ALTER ROLE waybill_dispatcher SET jit = off;
+```
 
 ## PostgreSQL: isolation level
 

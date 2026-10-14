@@ -47,6 +47,7 @@ internal sealed partial class OutboxDispatcher
     private readonly TimeProvider _time;
     private readonly OutboxMetrics? _metrics;
     private long? _lastUpkeep; // TimeProvider timestamp of the last partition upkeep that succeeded
+    private int _maxPerKey; // the effective M: MaxPerKey, brought down when rounds run out of time
 
     public OutboxDispatcher(
         OutboxStore store,
@@ -69,6 +70,7 @@ internal sealed partial class OutboxDispatcher
         _time = timeProvider ?? TimeProvider.System;
         _breaker = new CircuitBreaker(timeProvider ?? TimeProvider.System, _options.PollingInterval, WaybillDispatcherService.MaxBackoff);
         _batchSizer = new BatchSizer(_options.BatchSize);
+        _maxPerKey = _ordered ? Math.Max(1, _options.MaxPerKey) : 1;
     }
 
     /// <summary>Unique per process incarnation: a restarted or zombie process never shares it.</summary>
@@ -78,6 +80,9 @@ internal sealed partial class OutboxDispatcher
     public TimeSpan BreakerRemaining => _breaker.Remaining;
 
     internal int CurrentBatchSize => _batchSizer.Current;
+
+    /// <summary>The effective M (ordering by key): <c>MaxPerKey</c>, or less while rounds run out of time.</summary>
+    internal int CurrentMaxPerKey => _maxPerKey;
 
     /// <summary>Whether this instance orders by key, and so holds partitions it must renew.</summary>
     public bool OrdersByKey => _ordered;
@@ -171,51 +176,216 @@ internal sealed partial class OutboxDispatcher
         {
             HeldPartitions = await Partitions.MaintainAsync(Owner, Ordering, cancellationToken).ConfigureAwait(false);
             _lastUpkeep = _time.GetTimestamp();
-            await RepairHeadsAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await RepairHeadsAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // The sweep is a safety net: a failure of its own must not stop the claim, nor back the dispatcher off as a
+                // database outage would. The next upkeep tries again from the same cursor.
+                LogSweepFailed(_logger, exception);
+            }
         }
 
         if (_breaker.IsOpen)
             return new DispatchCycle(0, DispatchOutcome.BreakerOpen, 0);
 
+        var started = _time.GetTimestamp(); // the batch's publish deadline counts from here, before the claim
         var batchSize = _breaker.IsHalfOpen ? 1 : _batchSizer.Current; // half-open: probe with a single message
         var claimed = await _store.ClaimAsync(
-            Owner, batchSize, _options.Lease, cancellationToken, _ordered ? _options.Partitions : null).ConfigureAwait(false);
+            Owner, batchSize, _options.Lease, cancellationToken, _ordered ? _options.Partitions : null,
+            _maxPerKey).ConfigureAwait(false);
         if (claimed.Count == 0)
             return new DispatchCycle(0, DispatchOutcome.Idle, batchSize);
 
-        // A row written under a larger limit than the current one goes to the DLQ without touching the broker.
+        var batch = new Batch(claimed);
+        try
+        {
+            await PublishRoundsAsync(batch, started, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Recording the outcome is not cancelled by shutdown, nor skipped when a later round failed: what was
+            // published must say so, and what was not goes back as it was.
+            await FinishAsync(batch).ConfigureAwait(false);
+        }
+        AdaptMaxPerKey(batch);
+
+        return new DispatchCycle(claimed.Count, React(batch.React), batchSize, batch.MoreOfKeys);
+    }
+
+    /// <summary>The outcome of a claimed batch, built round by round.</summary>
+    private sealed class Batch(IReadOnlyList<ClaimedMessage> claimed)
+    {
+        public IReadOnlyList<ClaimedMessage> Claimed { get; } = claimed;
+
+        public Dictionary<Guid, PublishResult> Outcomes { get; } = [];
+
+        /// <summary>The results the breaker and the batch size react to (ADR 0003).</summary>
+        public List<PublishResult> React { get; } = [];
+
+        /// <summary>Keys whose series ends in this batch: a message of theirs was not confirmed.</summary>
+        public HashSet<string> Stopped { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Keys stopped for good in this cycle (returned, defective): nothing more of them can go now.</summary>
+        public HashSet<string> Finished { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>A message must be published again: no round starts after this one.</summary>
+        public bool Ended { get; set; }
+
+        /// <summary>Rounds that ran; set when the deadline left no time for the next one.</summary>
+        public int? CutAfter { get; set; }
+
+        /// <summary>Every round ran.</summary>
+        public bool Whole { get; set; }
+
+        public bool MoreOfKeys =>
+            Claimed.Where(c => c.Sequence is not null && !Finished.Contains(c.Message.Key!))
+                .GroupBy(c => c.Message.Key)
+                .Any(g => g.MaxBy(c => c.Rank)!.MoreOfKey
+                    || g.Any(c => !Outcomes.TryGetValue(c.Message.MessageId, out var result) || result == NotSent));
+
+        public void Stop(ClaimedMessage row, bool forGood)
+        {
+            if (row.Sequence is null)
+                return;
+            Stopped.Add(row.Message.Key!);
+            if (forGood)
+                Finished.Add(row.Message.Key!);
+        }
+    }
+
+    // A message that was never handed to the transport: it goes back as it was, without spending an attempt, and never
+    // reaches React.
+    private static readonly PublishResult NotSent = PublishResult.RetryAfter(TransportFailure.Unspecified, "not sent in this batch");
+
+    // M ≥ 2 (PLAN.md 8c-2): one call per round; round k carries the k-th message of each key, and only of keys whose
+    // message of round k − 1 was confirmed. The first copy of a key's message therefore reaches the broker after the
+    // first copy of every earlier one. With M = 1, or without ordering, there is one round: the batch as before.
+    private async Task PublishRoundsAsync(Batch batch, long started, CancellationToken cancellationToken)
+    {
+        var plan = Rounds.Build(batch.Claimed);
+        foreach (var rejected in plan.Rejected)
+        {
+            LogRowRejected(_logger, rejected.Row.Message.MessageId, rejected.Reason);
+            batch.Outcomes[rejected.Row.Message.MessageId] = NotSent;
+            batch.Stop(rejected.Row, forGood: false);
+        }
+
         var maxPayloadBytes = _waybillOptions.Value.MaxPayloadBytes;
-        var outcomes = new (ClaimedMessage Claim, PublishResult Result)[claimed.Count];
-        var toPublish = new List<int>(claimed.Count);
-        for (var i = 0; i < claimed.Count; i++)
+        var previous = TimeSpan.Zero; // how long the last round took
+        for (var k = 0; k < plan.Rounds.Count; k++)
         {
-            if (claimed[i].Message.Payload.Length > maxPayloadBytes)
-                outcomes[i] = (claimed[i], PublishResult.Defect(
-                    $"payload of {claimed[i].Message.Payload.Length} bytes is above MaxPayloadBytes ({maxPayloadBytes})"));
-            else
-                toPublish.Add(i);
-        }
+            // Shutdown: no round starts after the host asked to stop, the first one included; checked, never thrown, so
+            // the marking below records what earlier rounds published.
+            if (batch.Ended || cancellationToken.IsCancellationRequested)
+                return;
+            var remaining = _options.PublishTimeout - _time.GetElapsedTime(started);
+            if (k > 0 && !Rounds.MayStart(remaining, previous))
+            {
+                batch.CutAfter = k;
+                return;
+            }
 
-        IReadOnlyList<PublishResult> results = [];
-        if (toPublish.Count > 0)
-        {
-            results = await PublishAsync(toPublish.Select(i => claimed[i].Message).ToList()).ConfigureAwait(false);
+            var toPublish = new List<ClaimedMessage>();
+            foreach (var row in plan.Rounds[k])
+            {
+                if (row.Sequence is not null && batch.Stopped.Contains(row.Message.Key!))
+                {
+                    batch.Outcomes[row.Message.MessageId] = NotSent;
+                }
+                else if (row.Message.Payload.Length > maxPayloadBytes)
+                {
+                    // Written under a larger limit than the current one: to the DLQ without touching the broker, in its
+                    // own round, so a message behind a failed one never goes to the DLQ before its turn.
+                    batch.Outcomes[row.Message.MessageId] = PublishResult.Defect(
+                        $"payload of {row.Message.Payload.Length} bytes is above MaxPayloadBytes ({maxPayloadBytes})");
+                    batch.Stop(row, forGood: true);
+                }
+                else
+                {
+                    toPublish.Add(row);
+                }
+            }
+            if (toPublish.Count == 0)
+            {
+                previous = TimeSpan.Zero;
+                continue;
+            }
+
+            // Round 1 has the whole PublishTimeout, as a batch always had; a later round, what is left of it.
+            var roundStarted = _time.GetTimestamp();
+            var results = await PublishAsync(toPublish.Select(r => r.Message).ToList(), k == 0 ? _options.PublishTimeout : remaining).ConfigureAwait(false);
+
+            // Recorded before anything else can throw: a round the broker confirmed must be marked as published.
             for (var j = 0; j < toPublish.Count; j++)
-                outcomes[toPublish[j]] = (claimed[toPublish[j]], results[j]);
+            {
+                var (row, result) = (toPublish[j], results[j]);
+                batch.Outcomes[row.Message.MessageId] = result;
+                if (result.Status != PublishStatus.Confirmed)
+                    batch.Stop(row, forGood: result.Status is PublishStatus.Returned or PublishStatus.Defect);
+                if (result.Status == PublishStatus.Retry)
+                    batch.Ended = true;
+            }
+            // A later round had only what the earlier ones left of the deadline: its confirmation timeout says nothing
+            // about the broker. A nack, a connection failure or anything else does (ADR 0003).
+            batch.React.AddRange(k == 0 ? results : results.Where(r => !(r.Status == PublishStatus.Retry && r.Failure == TransportFailure.ConfirmTimeout)));
+            previous = _time.GetElapsedTime(roundStarted);
         }
+        batch.Whole = !batch.Ended;
+    }
 
-        // Recording the outcome is not cancelled by shutdown: the batch was published, its rows must say so.
-        var finish = await _store.FinishAsync(Owner, outcomes, ReturnPolicy.From(_options), CancellationToken.None).ConfigureAwait(false);
+    // M follows the deadline, as the batch size follows the broker: rounds that keep running out of time bring it down to
+    // the rounds that fit, so successors are not claimed only to be handed back; a batch that runs whole doubles it back.
+    private void AdaptMaxPerKey(Batch batch)
+    {
+        if (!_ordered)
+            return;
+        if (batch.CutAfter is { } ran)
+        {
+            var reduced = Math.Max(1, ran);
+            if (reduced < _maxPerKey)
+                LogMaxPerKeyReduced(_logger, reduced, _options.PublishTimeout);
+            _maxPerKey = Math.Min(_maxPerKey, reduced);
+        }
+        else if (batch.Whole)
+        {
+            _maxPerKey = Math.Min(_options.MaxPerKey, _maxPerKey * 2);
+        }
+    }
+
+    private async Task FinishAsync(Batch batch)
+    {
+        var outcomes = batch.Claimed
+            .Select(c => (c, batch.Outcomes.TryGetValue(c.Message.MessageId, out var result) ? result : NotSent))
+            .ToList();
+        var finish = await FinishWithRetryAsync(outcomes).ConfigureAwait(false);
         if (finish.Fenced > 0)
             LogFenced(_logger, finish.Fenced);
         foreach (var (id, reason) in finish.DeadLettered)
         {
             // With ordering, the row now stops its key: the log says which, and from which sequence on.
-            var row = claimed.First(c => c.Message.MessageId == id);
+            var row = batch.Claimed.First(c => c.Message.MessageId == id);
             LogDeadLettered(_logger, id, row.Message.Key, row.Sequence, reason);
         }
+    }
 
-        return new DispatchCycle(claimed.Count, React(results), batchSize, claimed.Any(c => c.MoreOfKey));
+    // The marking runs again when PostgreSQL ends it as a deadlock victim or a serialization failure: every statement is
+    // fenced, so what already applied applies once. Two zombies crossing on two keys can deadlock (8c-2 review).
+    private async Task<FinishResult> FinishWithRetryAsync(IReadOnlyList<(ClaimedMessage, PublishResult)> outcomes)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await _store.FinishAsync(Owner, outcomes, ReturnPolicy.From(_options), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Npgsql.PostgresException exception) when (attempt < 3 && exception.SqlState is "40P01" or "40001")
+            {
+                LogFinishRetried(_logger, exception.SqlState);
+            }
+        }
     }
 
     /// <summary>Confirmation timeouts in a row, already at a batch of one, after which the broker counts as unreachable.</summary>
@@ -270,9 +440,8 @@ internal sealed partial class OutboxDispatcher
     // The publish wait ends at the timeout even if the transport ignores the token (a hung socket): the batch is then
     // handed back, and the abandoned call is left to finish or fail on its own. Not linked to shutdown: the batch in
     // flight finishes, bounded by the timeout. A whole-batch failure becomes one Retry per message, with its cause.
-    private async Task<IReadOnlyList<PublishResult>> PublishAsync(List<OutgoingMessage> batch)
+    private async Task<IReadOnlyList<PublishResult>> PublishAsync(List<OutgoingMessage> batch, TimeSpan timeout)
     {
-        var timeout = _options.PublishTimeout;
         using var timeoutSource = new CancellationTokenSource(timeout);
         Task<IReadOnlyList<PublishResult>>? call = null;
         try
@@ -351,4 +520,19 @@ internal sealed partial class OutboxDispatcher
     [LoggerMessage(EventId = 18, Level = LogLevel.Information,
         Message = "Ordering by key is off: {Count} message(s) numbered while it was on, by transactions still open when it was turned off, are now claimable.")]
     private static partial void LogNumberedMarked(ILogger logger, int count);
+
+    [LoggerMessage(EventId = 19, Level = LogLevel.Error, Message = "Message {MessageId} goes back unsent: {Reason}")]
+    private static partial void LogRowRejected(ILogger logger, Guid messageId, string reason);
+
+    [LoggerMessage(EventId = 27, Level = LogLevel.Warning,
+        Message = "Recording a batch's outcome failed with {SqlState} (deadlock or serialization failure) and runs again; its statements are fenced.")]
+    private static partial void LogFinishRetried(ILogger logger, string sqlState);
+
+    [LoggerMessage(EventId = 28, Level = LogLevel.Warning,
+        Message = "The rounds of a batch ran out of PublishTimeout ({PublishTimeout}): MaxPerKey is down to {MaxPerKey} for now, and doubles back as batches run whole. The broker confirms slowly for the messages of a key.")]
+    private static partial void LogMaxPerKeyReduced(ILogger logger, int maxPerKey, TimeSpan publishTimeout);
+
+    [LoggerMessage(EventId = 29, Level = LogLevel.Error,
+        Message = "The sweep for unmarked key heads failed; the cycle goes on, and the next partition upkeep tries again.")]
+    private static partial void LogSweepFailed(ILogger logger, Exception exception);
 }
