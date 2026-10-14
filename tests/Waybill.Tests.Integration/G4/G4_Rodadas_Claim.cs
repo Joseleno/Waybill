@@ -29,6 +29,36 @@ public sealed class G4_Rodadas_Claim(PostgresFixture postgres)
         Assert.All(claimed.Where(c => c.Message.Key == "A"), c => Assert.Equal(c.Sequence < 5, c.MoreOfKey));
     }
 
+    // The claim itself says each row's round: the place it was locked at in its key's series (0 for the head). Ranks
+    // worked out from the rows that came back could not tell a successor whose head dropped out of the statement from a
+    // head; with the claim's own rank, the rounds refuse such a key instead of sending the successor first.
+    [Fact]
+    public async Task G4_Rodadas_RankVemDoClaim()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        await OwnAllPartitionsAsync(database);
+        await DispatcherHarness.EnqueueAsync(database, 3, key: _ => "A");
+        await DispatcherHarness.EnqueueAsync(database, 1, key: _ => null);
+
+        await using var connection = new NpgsqlConnection(database.ConnectionString);
+        await connection.OpenAsync(ct);
+        await using var command = new NpgsqlCommand(OutboxStore.ClaimSeriesSql, connection);
+        command.Parameters.Add(new NpgsqlParameter { Value = Owner });
+        command.Parameters.Add(new NpgsqlParameter { Value = TimeSpan.FromSeconds(30), NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Interval });
+        command.Parameters.Add(new NpgsqlParameter { Value = 10 });
+        command.Parameters.Add(new NpgsqlParameter { Value = 4 });
+        command.Parameters.Add(new NpgsqlParameter { Value = 3 });
+        var ranks = new List<(long Sequence, int Rank)>();
+        await using (var reader = await command.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+                ranks.Add((reader.IsDBNull(reader.GetOrdinal("sequence")) ? 0 : reader.GetInt64(reader.GetOrdinal("sequence")), reader.GetInt32(reader.GetOrdinal("rank"))));
+        }
+
+        Assert.Equal([(0L, 0), (1L, 0), (2L, 1), (3L, 2)], ranks.OrderBy(r => r.Sequence));
+    }
+
     public static TheoryData<string, int> Shapes => new()
     {
         { "100 keys of 1000, empty statistics", 1 },

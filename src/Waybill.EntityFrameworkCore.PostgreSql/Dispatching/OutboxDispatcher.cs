@@ -524,15 +524,15 @@ internal sealed partial class OutboxDispatcher
     [LoggerMessage(EventId = 19, Level = LogLevel.Error, Message = "Message {MessageId} goes back unsent: {Reason}")]
     private static partial void LogRowRejected(ILogger logger, Guid messageId, string reason);
 
-    [LoggerMessage(EventId = 20, Level = LogLevel.Warning,
+    [LoggerMessage(EventId = 27, Level = LogLevel.Warning,
         Message = "Recording a batch's outcome failed with {SqlState} (deadlock or serialization failure) and runs again; its statements are fenced.")]
     private static partial void LogFinishRetried(ILogger logger, string sqlState);
 
-    [LoggerMessage(EventId = 21, Level = LogLevel.Warning,
+    [LoggerMessage(EventId = 28, Level = LogLevel.Warning,
         Message = "The rounds of a batch ran out of PublishTimeout ({PublishTimeout}): MaxPerKey is down to {MaxPerKey} for now, and doubles back as batches run whole. The broker confirms slowly for the messages of a key.")]
     private static partial void LogMaxPerKeyReduced(ILogger logger, int maxPerKey, TimeSpan publishTimeout);
 
-    [LoggerMessage(EventId = 22, Level = LogLevel.Error,
+    [LoggerMessage(EventId = 29, Level = LogLevel.Error,
         Message = "The sweep for unmarked key heads failed; the cycle goes on, and the next partition upkeep tries again.")]
     private static partial void LogSweepFailed(ILogger logger, Exception exception);
 }

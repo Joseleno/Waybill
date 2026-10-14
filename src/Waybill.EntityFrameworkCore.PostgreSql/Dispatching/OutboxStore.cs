@@ -119,25 +119,28 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
               AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= now.t)
         """;
 
-    private static string ClaimOrdered(string with, string claimed) => $"""
+    // The last column is each row's round as the claim decided it (0 for a head or an unordered row): the dispatcher builds
+    // its rounds from it, so a successor whose head did not come back with it is refused, never sent first.
+    private static string ClaimOrdered(string with, string claimed, bool ranked) => $"""
         WITH {Now},
         {with}
         UPDATE waybill.outbox o
         SET status = 'claimed', owner = $1, fence = o.fence + 1, lease_until = now.t + $2
-        FROM now
+        FROM now{(ranked ? ", ranks" : "")}
         WHERE o.id = ANY ((SELECT array_agg(id) FROM {claimed})::uuid[])
           AND {RowClaimable}
           AND {HeldPartition}
         RETURNING o.id, o.type, o.key, o.payload, o.content_type, o.headers, o.created_at, o.fence, o.sequence,
                   o.sequence IS NOT NULL AND o.sequence < (
                       SELECT max(s.sequence) FROM waybill.outbox s
-                      WHERE s.key = o.key AND s.sequence IS NOT NULL AND s.status IN ('pending', 'claimed', 'dlq'))
+                      WHERE s.key = o.key AND s.sequence IS NOT NULL AND s.status IN ('pending', 'claimed', 'dlq')),
+                  {(ranked ? "(ranks.r ->> o.id::text)::int" : "0")} AS rank
         """;
 
     internal static readonly string ClaimOrderedSql = ClaimOrdered($"""
         heads AS MATERIALIZED (
             {HeadCandidates})
-        """, "heads");
+        """, "heads", ranked: false);
 
     // M ≥ 2 (PLAN.md 8c-2; $5 = M): the heads as above, then, of each head with a sequence, the next unfinished rows of its
     // key, read from ix_outbox_key_sequence, up to M − 1 and up to its share of what the heads left of the batch.
@@ -181,11 +184,12 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
                        AND {RowClaimable}
                      FOR UPDATE SKIP LOCKED) l),
         claimed AS (
-            SELECT id FROM heads
+            SELECT id, 0::bigint AS rank FROM heads
             UNION ALL
-            SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY head ORDER BY rank) = rank AS unbroken FROM locked) p
-            WHERE unbroken)
-        """, "claimed");
+            SELECT id, rank FROM (SELECT id, rank, row_number() OVER (PARTITION BY head ORDER BY rank) = rank AS unbroken FROM locked) p
+            WHERE unbroken),
+        ranks AS MATERIALIZED (SELECT jsonb_object_agg(id::text, rank) AS r FROM claimed)
+        """, "claimed", ranked: true);
 
     // Every finishing statement is fenced (still claimed by this owner, with this fence) and returns what it changed.
     private const string Fenced = "o.id = m.id AND o.fence = m.fence AND o.owner = $1 AND o.status = 'claimed'";
@@ -346,21 +350,8 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
                 Sequence = sequence,
             };
             claimed.Add(reader.FieldCount > 8
-                ? new ClaimedMessage(message, reader.GetInt64(7), sequence, reader.GetBoolean(9))
+                ? new ClaimedMessage(message, reader.GetInt64(7), sequence, reader.GetBoolean(9), reader.GetInt32(10))
                 : new ClaimedMessage(message, reader.GetInt64(7)));
-        }
-
-        // A key's rows in the batch are its head and a run of the rows right after it: the claim locked every one of them
-        // and its UPDATE repeats the predicates they were locked under, so none drops out of the middle. Their rank is
-        // their place in sequence order.
-        if (series)
-        {
-            foreach (var key in claimed.Where(c => c.Sequence is not null).GroupBy(c => c.Message.Key).Where(g => g.Count() > 1).ToList())
-            {
-                var rank = 0;
-                foreach (var row in key.OrderBy(c => c.Sequence).ToList())
-                    claimed[claimed.IndexOf(row)] = row with { Rank = rank++ };
-            }
         }
 
         // RETURNING has no order guarantee; publish round by round, each in id (UUIDv7, roughly enqueue) order.

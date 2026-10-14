@@ -358,6 +358,17 @@ RETURNING o.key, o.sequence;
 Marking is always safe: the claim still checks that a message is its key's first, so a mark too many costs one more
 look and nothing goes out of order. Both read every unfinished numbered message.
 
+## PostgreSQL: JIT
+
+With a backlog, the claim's estimated cost passes `jit_above_cost`, and PostgreSQL would compile it on every run (about
+half a second per claim with 200 thousand messages waiting). The dispatcher turns JIT off on each connection of its own
+(`SET jit = off`), with no startup parameter. Behind a pooler in transaction mode (PgBouncer, RDS Proxy) a session
+setting does not follow the transaction to the server: set it for the role the dispatcher connects as instead.
+
+```sql
+ALTER ROLE waybill_dispatcher SET jit = off;
+```
+
 ## PostgreSQL: isolation level
 
 The claim and the retention run as single statements at the session's default isolation, and they rely on

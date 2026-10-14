@@ -22,9 +22,13 @@ public sealed class G4_Rodadas_Jit(PostgresFixture postgres)
             .AddWaybillDispatcher(o => o.ConnectionString = connectionString)
             .BuildServiceProvider();
 
-        await using var connection = await services.GetRequiredService<DispatcherDataSource>().Value.OpenConnectionAsync(ct);
-        await using var command = new NpgsqlCommand("SELECT current_setting('jit') || ' ' || current_setting('statement_timeout')", connection);
-
-        Assert.Equal("off 12345ms", await command.ExecuteScalarAsync(ct));
+        // Several times through the pool: the setting must survive the reset of a connection handed back.
+        var dataSource = services.GetRequiredService<DispatcherDataSource>().Value;
+        for (var i = 0; i < 3; i++)
+        {
+            await using var connection = await dataSource.OpenConnectionAsync(ct);
+            await using var command = new NpgsqlCommand("SELECT current_setting('jit') || ' ' || current_setting('statement_timeout')", connection);
+            Assert.Equal("off 12345ms", await command.ExecuteScalarAsync(ct));
+        }
     }
 }
