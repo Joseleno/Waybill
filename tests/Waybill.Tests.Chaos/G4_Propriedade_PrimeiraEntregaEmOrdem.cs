@@ -186,7 +186,10 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
 
         // Drain with one survivor, the broker stand-in calm, once every dead instance's leases ran out.
         Volatile.Write(ref calm, 1);
-        var survivor = OrderingHarness.Create(dataSource, transport, options);
+        // With M = 1 a key moves one message per cycle: the producers outrun the instances, whose batches are drawn small, and
+        // a key with thousands behind its head would not drain in time (a scheduled run left two keys with ~5,800 each, their
+        // heads marked and pending). The survivor takes up to 50 of a key per cycle, in rounds.
+        var survivor = OrderingHarness.Create(dataSource, transport, options, maxPerKey: 50);
         var claimableAtCalm = await ClaimableAsync(database);
         var drain = Stopwatch.StartNew();
         while (await ClaimableAsync(database) > 0 && drain.Elapsed < TimeSpan.FromMinutes(2))
