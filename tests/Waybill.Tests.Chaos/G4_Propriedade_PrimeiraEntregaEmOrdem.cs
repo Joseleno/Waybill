@@ -187,12 +187,14 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
         // Drain with one survivor, the broker stand-in calm, once every dead instance's leases ran out.
         Volatile.Write(ref calm, 1);
         var survivor = OrderingHarness.Create(dataSource, transport, options);
+        var claimableAtCalm = await ClaimableAsync(database);
         var drain = Stopwatch.StartNew();
         while (await ClaimableAsync(database) > 0 && drain.Elapsed < TimeSpan.FromMinutes(2))
         {
             if ((await survivor.RunOnceAsync(ct)).Claimed == 0)
                 await Task.Delay(100, ct);
         }
+        var drained = drain.Elapsed;
         await Task.Delay(TimeSpan.FromSeconds(1), ct); // let the last abandoned calls deliver their late copies
 
         var (sequenceOf, releasedIds) = await SequencesAsync(dataSource);
@@ -211,7 +213,7 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
             $"SELECT count(*) FROM waybill.outbox WHERE status = 'published' AND NOT (id = ANY('{{{string.Join(',', firstDeliveries.Select(d => d.Message.MessageId))}}}'::uuid[]))");
 
         TestContext.Current.SendDiagnosticMessage(
-            $"produced {amount}, published {published}, released {released} (delivered anyway {releasedDelivered}), deliveries {deliveries.Count} ({firstDeliveries.Count} first), late copies {lateCopies}, lost calls {lostCalls}, returns {returns}, defects {defects}, graceful {graceful}, deaths {deaths}, inversions {inversions}, unmarked heads {unmarkedHeads} in {samples} samples, calls with two of a key {sameKeyInCall}");
+            $"produced {amount}, published {published}, released {released} (delivered anyway {releasedDelivered}), deliveries {deliveries.Count} ({firstDeliveries.Count} first), late copies {lateCopies}, lost calls {lostCalls}, returns {returns}, defects {defects}, graceful {graceful}, deaths {deaths}, inversions {inversions}, unmarked heads {unmarkedHeads} in {samples} samples, calls with two of a key {sameKeyInCall}, drain of {claimableAtCalm} in {drained}");
 
         Assert.Equal(0, unmarkedHeads);      // the head pointer: no key's first unfinished row ever seen unmarked
         Assert.Equal(0, await UnmarkedHeadsAsync(database));
@@ -219,7 +221,8 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
         Assert.Equal(0, inversions);         // first copies per key in commit order, released messages aside
         Assert.Equal(0, sameKeyInCall);      // rounds: never two ordered messages of one key in one call
         Assert.Equal(0, envelopeMismatches); // the transport saw the stored sequence (null when not ordered)
-        Assert.Equal(0, stranded);           // nothing left that could still go: only what a DLQ head stops
+        Assert.True(stranded == 0,           // nothing left that could still go: only what a DLQ head stops
+            $"{stranded} rows stranded, of {claimableAtCalm} claimable when the drain began, after {drained}; most stranded keys: {(stranded == 0 ? "" : await StrandedKeysAsync(dataSource))}");
         Assert.Equal(0, undelivered);        // nothing marked published that the broker never had
         Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE status = 'claimed'"));
         Assert.True(lateCopies > 0 && lostCalls > 0 && defects > 0 && returns > 0 && graceful > 0 && deaths > 0 && released > 0,
@@ -244,6 +247,31 @@ public sealed class G4_Propriedade_PrimeiraEntregaEmOrdem(PostgresFixture postgr
           AND NOT (o.sequence IS NOT NULL AND EXISTS (
                 SELECT 1 FROM waybill.outbox d WHERE d.key = o.key AND d.sequence < o.sequence AND d.status = 'dlq'))
         """);
+
+    // The keys with the most stranded rows, each with its first unfinished row: a slow drain or a stuck key.
+    private static async Task<string> StrandedKeysAsync(NpgsqlDataSource dataSource)
+    {
+        await using var command = dataSource.CreateCommand("""
+            SELECT coalesce(o.key, '(no key)') || ': ' || count(*) || ' rows, head ' || coalesce((
+                SELECT h.sequence || ' ' || h.status || ' is_head=' || coalesce(h.is_head::text, 'null')
+                       || ' next_attempt_at=' || coalesce(h.next_attempt_at::text, 'null')
+                FROM waybill.outbox h
+                WHERE h.key = o.key AND h.sequence IS NOT NULL AND h.status IN ('pending', 'claimed', 'dlq')
+                ORDER BY h.sequence LIMIT 1), '-')
+            FROM waybill.outbox o
+            WHERE o.status IN ('pending', 'claimed')
+              AND NOT (o.sequence IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM waybill.outbox d WHERE d.key = o.key AND d.sequence < o.sequence AND d.status = 'dlq'))
+            GROUP BY o.key
+            ORDER BY count(*) DESC
+            LIMIT 5
+            """);
+        var keys = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            keys.Add(reader.GetString(0));
+        return string.Join("; ", keys);
+    }
 
     private static async Task<(Dictionary<Guid, long?> Sequences, HashSet<Guid> Released)> SequencesAsync(NpgsqlDataSource dataSource)
     {
