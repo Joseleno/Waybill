@@ -13,8 +13,10 @@ public sealed class G4_DonoAntigoDaParticao_NaoReivindica(PostgresFixture postgr
 {
     private static readonly TimeSpan RowLease = TimeSpan.FromSeconds(30);
 
-    [Fact]
-    public async Task G4_DonoAntigoDaParticao_NaoReivindica_NemComLeaseDaParticaoCurto()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)] // the series claim checks the partition of its heads the same way
+    public async Task G4_DonoAntigoDaParticao_NaoReivindica_NemComLeaseDaParticaoCurto(int maxPerKey)
     {
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);
@@ -29,14 +31,14 @@ public sealed class G4_DonoAntigoDaParticao_NaoReivindica(PostgresFixture postgr
 
         // Held, but for less than the row lease it would take: no claim.
         await database.ScalarAsync("UPDATE waybill.outbox_partitions SET lease_until = clock_timestamp() + interval '10 seconds'");
-        Assert.Empty(await store.ClaimAsync("old-owner", 100, RowLease, ct, partitions: 1));
+        Assert.Empty(await store.ClaimAsync("old-owner", 100, RowLease, ct, partitions: 1, maxPerKey: maxPerKey));
 
         // Lost while paused: the lease ran out and another instance took the partition.
         await database.ScalarAsync("UPDATE waybill.outbox_partitions SET lease_until = clock_timestamp() - interval '1 second'");
         Assert.Equal([0], (await partitions.MaintainAsync("new-owner", settings, ct)).Keys);
-        Assert.Empty(await store.ClaimAsync("old-owner", 100, RowLease, ct, partitions: 1)); // wakes up with its old belief
+        Assert.Empty(await store.ClaimAsync("old-owner", 100, RowLease, ct, partitions: 1, maxPerKey: maxPerKey)); // wakes up with its old belief
 
-        Assert.Equal(10, (await store.ClaimAsync("new-owner", 100, RowLease, ct, partitions: 1)).Count);
+        Assert.Equal(10, (await store.ClaimAsync("new-owner", 100, RowLease, ct, partitions: 1, maxPerKey: maxPerKey)).Count);
         Assert.Equal(2, await database.ScalarAsync("SELECT epoch FROM waybill.outbox_partitions"));
     }
 }

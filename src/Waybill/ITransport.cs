@@ -16,6 +16,14 @@ namespace Waybill;
 /// next cycle. An implementation must therefore tolerate a previous, abandoned call still running when the next one
 /// starts.
 /// </para>
+/// <para>
+/// With ordering by key and <c>MaxPerKey</c> above 1, the dispatcher publishes a batch in rounds: several calls in a
+/// row, each one only after the previous one returned, each carrying at most one ordered message of a key, and all of
+/// them within the batch's publish timeout, so a later call has only what the earlier ones left of it. The k-th message
+/// of a key is handed over only after its (k−1)-th came back <see cref="PublishStatus.Confirmed"/>: ordering relies on
+/// <c>Confirmed</c> meaning that the broker holds the message and orders it before any message published after,
+/// on any channel or connection, not that it was buffered on the client.
+/// </para>
 /// </remarks>
 public interface ITransport
 {

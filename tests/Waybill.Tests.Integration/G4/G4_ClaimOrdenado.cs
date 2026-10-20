@@ -37,15 +37,17 @@ public sealed class G4_ClaimOrdenado(PostgresFixture postgres)
     // that zombie's late statement when the claim runs: nothing of the key is taken. Once it commits, the mark lets the
     // next row out; the hand-back lets the head out first.
     [Theory]
-    [InlineData("published")]
-    [InlineData("pending")]
-    public async Task G4_MarcacaoOuDevolucaoConcorrente_ClaimNaoLevaASeguinte(string zombieWrites)
+    [InlineData("published", 1)]
+    [InlineData("pending", 1)]
+    [InlineData("published", 3)] // M ≥ 2: the series starts at the head; a locked head takes its series with it
+    [InlineData("pending", 3)]
+    public async Task G4_MarcacaoOuDevolucaoConcorrente_ClaimNaoLevaASeguinte(string zombieWrites, int maxPerKey)
     {
         var ct = TestContext.Current.CancellationToken;
         var database = await TestDatabase.CreateAsync(postgres);
         await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
         var transport = new FakeTransport();
-        var dispatcher = OrderingHarness.Create(dataSource, transport, OrderingHarness.Options(database, partitions: 4));
+        var dispatcher = OrderingHarness.Create(dataSource, transport, OrderingHarness.Options(database, partitions: 4), maxPerKey: maxPerKey);
         Assert.Null(await dispatcher.CheckOrderingAsync(atStartup: true, ct));
         await DispatcherHarness.EnqueueAsync(database, 2, key: _ => "K");
         await database.ExecuteAsync("""
@@ -65,7 +67,7 @@ public sealed class G4_ClaimOrdenado(PostgresFixture postgres)
 
         await late.CommitAsync(ct);
         await dispatcher.RunOnceAsync(ct);
-        Assert.Equal([zombieWrites == "published" ? 2L : 1L], await SequencesOfAsync(database, transport.Received.ToList()));
+        Assert.Equal(zombieWrites == "published" ? [2L] : maxPerKey == 1 ? [1L] : new List<long> { 1, 2 }, await SequencesOfAsync(database, transport.Received.ToList()));
     }
 
     [Fact]
@@ -85,10 +87,14 @@ public sealed class G4_ClaimOrdenado(PostgresFixture postgres)
         Assert.All(transport.Received, m => Assert.Null(m.Key));
     }
 
-    // The clock is read once: every row of the claim, and the lease it takes, see the same instant.
-    [Fact]
-    public void G4_ClaimOrdenado_UmInstantePorInstrucao() =>
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(OutboxStore.ClaimOrderedSql, @"clock_timestamp\(\)"));
+    // The clock is read once: every row of the claim, and the lease it takes, see the same instant. Also in the series
+    // claim (M ≥ 2), whose successors are read in a LATERAL that must not read it again.
+    [Theory]
+    [InlineData("ClaimOrderedSql")]
+    [InlineData("ClaimSeriesSql")]
+    public void G4_ClaimOrdenado_UmInstantePorInstrucao(string statement) =>
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(
+            statement == "ClaimOrderedSql" ? OutboxStore.ClaimOrderedSql : OutboxStore.ClaimSeriesSql, @"clock_timestamp\(\)"));
 
     private static async Task<List<long>> SequencesOfAsync(TestDatabase database, IReadOnlyList<OutgoingMessage> messages)
     {

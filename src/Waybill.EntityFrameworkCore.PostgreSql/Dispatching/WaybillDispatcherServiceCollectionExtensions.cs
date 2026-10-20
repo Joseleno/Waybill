@@ -54,8 +54,7 @@ public static class WaybillDispatcherServiceCollectionExtensions
             .ValidateOnStart();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<WaybillDispatcherOptions>, PartitionOptionsValidation>());
 
-        services.TryAddSingleton(sp => new DispatcherDataSource(
-            NpgsqlDataSource.Create(sp.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value.ConnectionString!)));
+        services.TryAddSingleton(sp => DispatcherDataSource.Create(sp.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value.ConnectionString!));
         services.TryAddSingleton(sp => new OutboxStore(sp.GetRequiredService<DispatcherDataSource>().Value));
         services.TryAddSingleton(sp => new PartitionStore(sp.GetRequiredService<DispatcherDataSource>().Value));
         services.TryAddSingleton<OutboxDispatcher>();

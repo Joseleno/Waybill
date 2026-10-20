@@ -7,16 +7,40 @@ namespace Waybill.Tests.Integration.G4;
 /// <summary>Dispatchers that order by key over the test database, driven cycle by cycle by the test.</summary>
 public static class OrderingHarness
 {
-    public static WaybillDispatcherOptions Options(TestDatabase database, int partitions, TimeSpan? partitionLease = null) =>
+    public static WaybillDispatcherOptions Options(TestDatabase database, int partitions, TimeSpan? partitionLease = null, int maxPerKey = 1) =>
         DispatcherHarness.Options(database, o =>
         {
             o.Partitions = partitions;
             o.PartitionLease = partitionLease ?? TimeSpan.FromSeconds(60);
+            o.MaxPerKey = maxPerKey;
         });
 
+    /// <param name="maxPerKey">This instance's M; null keeps the options' own. The options are copied, so instances built from one object can differ.</param>
     internal static OutboxDispatcher Create(
-        NpgsqlDataSource dataSource, ITransport transport, WaybillDispatcherOptions options, TimeProvider? time = null, LogSink? logs = null, OutboxMetrics? metrics = null) =>
-        DispatcherHarness.Create(dataSource, transport, options, time: time, orderByKey: true, logs: logs, metrics: metrics);
+        NpgsqlDataSource dataSource, ITransport transport, WaybillDispatcherOptions options, TimeProvider? time = null, LogSink? logs = null,
+        OutboxMetrics? metrics = null, int? maxPerKey = null)
+    {
+        var own = Copy(options);
+        own.MaxPerKey = maxPerKey ?? own.MaxPerKey;
+        return DispatcherHarness.Create(dataSource, transport, own, time: time, orderByKey: true, logs: logs, metrics: metrics);
+    }
+
+    internal static WaybillDispatcherOptions Copy(WaybillDispatcherOptions o) => new()
+    {
+        ConnectionString = o.ConnectionString,
+        BatchSize = o.BatchSize,
+        PollingInterval = o.PollingInterval,
+        PublishTimeout = o.PublishTimeout,
+        LeaseMargin = o.LeaseMargin,
+        MaxReturns = o.MaxReturns,
+        ReturnBackoff = o.ReturnBackoff,
+        MaxReturnBackoff = o.MaxReturnBackoff,
+        OrderByKey = o.OrderByKey,
+        Partitions = o.Partitions,
+        PartitionLease = o.PartitionLease,
+        MaxPerKey = o.MaxPerKey,
+        MetricsInterval = o.MetricsInterval,
+    };
 
     /// <summary>Shared buffers one ordered claim touches, from EXPLAIN (ANALYZE, BUFFERS), rolled back so nothing stays claimed.</summary>
     public static async Task<long> ClaimBuffersAsync(NpgsqlDataSource dataSource, string owner, int partitions, int batchSize = 100)

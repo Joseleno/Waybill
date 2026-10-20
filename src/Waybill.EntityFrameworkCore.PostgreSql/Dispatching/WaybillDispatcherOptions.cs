@@ -60,6 +60,14 @@ public sealed class WaybillDispatcherOptions
     public TimeSpan PartitionLease { get; set; } = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// With <c>OrderByKey</c>: how many messages of one key a batch may carry (M). Above 1, the batch is published in
+    /// rounds: the k-th message of a key goes out only after the broker confirmed its (k−1)-th, so a busy key moves M
+    /// messages per cycle instead of one. The whole batch shares <see cref="PublishTimeout"/>. Default 1, from 1 to 100;
+    /// above 1 only with <c>OrderByKey</c>. Set it back to 1 before turning ordering off.
+    /// </summary>
+    public int MaxPerKey { get; set; } = 1;
+
+    /// <summary>
     /// How often the age of the oldest message not yet published is sampled for the
     /// <c>waybill.outbox.oldest_pending.age</c> gauge (meter <c>Waybill</c>). Default 15 seconds.
     /// </summary>

@@ -144,28 +144,42 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
             // dispatcher, an operator's release) needs no right on the mark. Only in READ COMMITTED: at a stricter level the
             // queries see the transaction's snapshot, and a producer's row committed meanwhile would be left unmarked. The
             // dispatcher already runs in READ COMMITTED; an operator's release or delete at another level is refused.
+            // A loop: another transaction may be finishing or deleting the very row this one aims at (a zombie still
+            // holding its fence, an operator). Lock the target, which waits for that transaction, and re-check it is
+            // unfinished; if it finished meanwhile, look again. Nothing to do when the key's least unfinished row comes
+            // before this one: whoever finishes that row promotes. Promotes only from a marked row: the head, or a harmless
+            // false positive; a series finished in one statement then promotes once, from its head, not once per row.
             migrationBuilder.Sql("""
                 CREATE OR REPLACE FUNCTION waybill.outbox_head_promote() RETURNS trigger
                 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, waybill AS $$
+                DECLARE
+                    target uuid;
+                    target_sequence bigint;
                 BEGIN
                     IF current_setting('transaction_isolation') <> 'read committed' THEN
                         RAISE EXCEPTION 'Finishing or deleting message % of ordered key % needs READ COMMITTED, and this transaction is %: the next message of the key could be left unclaimable. Run it again in READ COMMITTED.',
                             OLD.id, OLD.key, current_setting('transaction_isolation')
                             USING ERRCODE = 'object_not_in_prerequisite_state';
                     END IF;
-                    UPDATE waybill.outbox s SET is_head = true
-                    WHERE s.id = (SELECT n.id FROM waybill.outbox n
-                                  WHERE n.key = OLD.key AND n.sequence IS NOT NULL AND n.status IN ('pending', 'claimed', 'dlq')
-                                  ORDER BY n.sequence
-                                  LIMIT 1)
-                      AND s.is_head IS NOT TRUE;
+                    LOOP
+                        SELECT n.id, n.sequence INTO target, target_sequence FROM waybill.outbox n
+                        WHERE n.key = OLD.key AND n.sequence IS NOT NULL AND n.status IN ('pending', 'claimed', 'dlq')
+                        ORDER BY n.sequence
+                        LIMIT 1;
+                        EXIT WHEN target IS NULL OR target_sequence < OLD.sequence;
+                        PERFORM 1 FROM waybill.outbox WHERE id = target AND status IN ('pending', 'claimed', 'dlq') FOR NO KEY UPDATE;
+                        IF FOUND THEN
+                            UPDATE waybill.outbox SET is_head = true WHERE id = target AND is_head IS NOT TRUE;
+                            EXIT;
+                        END IF;
+                    END LOOP;
                     RETURN NULL;
                 END $$;
 
                 CREATE OR REPLACE TRIGGER outbox_head_promote
                     AFTER UPDATE OF status ON waybill.outbox
                     FOR EACH ROW WHEN (OLD.sequence IS NOT NULL AND OLD.status IN ('pending', 'claimed', 'dlq')
-                                       AND NEW.status IN ('published', 'released'))
+                                       AND NEW.status IN ('published', 'released') AND OLD.is_head IS TRUE)
                     EXECUTE FUNCTION waybill.outbox_head_promote();
 
                 CREATE OR REPLACE TRIGGER outbox_head_promote_on_delete

@@ -10,12 +10,14 @@ namespace Waybill.Tests.Integration.G4;
 [Collection(PostgresCollection.Name)]
 public sealed class G4_ChaveNaDlq(PostgresFixture postgres)
 {
-    [Fact]
-    public async Task G4_MensagemNaDlq_SoAquelaChaveParaEMetricaSobe()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)] // M ≥ 2: the other key's series goes on round after round; the stopped key sends nothing behind its head
+    public async Task G4_MensagemNaDlq_SoAquelaChaveParaEMetricaSobe(int maxPerKey)
     {
         var ct = TestContext.Current.CancellationToken;
         var logs = new LogSink();
-        await using var scenario = await DlqScenario.StartAsync(postgres, logs);
+        await using var scenario = await DlqScenario.StartAsync(postgres, logs, maxPerKey: maxPerKey);
 
         for (var i = 0; i < 4; i++)
             await scenario.Dispatcher.RunOnceAsync(ct);
@@ -67,7 +69,8 @@ public sealed class DlqScenario : IAsyncDisposable
     /// <param name="postgres">The server.</param>
     /// <param name="logs">Where the dispatcher logs.</param>
     /// <param name="returnedKey">A key whose messages come back unroutable (basic.return) and wait.</param>
-    public static async Task<DlqScenario> StartAsync(PostgresFixture postgres, LogSink? logs = null, string? returnedKey = null)
+    /// <param name="maxPerKey">The dispatcher's M.</param>
+    public static async Task<DlqScenario> StartAsync(PostgresFixture postgres, LogSink? logs = null, string? returnedKey = null, int maxPerKey = 1)
     {
         var database = await TestDatabase.CreateAsync(postgres);
         var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
@@ -76,7 +79,7 @@ public sealed class DlqScenario : IAsyncDisposable
             m.Key == "order-42" && Volatile.Read(ref scenario!._defective) == 1 ? PublishResult.Defect("rejected by the test")
             : m.Key == returnedKey ? new PublishResult(PublishStatus.Returned, "312 NO_ROUTE")
             : PublishResult.Confirmed).ToList()));
-        var dispatcher = OrderingHarness.Create(dataSource, transport, OrderingHarness.Options(database, partitions: 4), logs: logs);
+        var dispatcher = OrderingHarness.Create(dataSource, transport, OrderingHarness.Options(database, partitions: 4), logs: logs, maxPerKey: maxPerKey);
         scenario = new DlqScenario(database, dataSource, transport, dispatcher);
         Assert.Null(await dispatcher.CheckOrderingAsync(atStartup: true, TestContext.Current.CancellationToken));
         var keys = new List<string> { "order-42", "order-42", "order-42", "other-1", "other-1", "other-1" };

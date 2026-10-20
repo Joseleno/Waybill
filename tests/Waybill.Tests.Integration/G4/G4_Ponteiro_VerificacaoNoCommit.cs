@@ -158,6 +158,33 @@ public sealed class G4_Ponteiro_VerificacaoNoCommit(PostgresFixture postgres)
         Assert.Equal("2:pending:true", await s.UnfinishedAsync("K"));
     }
 
+    // The same wait, long enough for the head's lease to run out and its partition to change hands (issue #21: the
+    // marking has no lock_timeout, by decision). The new owner's claim passes over the head, locked by the producer, and
+    // takes nothing of the key; once the producer commits, the marking ends and the head was published once.
+    [Fact]
+    public async Task Limite_SetConstraintsImmediate_EsperaLongaSemDuplicata()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var s = await Scenario.StartAsync(postgres, "K");
+        await s.Database.ExecuteAsync("UPDATE waybill.outbox SET lease_until = clock_timestamp() - interval '1 second' WHERE key = 'K'");
+        await using var producer = new NpgsqlConnection(KeyLockHarness.ConnectionString(s.Database, App));
+        await producer.OpenAsync(ct);
+        await using var transaction = await producer.BeginTransactionAsync(ct);
+        await KeyLockHarness.ExecuteAsync(producer, "SET CONSTRAINTS ALL IMMEDIATE");
+        await KeyLockHarness.InsertAsync(producer, "K");
+
+        var marking = s.PublishAsync(s.Heads["K"]);
+        await KeyLockHarness.WaitForAsync(s.Database, atBarrier: 0, onLocks: 1);
+        await s.Database.ExecuteAsync("UPDATE waybill.outbox_partitions SET owner = 'new-owner', lease_until = clock_timestamp() + interval '1 hour'");
+        var taken = await s.Store.ClaimAsync("new-owner", 100, TimeSpan.FromSeconds(30), ct, partitions: 1, maxPerKey: 3);
+        await transaction.CommitAsync(ct);
+        await marking;
+
+        Assert.Empty(taken);
+        Assert.Equal(1, await s.Database.ScalarAsync($"SELECT count(*) FROM waybill.outbox WHERE id = '{s.Heads["K"]}' AND status = 'published' AND fence = 1"));
+        Assert.Equal("2:pending:true", await s.UnfinishedAsync("K"));
+    }
+
     /// <summary>One ordering dispatcher holding the only partition, and per key one committed head it has claimed.</summary>
     private sealed record Scenario(TestDatabase Database, NpgsqlDataSource DataSource, OutboxStore Store, string Owner, Dictionary<string, Guid> Heads)
     {

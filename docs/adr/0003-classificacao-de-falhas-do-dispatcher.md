@@ -58,3 +58,14 @@ Revisado contra o código final.
 
 - **Sonda que falhava por timeout fechava o breaker.** Numa queda silenciosa, a sonda meio aberta dava timeout e o dispatcher chamava `RecordSuccess`: o breaker fechava, o período nunca dobrava e o backlog voltava a ciclar por claims e devoluções a cada três timeouts. Corrigido: qualquer `Retry` da sonda reabre pelo dobro. Teste: `G2_QuedaSilenciosa_SondaQueEstouraOTimeout_ReabrePeloDobro`.
 - **Texto:** a queda silenciosa conta qualquer pressão com lote 1, não só timeout; exceção do transporte e contagem errada de resultados abrem o breaker como falha de conexão.
+
+## Rodadas, M ≥ 2 (etapa 8c-2, 2026-10-13)
+
+Com a ordenação por chave e `MaxPerKey` acima de 1, um lote sai em rodadas, uma chamada ao transporte por rodada, todas no `PublishTimeout` do lote (ADR 0008, parte 2). A tabela acima vale para cada mensagem; o que muda é o que o breaker e o lote enxergam:
+
+- **O que conta:** a rodada 1 inteira. Das rodadas seguintes, conexão, nack, `Retry` sem causa, resultado inválido, exceção e contagem errada contam como na tabela. Só o `ConfirmTimeout` de uma rodada k > 1 fica de fora: o prazo dela foi o que as anteriores deixaram, e o estouro não diz nada do broker.
+- **Encerramento:** qualquer `Retry` numa rodada encerra o lote, para todas as chaves. O que não chegou a ser enviado volta sem gastar tentativa e não conta para nada; um lote com rodada não iniciada conta como saudável para o lote crescer.
+- **Meio aberto e queda silenciosa:** inalterados. Com lote 1 há uma rodada só, pelo SQL de M = 1.
+- **M efetivo:** quando o prazo corta uma rodada, M cai para as rodadas que couberam e dobra de volta quando um lote termina inteiro, como o lote faz com a pressão. Não mexe no breaker.
+
+Testes: `G4_FalhaNaRodada_PressaoSoQuandoNaoVemDoPrazo` (timeout na rodada 2 sem pressão; nack na rodada 2 e timeout na rodada 1 com pressão), `G4_RetryNaRodada_EncerraOLote`, `G4_ConexaoNaRodadaDois_AbreOBreaker`, `G4_RodadaTardia_NaoComeca_DevolveSemTentativaELoteNaoCai`, `G4_RodadaCortadaPeloPrazo_MEfetivoCai_EVoltaAoTerminarInteiro`, `G4_MeioAberto_ComMCem_SondaUmaSo`.
