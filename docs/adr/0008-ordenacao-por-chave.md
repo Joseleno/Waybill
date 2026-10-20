@@ -101,6 +101,14 @@ A 8a espaçou o `basic.return` (ADR 0006), e a 8b entregou a posse da partição
 - **Custo do claim com fila longa à frente.** O claim percorre `ix_outbox_claimable` em ordem de `id` e lê, e descarta, as linhas de uma chave com fila longa à frente, seja uma chave parada na DLQ, seja uma chave quente. São ~4 buffers e ~12 µs por linha (p50 de 120 ms com 10 mil linhas, 1,19 s com 100 mil). Passou do limite de 50 ms da etapa, então um ponteiro de cabeça vem em PR próprio antes da 8c-2. Achado para esse desenho: uma marca de cabeça calculada no INSERT corre contra a publicação concorrente da cabeça anterior. Resolvido pela parte 1b, abaixo.
 - **Ordem de upgrade.** O INSERT do pacote passa a ter `lock_keys`, então a migration da v0.2 roda antes do deploy de quem enfileira. O `Down` recusa depois que uma chave foi numerada ou uma linha liberada.
 - **Ordenação desligada.** O claim fica igual ao da versão anterior; o p99 da transação variou mais de 5% entre rodadas só por ruído nesta máquina, e o critério é decidido no job agendado.
+  - O job agendado reprovou o p99 da transação em 6 de 9 execuções (+4,7% a +15,7%). A causa estava no teste: a linha de base registrava o contexto à mão, e a variante desligada usava o `AddDbContext`, que monta as opções em cada escopo. Esse custo do cliente caía na conta da ordenação.
+  - Medido em Oct 20, 2026, local, com o p99 da transação contra a linha de base:
+    - linha de base contra ela mesma: −2,5% a +1,1%;
+    - registro assimétrico: +6,1% a +10,8%;
+    - as duas com `AddDbContext`: mediana de +3,1%.
+  - O trigger de numeração custa ~3,4 µs por linha com chave e de 7 a 30 µs por transação (`pgbench`, sem `fsync`). `SECURITY DEFINER` e `SET search_path` não mudam o custo de forma mensurável.
+  - O teste passou a registrar as duas variantes com `AddDbContext` e subiu de 5 para 7 rodadas. O critério de 5% não mudou.
+  - O claim da parte 2 com a ordenação desligada ficou numa mediana de −2% contra o da tag, com caudas de −6% a −14% quando a máquina estava carregada. Linha de base contra ela mesma: ±0,6%.
 - **Chave longa.** A chave continua limitada a 255 bytes UTF-8 no `Enqueue`, desde a v0.1, bem abaixo do limite do btree de `outbox_keys`.
 - **Relógio do `MessageId`.** O gerador nunca recua: se o relógio do processo saltar para o futuro e voltar, os ids seguem com o timestamp do futuro até o relógio alcançá-lo. A retenção, que escolhe pelo tempo do id, só retém essas linhas por mais tempo.
 

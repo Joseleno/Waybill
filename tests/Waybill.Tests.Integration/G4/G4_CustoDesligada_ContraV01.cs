@@ -15,7 +15,7 @@ namespace Waybill.Tests.Integration.G4;
 [Collection(PostgresCollection.Name)]
 public sealed class G4_CustoDesligada_ContraV01(PostgresFixture postgres)
 {
-    private const int Rounds = 5;
+    private const int Rounds = 7;
     private const int Producers = 16;
 
     // src/Waybill.EntityFrameworkCore.PostgreSql/Dispatching/OutboxStore.cs at v0.1.0-alpha.
@@ -73,20 +73,22 @@ public sealed class G4_CustoDesligada_ContraV01(PostgresFixture postgres)
     // Producers committing one keyed message with an application row each; p99 of the SaveChanges.
     private static async Task<double> TransactionP99Async(TestDatabase database, bool baseline)
     {
-        // Built the same way but for the key-list interceptor, which only AddDbContext lets AddWaybillOutbox add.
-        var manual = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(database.ConnectionString).Options;
+        // The context is registered the same way in both, by AddDbContext, which builds its options in every scope; only the
+        // key-list interceptor differs. AddWaybillOutbox of 0.1.0-alpha registered the outbox alone. A baseline registered by
+        // hand would skip that per-scope cost and charge it to ordering: about 4 points of p99, measured.
         var collection = new ServiceCollection()
             .AddLogging()
             .AddWaybill(o =>
             {
                 o.MaxPayloadBytes = 64 * 1024;
                 o.AddMessage("billing.invoice-paid.v1", TestJson.Default.InvoicePaid);
-            });
+            })
+            .AddDbContext<AppDbContext>(o => o.UseNpgsql(database.ConnectionString));
         if (baseline)
-            collection.AddScoped(_ => new AppDbContext(manual)); // as in 0.1: no interceptor
+            collection.AddScoped<IOutbox<AppDbContext>, DbContextOutbox<AppDbContext>>();
         else
-            collection.AddDbContext<AppDbContext>(o => o.UseNpgsql(database.ConnectionString));
-        var services = collection.AddWaybillOutbox<AppDbContext>().BuildServiceProvider();
+            collection.AddWaybillOutbox<AppDbContext>();
+        var services = collection.BuildServiceProvider();
         await using var _ = services;
         var latencies = new System.Collections.Concurrent.ConcurrentBag<double>();
         var stop = Stopwatch.StartNew();
