@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using RabbitMQ.Client;
 using Testcontainers.RabbitMq;
@@ -100,6 +101,19 @@ public sealed class RabbitMqFixture : IAsyncLifetime
                 return dir.FullName;
         }
         throw new InvalidOperationException("Waybill.slnx not found above " + AppContext.BaseDirectory);
+    }
+
+    /// <summary>
+    /// A queue's counts as the broker keeps them: every message, ready ones, unacknowledged ones. A dead letter the
+    /// target refused (at-least-once dead-lettering) is in the first and in neither of the others.
+    /// </summary>
+    public async Task<(long Messages, long Ready, long Unacked)> QueueCountsAsync(string queue)
+    {
+        var result = await _container.ExecAsync(["rabbitmqctl", "list_queues", "--quiet", "--no-table-headers", "name", "messages", "messages_ready", "messages_unacknowledged"]);
+        var row = result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Split('\t', StringSplitOptions.TrimEntries))
+            .Single(columns => columns[0] == queue);
+        return (long.Parse(row[1], CultureInfo.InvariantCulture), long.Parse(row[2], CultureInfo.InvariantCulture), long.Parse(row[3], CultureInfo.InvariantCulture));
     }
 
     /// <summary>Drains up to <paramref name="max"/> messages from <paramref name="queue"/>.</summary>
