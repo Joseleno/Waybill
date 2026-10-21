@@ -66,6 +66,68 @@ public sealed class FakeInboxEquivalenceTests(PostgresFixture postgres)
         }
     }
 
+    // Sequence verification (stage 10): (handler, message, sequence or none, handler fails?). The scripts that need
+    // inbox retention to forget a record are left to the real inbox: the fake keeps every record.
+    public static TheoryData<string, (string Handler, Guid Message, long? Sequence, bool Fails)[]> OrderedScripts => new()
+    {
+        { "em-ordem", [("h1", MessageA, 1, false), ("h1", MessageB, 2, false)] },
+        { "gap", [("h1", MessageA, 2, false), ("h1", MessageB, 5, false)] },
+        { "regressao", [("h1", MessageA, 2, false), ("h1", MessageB, 1, false), ("h1", MessageB, 1, false)] },
+        { "reusada", [("h1", MessageA, 1, false), ("h1", MessageB, 1, false)] },
+        { "reentrega-depois-da-seguinte", [("h1", MessageA, 1, false), ("h1", MessageB, 2, false), ("h1", MessageA, 1, false)] },
+        { "falha-e-reentrega", [("h1", MessageA, 1, true), ("h1", MessageA, 1, false)] },
+        { "dois-handlers", [("h1", MessageA, 5, false), ("h2", MessageB, 3, false)] },
+        { "sem-ordem", [("h1", MessageA, null, false), ("h1", MessageA, null, false)] },
+    };
+
+    [Theory]
+    [MemberData(nameof(OrderedScripts))]
+    public async Task FakeInbox_EmOrdem_EquivalenteAoReal(string script, (string Handler, Guid Message, long? Sequence, bool Fails)[] deliveries)
+    {
+        var real = await RunOrdered(deliveries, fake: false);
+        var fake = await RunOrdered(deliveries, fake: true);
+
+        Assert.Equal(real.Results, fake.Results);
+        Assert.Equal(real.Effects, fake.Effects);
+        Assert.Equal(fake.Results.Count(r => r == nameof(OrderedInboxResult.Regressed)), fake.Regressions);
+        Assert.NotEmpty(script);
+    }
+
+    // A delivery of a key while another of the same key is in the handler: the real one waits on the key's row, then
+    // compares with what the first applied; so must the fake.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FakeInbox_EntregaParalelaDaMesmaChave_EsperaEComparaComAPrimeira(bool fake)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        await using var services = fake ? FakeServices(database) : database.Services();
+        var firstInsideHandler = new TaskCompletionSource();
+        var releaseFirst = new TaskCompletionSource();
+        try
+        {
+            var first = Task.Run(() => DeliverOrderedAsync(services, "h1", MessageA, 5, async (db, token) =>
+            {
+                firstInsideHandler.TrySetResult();
+                await releaseFirst.Task;
+                await InboxHarness.ApplyEffect(db, token);
+            }), ct);
+            await firstInsideHandler.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            var second = Task.Run(() => DeliverOrderedAsync(services, "h1", MessageB, 4, InboxHarness.ApplyEffect), ct);
+            await Task.Delay(300, ct);
+            Assert.False(second.IsCompleted);
+
+            releaseFirst.SetResult();
+            Assert.Equal([OrderedInboxResult.Processed, OrderedInboxResult.Regressed], [await first, await second]);
+            Assert.Equal(1, await database.EffectsAsync());
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+        }
+    }
+
     [Fact]
     public async Task FakeInbox_ShouldHaveProcessed()
     {
@@ -102,6 +164,40 @@ public sealed class FakeInboxEquivalenceTests(PostgresFixture postgres)
             }
         }
         return (results, await database.EffectsAsync());
+    }
+
+    private async Task<(List<string> Results, long Effects, int Regressions)> RunOrdered(
+        (string Handler, Guid Message, long? Sequence, bool Fails)[] deliveries, bool fake)
+    {
+        var database = await TestDatabase.CreateAsync(postgres);
+        await using var services = fake ? FakeServices(database) : database.Services();
+        var results = new List<string>();
+        foreach (var (handler, message, sequence, fails) in deliveries)
+        {
+            try
+            {
+                var result = await DeliverOrderedAsync(services, handler, message, sequence, async (db, ct) =>
+                {
+                    await InboxHarness.ApplyEffect(db, ct);
+                    if (fails)
+                        throw new InvalidOperationException("handler failed");
+                });
+                results.Add(result.ToString());
+            }
+            catch (InvalidOperationException)
+            {
+                results.Add("Failed");
+            }
+        }
+        return (results, await database.EffectsAsync(), fake ? services.GetRequiredService<FakeInboxMemory>().Regressions : 0);
+    }
+
+    private static async Task<OrderedInboxResult> DeliverOrderedAsync(
+        IServiceProvider services, string handler, Guid messageId, long? sequence, Func<AppDbContext, CancellationToken, Task> handle)
+    {
+        await using var scope = services.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<IInbox<AppDbContext>>().ProcessInOrderAsync(
+            handler, messageId, sequence is { } s ? new MessageOrder("order-42", s) : null, handle);
     }
 
     private static ServiceProvider FakeServices(TestDatabase database) =>
