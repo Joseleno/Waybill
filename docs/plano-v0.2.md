@@ -15,12 +15,12 @@ O timebox é de oito semanas, como o da v0.1. A duração de cada etapa é estim
 | Etapa | Duração | Entrega central |
 | --- | --- | --- |
 | 8. Ordenação por chave | 3 semanas, em três PRs | Espaçamento do `basic.return`, lease por partição, cabeça por chave, `sequence` no envelope; G4 na publicação |
-| 9. Transporte Kafka | 2 semanas | `Waybill.Kafka` com producer transacional por partição; G2 e G4 estrita no Kafka |
+| ~~9. Transporte Kafka~~ | **Adiada** (ADR 0009) | Fora da v0.2 até haver pedido com caso de uso real; era `Waybill.Kafka` com producer transacional por partição, com G2 e G4 estrita no Kafka |
 | 10. Verificação de sequência no inbox | 4 a 5 dias | `inbox_keys`, regressão detectada e devolvida à aplicação para a DLX; G4 do RabbitMQ completa |
 | 11. OpenTelemetry | 3 a 5 dias | Trace da requisição HTTP até o handler no exemplo; métricas de atraso, chaves bloqueadas e DLQ |
 | 12. Documentação e release | 3 a 4 dias | `GUARANTEES.md` com a G4, `OPERATIONS.md`, `0.2.0-alpha` no nuget.org |
 
-**Linha de corte.** O núcleo da versão são as etapas 8, 9 e 10: sem elas a G4 não se sustenta em nenhum dos dois transportes. A etapa 11 é cortável. Se a etapa 8 ou a 9 estourar, a 11 sai da v0.2, e a tabela "Funcionalidades por versão" do escopo é atualizada no mesmo PR que registrar o corte, porque hoje ela promete OpenTelemetry na v0.2. Um segundo corte, se preciso, é o cenário de backlog de um milhão de linhas, que passa do PR para o job agendado.
+**Linha de corte.** O núcleo da versão eram as etapas 8, 9 e 10, para sustentar a G4 nos dois transportes. Desde o ADR 0009 (Oct 21, 2026), a etapa 9 está adiada, e o núcleo são as etapas 8 e 10: a G4 da v0.2 é a do RabbitMQ. A etapa 11 continua cortável. Se a 10 estourar, a 11 sai da v0.2, e a tabela "Funcionalidades por versão" do escopo é atualizada no mesmo PR que registrar o corte, porque hoje ela promete OpenTelemetry na v0.2. Um segundo corte, se preciso, é o cenário de backlog de um milhão de linhas, que passa do PR para o job agendado.
 
 **Uma migration só no release.** As etapas 8, 9 e 10 mexem no schema. Enquanto a v0.2 não tiver tag, elas acrescentam à mesma migration da versão, em vez de empilhar uma por etapa. O upgrade de um banco da `0.1.0-alpha` com backlog pendente é cenário de aceite da etapa 8 e é repetido na 12.
 
@@ -35,8 +35,8 @@ Estas perguntas não têm resposta ainda. Cada uma é respondida no SPEC da etap
 | Como o espaçamento convive com a cabeça por chave? | 8 | Uma linha em espera é cabeça e bloqueia a chave, e na DLQ continua bloqueando até liberação manual. O espaçamento precisa de teto total configurável, para que o operador tenha tempo de corrigir o binding antes de a chave travar |
 | Como o claim verifica a posse da partição? | 8 | A condição de posse fica no nível do `FOR UPDATE` e é repetida no `UPDATE` externo (ADR 0001, item 2). Uma condição em `JOIN` ou subconsulta com a tabela de posse cai na armadilha que o spike já pagou duas vezes; o `epoch` da partição precisa entrar no fencing ou ter justificativa escrita para não entrar |
 | Como liberar uma chave bloqueada antes da v1.0? | 8 | SQL documentado no `OPERATIONS.md`, como o reenvio da DLQ, com um teste que executa exatamente esse SQL. A API de liberação continua na v1.0 |
-| Como o `ITransport` recebe a partição? | 9 | O producer transacional precisa saber a partição do lease e o `epoch`, e o transporte precisa de um resultado para "fenceado pelo broker". A mudança é na API pública do núcleo; o RabbitMQ ignora os campos novos |
-| O que exatamente a G4 promete no Kafka? | 9 | A primeira ocorrência de cada mensagem no log segue a ordem de commit, inclusive após a expiração de um lease. Republicação depois de falha entre o commit da transação Kafka e a marcação no banco gera duplicata tardia (N, N+1, N, N+1), que o inbox absorve pelo `message_id`. A redação do escopo ("ordem estrita por chave") é ajustada se o teste mostrar isso |
+| Como o `ITransport` recebe a partição? | 9, adiada (ADR 0009) | O producer transacional precisa saber a partição do lease e o `epoch`, e o transporte precisa de um resultado para "fenceado pelo broker". A mudança é na API pública do núcleo; o RabbitMQ ignora os campos novos |
+| O que exatamente a G4 promete no Kafka? | 9, adiada (ADR 0009) | A primeira ocorrência de cada mensagem no log segue a ordem de commit, inclusive após a expiração de um lease. Republicação depois de falha entre o commit da transação Kafka e a marcação no banco gera duplicata tardia (N, N+1, N, N+1), que o inbox absorve pelo `message_id`. A redação do escopo ("ordem estrita por chave") é ajustada se o teste mostrar isso |
 
 ## Etapa 8 — Ordenação por chave
 
@@ -69,7 +69,7 @@ Dividida em dois PRs, porque a G4 não depende de M:
   - ADR 0008, parte 1.
 - **Entre 8c-1 e 8c-2: ponteiro de cabeça.** Medido na 8c-1: o claim lê e pula as linhas de uma chave com fila longa à frente, de forma linear (1,19 s com 100 mil linhas); a sondagem do desenho achou o mesmo numa chave quente sozinha (O(n²) para drenar). Uma marca por linha (`is_head`), decidida no INSERT e no commit do produtor e passada adiante quando uma linha termina, deixa no claim só as cabeças; o dispatcher repara marcas deixadas faltando por ação externa. ADR 0008, parte 1b. Com ele, a etapa 8 sai em cinco PRs (8a, 8b, 8c-1, ponteiro, 8c-2) em vez de três. **Gatilho de corte:** se a 8c-2 não fechar dentro das três semanas da etapa somadas a uma de folga, a etapa 11 sai da v0.2, como manda a linha de corte.
 - **8c-2, M ≥ 2 em rodadas.**
-  - A k-ésima mensagem de cada chave sai na rodada k. As rodadas ficam no dispatcher, uma chamada ao transporte por rodada (decisão do autor, Oct 13, 2026); a declaração "preservo a ordem dentro do lote", que o Kafka usaria para mandar a série numa transação só, fica para a etapa 9.
+  - A k-ésima mensagem de cada chave sai na rodada k. As rodadas ficam no dispatcher, uma chamada ao transporte por rodada (decisão do autor, Oct 13, 2026); a declaração "preservo a ordem dentro do lote", que o Kafka usaria para mandar a série numa transação só, fica para o transporte Kafka (adiado, ADR 0009).
   - Ponto de controle em Oct 28, 2026: o autor decide se a etapa 11 sai da v0.2, registrado aqui e na tabela "Funcionalidades por versão" do escopo; o merge da 8c-2 precisa sair até cerca de Oct 30, para o job agendado rodar antes de Nov 3.
   - ADR 0008, parte 2, e a exceção de pressão no ADR 0003.
 
@@ -100,7 +100,9 @@ O índice parcial do claim não pode filtrar por `next_attempt_at`, porque o rel
 
 **Pronto quando** os catorze cenários passam, o teste de propriedade e o de backlog têm histórico verde no job agendado, e os três ADRs (0006, 0007 e 0008) estão escritos. Os cenários com M ≥ 2 ficam na 8c-2; o de marcação ou devolução concorrente também roda com M = 1 na 8c-1 (`G4_MarcacaoOuDevolucaoConcorrente_ClaimNaoLevaASeguinte`), assim como o de troca de dono com linhas em voo e o teste de propriedade, cujo oráculo passou a ser a primeira entrega em ordem (ADR 0008).
 
-## Etapa 9 — Transporte Kafka
+## Etapa 9 — Transporte Kafka (adiada)
+
+> **Adiada pelo ADR 0009 (Oct 21, 2026).** O Kafka sai da v0.2 até haver um pedido com caso de uso real. Esta seção fica como ponto de partida do SPEC quando ele voltar, revista à luz desse caso de uso.
 
 Entrega o segundo transporte e a única forma de ordem estrita do escopo: o broker fenceia o producer zumbi, coisa que o RabbitMQ não faz.
 
@@ -185,9 +187,9 @@ A G4 entra no `GUARANTEES.md` agora, com a redação assimétrica do escopo e o 
 
 **Entregas**
 
-- `GUARANTEES.md` com a G4: no Kafka, a redação que o teste da etapa 9 sustentou; no RabbitMQ, ordem na publicação, salvo reentrega, com detecção no consumidor
+- `GUARANTEES.md` com a G4 do RabbitMQ: ordem na publicação, salvo reentrega, com detecção no consumidor (a do Kafka fica para quando ele voltar, ADR 0009)
 - `OPERATIONS.md` com a ordenação (como ligar, o custo medido, P e lease), a liberação de chave e o espaçamento do `basic.return`
-- README atualizado, com o Kafka e quando ligar a ordenação
+- README atualizado, com quando ligar a ordenação
 - Revisão dos ADRs escritos nas etapas 8 a 11 contra o código final; nenhum ADR novo nesta etapa
 - `CHANGELOG` da `0.2.0-alpha`, tag assinada e publicação por Trusted Publishing
 
@@ -195,14 +197,14 @@ A G4 entra no `GUARANTEES.md` agora, com a redação assimétrica do escopo e o 
 
 - [ ] Cada linha nova do `GUARANTEES.md` aponta para um teste nomeado
 - [ ] O upgrade de um banco da `0.1.0-alpha` com backlog pendente passa, agora com a migration final
-- [ ] A `0.2.0-alpha` está no nuget.org com Source Link e símbolos funcionando, em todos os pacotes, incluindo o `Waybill.Kafka`
+- [ ] A `0.2.0-alpha` está no nuget.org com Source Link e símbolos funcionando, em todos os pacotes
 
 ## Rastreabilidade
 
 | Garantia | Etapa | Teste que a prova |
 | --- | --- | --- |
-| G2. Todo evento persistido é publicado ou vai para a DLQ, também no Kafka | 9 | Broker parado por 1 h sem nada na DLQ; mensagem grande isolada no lote; Toxiproxy no meio da transação |
-| G4. Ordem por chave, no Kafka | 8, 9 | Teste de propriedade com zumbis fenceados pelo broker; duplicata tardia absorvida pelo inbox |
+| ~~G2. Todo evento persistido é publicado ou vai para a DLQ, também no Kafka~~ | 9, adiada (ADR 0009) | Broker parado por 1 h sem nada na DLQ; mensagem grande isolada no lote; Toxiproxy no meio da transação |
+| ~~G4. Ordem por chave, no Kafka~~ | 8, 9, adiada (ADR 0009) | Teste de propriedade com zumbis fenceados pelo broker; duplicata tardia absorvida pelo inbox |
 | G4. Ordem por chave, no RabbitMQ | 8, 10 | Teste de propriedade com toda regressão na DLX; consumidor com assinatura parcial sem gap; reentrega legítima sai como duplicata |
 | Operação sustentável (não é garantia, é condição de uso) | 8 | Linhas em espera à frente do backlog; backlog de um milhão de pendentes; chave bloqueada liberada pelo SQL documentado |
 

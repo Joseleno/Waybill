@@ -124,7 +124,8 @@ makes no ordering promise; ordering by aggregate key is planned for 0.2.
   Wolverine, MassTransit, NServiceBus or CAP. Waybill only publishes and deduplicates.
 - **Your database is not PostgreSQL, or you do not write through EF Core.** Writes through `ExecuteUpdate` or raw SQL do not
   produce events.
-- **Your broker is not RabbitMQ.** Kafka is planned for 0.2.
+- **Your broker is not RabbitMQ.** A Kafka transport is designed but deferred until someone needs it: describe your
+  use case in [#24](https://github.com/Joseleno/Waybill/issues/24).
 - **You need ordering per aggregate today.** It is planned for 0.2.
 - **The effect you need once is outside your database** (an e-mail, a call to a payment gateway). The inbox protects
   your database, not the calls that leave it.
