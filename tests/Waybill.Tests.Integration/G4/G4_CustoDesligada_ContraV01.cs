@@ -8,10 +8,13 @@ using Waybill.EntityFrameworkCore.Dispatching;
 
 namespace Waybill.Tests.Integration.G4;
 
-// The cost criterion of ordering off (SPEC, written before measuring): the p99 of the application's transaction and the
-// claim's throughput stay within 5% of 0.1.0-alpha. The baseline is that release emulated in the same run: no numbering
-// nor terminal-status trigger, no head or blocked-key index, no key-list interceptor, and the claim SQL of the tag. Rounds
-// interleave the two and medians are compared, against the noise of a shared runner. Scheduled job only.
+// The cost of ordering off against 0.1.0-alpha (ADR 0008, addendum of 2026-10-21): the claim's throughput stays within
+// 5%; the p99 of the application's transaction is measured and published, and fails only past +35%, above the largest
+// value measured on CI runners (+27%). The 5% the SPEC wrote before measuring held for the claim. For the p99, even with
+// no trigger at all, about half the runners still landed above it: the test cannot tell 5% from noise. The baseline is
+// that release emulated in the same run: no numbering nor terminal-status trigger, no head or blocked-key index, no
+// key-list interceptor, and the claim SQL of the tag. Rounds interleave the two and medians are compared, against the
+// noise of a shared runner. Scheduled job only.
 [Collection(PostgresCollection.Name)]
 public sealed class G4_CustoDesligada_ContraV01(PostgresFixture postgres)
 {
@@ -39,7 +42,7 @@ public sealed class G4_CustoDesligada_ContraV01(PostgresFixture postgres)
 
     [Fact]
     [Trait("Category", "Long")]
-    public async Task G4_CustoDesligada_TransacaoEClaimAteCincoPorCentoDaV01()
+    public async Task G4_CustoDesligada_ClaimAteCincoPorCentoETransacaoMedida()
     {
         var (baseP99, offP99, baseRate, offRate) = (new List<double>(), new List<double>(), new List<double>(), new List<double>());
         for (var round = 0; round < Rounds; round++)
@@ -66,7 +69,7 @@ public sealed class G4_CustoDesligada_ContraV01(PostgresFixture postgres)
         var line = $"ordering off vs 0.1.0-alpha: transaction p99 {oP99:F1} vs {bP99:F1} ms ({(oP99 / bP99 - 1) * 100:+0.0;-0.0}%), claim {oRate:F0} vs {bRate:F0} rows/s ({(oRate / bRate - 1) * 100:+0.0;-0.0}%)";
         TestContext.Current.TestOutputHelper?.WriteLine(line);
         TestContext.Current.SendDiagnosticMessage(line);
-        Assert.True(oP99 <= bP99 * 1.05, line);
+        Assert.True(oP99 <= bP99 * 1.35, line);
         Assert.True(oRate >= bRate * 0.95, line);
     }
 
