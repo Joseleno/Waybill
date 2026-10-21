@@ -69,6 +69,27 @@ public sealed class G4_Rodadas_Prazo(PostgresFixture postgres)
         Assert.Equal(6, await database.CountAsync("published"));
     }
 
+    // Round 2 holds only a message of a key that round 1 stopped, so it sends nothing and takes no time: it is not cut by
+    // the deadline, and M does not come down for it.
+    [Fact]
+    public async Task G4_RodadaSemNadaAEnviar_NaoBaixaOMEfetivo()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var time = new FakeTimeProvider();
+        var (database, dispatcher, transport) = await DispatcherAsync(time, maxPerKey: 3, (call, batch) =>
+        {
+            time.Advance(TimeSpan.FromSeconds(15)); // 5 s left: a round that sends would not start
+            return Task.FromResult<IReadOnlyList<PublishResult>>(
+                batch.Select(m => m.Key == "B" ? PublishResult.Returned("NO_ROUTE") : PublishResult.Confirmed).ToList());
+        });
+        await DispatcherHarness.EnqueueAsync(database, 3, key: i => i < 2 ? "B" : "A");
+
+        await dispatcher.RunOnceAsync(ct);
+
+        Assert.Equal(1, transport.Calls);
+        Assert.Equal(3, dispatcher.CurrentMaxPerKey);
+    }
+
     public static TheoryData<string, int, bool> Pressure => new()
     {
         { "confirm timeout", 2, false }, // round 2 had only what round 1 left of the deadline
