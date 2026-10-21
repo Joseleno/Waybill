@@ -14,10 +14,25 @@ public static class InboxOrderHarness
     public const string Key = "order-42";
 
     /// <summary>The container of <see cref="TestDatabase.Services"/>, with debug logs captured.</summary>
-    public static ServiceProvider Services(TestDatabase database, out LogSink logs)
+    public static ServiceProvider Services(
+        TestDatabase database, out LogSink logs, Action<Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure.NpgsqlDbContextOptionsBuilder>? npgsql = null,
+        params Microsoft.EntityFrameworkCore.Diagnostics.IInterceptor[] interceptors)
     {
         logs = new LogSink { MinimumLevel = LogLevel.Debug };
-        return database.Services(logs: logs);
+        return database.Services(logs: logs, npgsql: npgsql, interceptors: interceptors);
+    }
+
+    /// <summary>
+    /// Another session holding <c>waybill.inbox_keys</c> exclusively: anything that reads or writes it waits until the
+    /// lock is dropped. Statistics would not do: other sessions report them late.
+    /// </summary>
+    public static async Task<NpgsqlConnection> LockInboxKeysAsync(TestDatabase database)
+    {
+        var locker = new NpgsqlConnection(database.ConnectionString);
+        await locker.OpenAsync();
+        await using var command = new NpgsqlCommand("BEGIN; LOCK TABLE waybill.inbox_keys IN ACCESS EXCLUSIVE MODE", locker);
+        await command.ExecuteNonQueryAsync();
+        return locker;
     }
 
     /// <summary>One delivery, in its own DI scope like a consumer would: the effect is a new invoice row.</summary>
