@@ -11,3 +11,8 @@ Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.OrderByKey.get 
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.OrderByKey.set -> void
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxPerKey.get -> int
 Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxPerKey.set -> void
+Waybill.EntityFrameworkCore.IInbox<TContext>.ProcessInOrderAsync(string! handler, System.Guid messageId, Waybill.MessageOrder? order, System.Func<TContext!, System.Threading.CancellationToken, System.Threading.Tasks.Task!>! handle, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Waybill.EntityFrameworkCore.OrderedInboxResult>!
+Waybill.EntityFrameworkCore.OrderedInboxResult
+Waybill.EntityFrameworkCore.OrderedInboxResult.Duplicate = 2 -> Waybill.EntityFrameworkCore.OrderedInboxResult
+Waybill.EntityFrameworkCore.OrderedInboxResult.Processed = 1 -> Waybill.EntityFrameworkCore.OrderedInboxResult
+Waybill.EntityFrameworkCore.OrderedInboxResult.Regressed = 3 -> Waybill.EntityFrameworkCore.OrderedInboxResult

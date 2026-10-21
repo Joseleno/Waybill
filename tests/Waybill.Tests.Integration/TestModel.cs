@@ -159,6 +159,12 @@ public sealed class LogSink : ILoggerProvider
 {
     public ConcurrentQueue<(LogLevel Level, string Category, string Message)> Entries { get; } = new();
 
+    /// <summary>The same entries, with the event id and the structured fields.</summary>
+    public ConcurrentQueue<LogRecord> Records { get; } = new();
+
+    /// <summary>Entries below this level are not captured.</summary>
+    public LogLevel MinimumLevel { get; init; } = LogLevel.Information;
+
     public ILogger CreateLogger(string categoryName) => new Logger(this, categoryName);
 
     public void Dispose()
@@ -169,9 +175,19 @@ public sealed class LogSink : ILoggerProvider
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
-        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= sink.MinimumLevel;
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            sink.Entries.Enqueue((logLevel, category, formatter(state, exception)));
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (!IsEnabled(logLevel))
+                return;
+            var message = formatter(state, exception);
+            sink.Entries.Enqueue((logLevel, category, message));
+            var fields = state as IEnumerable<KeyValuePair<string, object?>> ?? [];
+            sink.Records.Enqueue(new LogRecord(logLevel, category, eventId.Id, message, fields.ToDictionary(f => f.Key, f => f.Value)));
+        }
     }
 }
+
+/// <summary>A captured log entry.</summary>
+public sealed record LogRecord(LogLevel Level, string Category, int EventId, string Message, IReadOnlyDictionary<string, object?> Fields);
