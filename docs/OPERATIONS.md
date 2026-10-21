@@ -207,6 +207,14 @@ COMMIT;
 
 ### What it costs
 
+With ordering off, the numbering trigger still runs on every message with a key, only to find that ordering is off:
+one read of `waybill.settings` per row. Messages without a key pay nothing, and the claim is unchanged. Measured with
+`pgbench`, one keyed row per transaction, 16 clients and no `fsync` (the CPU is the limit): 13% fewer transactions per
+second than without the trigger, about 25 µs more per transaction. In the scheduled test (EF Core, 16 producers on a
+4-vCPU CI runner, one message per transaction), the p99 of the transaction is 1% to 27% above `0.1.0-alpha`, median
+13%. With `fsync` on, where the commit is the limit, the same `pgbench` showed 3% to 5% fewer transactions per second
+(ADR 0008, addendum of 2026-10-21).
+
 Measured with EF Core 10 and PostgreSQL 18, 32 producers, one machine (stage 8 prototype); compare the ratios, not the
 absolute numbers:
 

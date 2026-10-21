@@ -71,7 +71,7 @@ A 8a espaçou o `basic.return` (ADR 0006), e a 8b entregou a posse da partição
 | Pergunta | Resposta |
 | --- | --- |
 | A ordenação é opcional? | Sim, desligada por padrão (ADR 0007, item 1). Desligada, o contador e o filtro não rodam. O trigger só confere a tabela de uma linha e anula a lista |
-| Qual o critério de custo? | Desligada, o p99 da transação e a vazão do claim ficam a no máximo 5% da `0.1.0-alpha`, medidos no job agendado contra a versão emulada no mesmo teste. Ligada, o custo é medido e publicado no `OPERATIONS.md`, sem critério de aprovação |
+| Qual o critério de custo? | Desligada, a vazão do claim fica a no máximo 5% da `0.1.0-alpha`, e o p99 da transação é medido e publicado, com alarme acima de +35% (revisto no adendo de 2026-10-21; antes, 5% também no p99), no job agendado contra a versão emulada no mesmo teste. Ligada, o custo é medido e publicado no `OPERATIONS.md`, sem critério de aprovação |
 | Como o espaçamento convive com a cabeça? | Uma linha em espera é cabeça e para a chave. Na DLQ, continua parando até ser reenviada ou liberada. O teto total do espaçamento (15 min por padrão, ADR 0006) é o prazo do operador antes de a chave parar |
 | Como liberar uma chave antes da v1.0? | Com o SQL do `OPERATIONS.md` (item 7), testado como está escrito |
 
@@ -107,7 +107,7 @@ A 8a espaçou o `basic.return` (ADR 0006), e a 8b entregou a posse da partição
     - registro assimétrico: +6,1% a +10,8%;
     - as duas com `AddDbContext`: mediana de +3,1%.
   - O trigger de numeração custa ~3,4 µs por linha com chave e de 7 a 30 µs por transação (`pgbench`, sem `fsync`). `SECURITY DEFINER` e `SET search_path` não mudam o custo de forma mensurável.
-  - O teste passou a registrar as duas variantes com `AddDbContext` e subiu de 5 para 7 rodadas. O critério de 5% não mudou.
+  - O teste passou a registrar as duas variantes com `AddDbContext` e subiu de 5 para 7 rodadas. O critério de 5% não mudou nesse momento; foi revisto no adendo de 2026-10-21, ao fim deste ADR.
   - O claim da parte 2 com a ordenação desligada ficou numa mediana de −2% contra o da tag, com caudas de −6% a −14% quando a máquina estava carregada. Linha de base contra ela mesma: ±0,6%.
 - **Chave longa.** A chave continua limitada a 255 bytes UTF-8 no `Enqueue`, desde a v0.1, bem abaixo do limite do btree de `outbox_keys`.
 - **Relógio do `MessageId`.** O gerador nunca recua: se o relógio do processo saltar para o futuro e voltar, os ids seguem com o timestamp do futuro até o relógio alcançá-lo. A retenção, que escolhe pelo tempo do id, só retém essas linhas por mais tempo.
@@ -356,3 +356,43 @@ Com M = 1, uma chave anda uma mensagem por ciclo: claim, ida ao broker e marcaç
   - `React` contando toda rodada;
   - início sem "≥ D";
   - série inteira numa chamada, pega pelo caos.
+
+## Adendo — critério de custo da ordenação desligada (2026-10-21)
+
+Status: aceito, decisão do autor.
+
+### Contexto
+
+O critério da etapa 8 dizia: com a ordenação desligada, o p99 da transação e a vazão do claim ficam a no máximo 5% da `0.1.0-alpha` no job agendado. Depois do PR #23, o agendado de Oct 21 reprovou o p99 de novo (+11,1%). O `PLAN.md` da etapa já previa isso: se o critério falhasse no runner Linux, a decisão voltaria ao autor. Antes de decidir, o teste foi medido no CI em três runs, numa branch descartável:
+
+| Medida | Resultado |
+| --- | --- |
+| A/A (as duas variantes como a `0.1.0-alpha`), 6 runners | −4,2% a +1,0%: o método mede bem, e o ruído do runner é de ±4% |
+| A/B (desligada contra a `0.1.0-alpha`), 20 runners em três runs | +1,1% a +27,1%, mediana de +13% |
+| Sem o trigger `outbox_sequence`, 14 runners | mediana de +5,6%, 7 de 14 dentro dos 5% |
+| Sem o trigger, os índices novos e o interceptor, 8 runners | mediana de +3,7%, 5 de 8 dentro dos 5% |
+| Trigger com uma flag em sequence no `WHEN` (abaixo), 8 runners | mediana de +6,2%, 3 de 8 dentro dos 5% |
+| Vazão do claim, 20 runners | −0,8% a +17,6%: dentro do critério |
+
+O custo está no trigger de numeração: com a ordenação desligada, ele roda em toda linha com chave só para ler `waybill.settings`. No `pgbench`, com uma linha por transação, 16 clientes e sem `fsync` (CPU como limite): 73 mil transações por segundo sem trigger, 70 mil com um trigger vazio e 63 mil com o atual, cerca de 25 µs a mais na latência média. O `SECURITY DEFINER` e o `SET search_path` não pesam; a consulta por linha pesa. No CI, com 16 produtores disputando 4 vCPUs, esse custo vira fila e aparece no p99.
+
+### Decisão
+
+1. **O critério do p99 da transação passa de "no máximo 5%" para custo medido e publicado.** Mesmo um trigger de custo zero deixaria o teste dentro dos 5% em só metade dos runners: o critério não separa custo de ruído neste teste. O número vai para a tabela "What it costs" do `OPERATIONS.md`, como o custo da ordenação ligada.
+2. **O teste agendado vira alarme de regressão grosseira:** reprova acima de +35% no p99, acima do maior valor medido (+27,1%). Uma regressão pequena, como uma segunda consulta por linha, não é pega; nenhum teste de p99 a pegaria com esse ruído.
+3. **A proteção fina continua estrutural:** `G4_OrdenacaoDesligada_SemContadorNemFiltro` prova que, desligada, a gravação não lê nem escreve `outbox_keys`.
+4. **A vazão do claim mantém o critério de 5%.**
+5. **O trigger não muda.**
+
+### Alternativas descartadas
+
+| Alternativa | Por que não |
+| --- | --- |
+| Manter os 5% | O agendado ficaria vermelho para sempre, e um alarme sempre vermelho ninguém olha |
+| Trigger desabilitado sem `settings` (`ALTER TABLE ... ENABLE/DISABLE TRIGGER` por um trigger em `settings`) | Sozinho não passa dos 5% (sem trigger nenhum, a mediana fica em +5,6%). O `ALTER` pega SHARE ROW EXCLUSIVE na `outbox` e espera qualquer transação aberta que escreveu nela, com os produtores enfileirados atrás. `CREATE OR REPLACE TRIGGER` reabilita o trigger, um `TRUNCATE` em `settings` não dispara nada e a replicação lógica não leva o `ALTER` |
+| Flag em sequence no `WHEN` do trigger (`pg_sequence_last_value`, sem consulta) | Recupera quase todo o custo do trigger (+6,2% contra +12,5%), mas a flag não é transacional e precisa andar junto com `settings`. Desligada com a ordenação ligada (rollback do SQL de desligar, failover com replicação lógica), mensagens com chave sairiam sem numeração: a G4 quebraria. Fica registrada como a primeira opção se o custo pesar para alguém |
+
+### Consequências
+
+- Quem não liga a ordenação paga o trigger em toda linha com chave, e o custo está publicado. Mensagem sem chave não paga nada.
+- O nome do teste agendado muda para `G4_CustoDesligada_ClaimAteCincoPorCentoETransacaoMedida`.
