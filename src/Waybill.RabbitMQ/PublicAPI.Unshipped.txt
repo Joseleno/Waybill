@@ -1,1 +1,2 @@
 #nullable enable
+static Waybill.RabbitMQ.WaybillRabbitMqMessageExtensions.GetWaybillOrder(this RabbitMQ.Client.IReadOnlyBasicProperties! properties) -> Waybill.MessageOrder?
