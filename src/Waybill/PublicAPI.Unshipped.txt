@@ -1,3 +1,14 @@
 #nullable enable
 Waybill.OutgoingMessage.Sequence.get -> long?
 Waybill.OutgoingMessage.Sequence.init -> void
+Waybill.MessageOrder
+Waybill.MessageOrder.Equals(Waybill.MessageOrder other) -> bool
+Waybill.MessageOrder.Key.get -> string!
+Waybill.MessageOrder.MessageOrder() -> void
+Waybill.MessageOrder.MessageOrder(string! key, long sequence) -> void
+Waybill.MessageOrder.Sequence.get -> long
+override Waybill.MessageOrder.GetHashCode() -> int
+static Waybill.MessageOrder.operator !=(Waybill.MessageOrder left, Waybill.MessageOrder right) -> bool
+static Waybill.MessageOrder.operator ==(Waybill.MessageOrder left, Waybill.MessageOrder right) -> bool
+~override Waybill.MessageOrder.Equals(object obj) -> bool
+~override Waybill.MessageOrder.ToString() -> string
