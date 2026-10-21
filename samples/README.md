@@ -172,6 +172,22 @@ at boot from [`rabbitmq/definitions.json`](rabbitmq/definitions.json):
 - the `receipts.invoice-paid` queue bound to `billing.invoice-paid.v1`, with its dead-letter queue;
 - the `audit` queue bound to `#`.
 
+Billing orders each invoice's messages by key (`OrderByKey`), and Receipts checks their sequence in its inbox
+(`ProcessInOrderAsync`). A message older than one already applied for its invoice is not applied: the consumer sends it
+to `receipts.invoice-paid.dead`, and the warning with EventId 50 in the Receipts log says why. That promise rests on the
+queue's arguments, all in `definitions.json` (docs/OPERATIONS.md, "Sequence verification in the inbox"):
+
+- `x-single-active-consumer`: one consumer at a time, so a second Receipts instance waits instead of taking messages out
+  of order;
+- `x-dead-letter-strategy: at-least-once` with `x-overflow: reject-publish`: a rejected message is never dropped on its
+  way to the dead-letter queue (without `reject-publish`, RabbitMQ falls back to at-most-once and only logs it);
+- `x-overflow: reject-publish` on the dead-letter queue: full, it holds new dead letters back instead of dropping its
+  oldest.
+
+RabbitMQ keeps a queue's arguments: after pulling a version of the sample with new ones, recreate the broker and the
+databases with `docker compose down -v` (the smoke script checks the arguments and says so). The databases need it too
+while v0.2 is unreleased: its schema migration still changes.
+
 ## Clean up
 
 ```

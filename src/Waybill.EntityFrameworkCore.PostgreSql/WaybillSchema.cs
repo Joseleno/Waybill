@@ -13,6 +13,7 @@ public static class WaybillSchema
     internal const string PartitionsTable = "outbox_partitions";
     internal const string InstancesTable = "outbox_instances";
     internal const string KeysTable = "outbox_keys";
+    internal const string InboxKeysTable = "inbox_keys";
     internal const string MigrationsHistoryTable = "__waybill_migrations";
 
     /// <summary>

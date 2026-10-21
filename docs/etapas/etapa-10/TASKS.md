@@ -1,0 +1,18 @@
+# Etapa 10 — Tarefas
+
+Um commit por cenário provado, na ordem abaixo. Os nomes dos testes estão no `PLAN.md`.
+
+- [x] SPEC revisto por revisão de construtor e revisão adversarial; aprovado pelo autor (Oct 21, 2026)
+- [x] PLAN revisto por um time de quatro revisores (PostgreSQL, RabbitMQ, API .NET, testes), com medições no Postgres 18 e no RabbitMQ 4.3.6
+- [x] PLAN aprovado pelo autor (Oct 21, 2026)
+- [x] Broker: `G4_RabbitMq_RequeueDepoisDeFalha`, que fixa o medido na revisão (a devolvida volta antes; `nack` não conta entregas), com a topologia lida do `definitions.json`
+- [x] Schema: `inbox_keys` na `SchemaV0_2` (fillfactor 80), entidade, snapshot; `Down` com `to_regclass`, recusa com `inbox_keys` e a apaga; retenção não a toca
+- [x] Núcleo: `MessageOrder` validado; testes de unidade; API pública declarada
+- [x] Inbox: `OrderedInboxResult`, `ProcessInOrderAsync`, SQL da verificação, log `EventId` 50; os cenários `G4_Inbox_*`, um commit cada
+- [x] Mutações de todas as armadilhas do PLAN, registradas nos commits
+- [x] RabbitMQ: `GetWaybillOrder` (com `byte[]`); `G4_RabbitMq_RegressaoChegaADlx`
+- [x] `FakeInbox` com a mesma regra; equivalência ampliada
+- [x] Propriedade `G4_Propriedade_RegressaoNaDlx` no caos (PR curto e agendado), oráculo da DLX exata, injeção depois da drenagem, regressões naturais > 0 no agendado
+- [x] Exemplo: `Billing` com `OrderByKey`; `Receipts` com `ProcessInOrderAsync`, `switch`, até dez tentativas no consumidor e depois DLX; `definitions.json` nas condições do broker; `smoke.sh` confere os argumentos das filas e publica uma regressão `Reused`; README do exemplo com `docker compose down -v`
+- [x] `OPERATIONS.md` (seção nova e SQL `inbox-forget-keys` testado), escopo, ADR 0010, CHANGELOG (com "Breaking" pelo membro novo no `IInbox`)
+- [x] Revisão de código independente antes da PR: um bug no `FakeInbox` (espera cancelada soltava a chave de outro, com teste antes da correção), uma referência proibida no SPEC, a repetição depois do timeout de comando prometida sem `EnableRetryOnFailure`, o `uuidgen` maiúsculo no `smoke.sh`

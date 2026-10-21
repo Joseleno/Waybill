@@ -23,6 +23,32 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.InboxKeyRow", b =>
+                {
+                    b.Property<string>("Handler")
+                        .HasColumnType("text")
+                        .HasColumnName("handler");
+
+                    b.Property<string>("Key")
+                        .HasColumnType("text")
+                        .HasColumnName("key");
+
+                    b.Property<Guid>("LastMessageId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("last_message_id");
+
+                    b.Property<long>("LastSeq")
+                        .HasColumnType("bigint")
+                        .HasColumnName("last_seq");
+
+                    b.HasKey("Handler", "Key")
+                        .HasName("pk_inbox_keys");
+
+                    b.ToTable("inbox_keys", "waybill");
+
+                    b.HasAnnotation("Npgsql:StorageParameter:fillfactor", 80);
+                });
+
             modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.InboxRow", b =>
                 {
                     b.Property<string>("Handler")

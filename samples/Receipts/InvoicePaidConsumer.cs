@@ -1,6 +1,7 @@
 using System.Text.Json;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using Waybill;
 using Waybill.EntityFrameworkCore;
 using Waybill.RabbitMQ;
 
@@ -39,10 +40,12 @@ internal sealed partial class InvoicePaidConsumer(
     private async Task HandleAsync(IChannel channel, BasicDeliverEventArgs delivery, CancellationToken stoppingToken)
     {
         Guid messageId;
+        MessageOrder? order;
         InvoicePaid paid;
         try
         {
             messageId = delivery.BasicProperties.GetWaybillMessageId();
+            order = delivery.BasicProperties.GetWaybillOrder(); // null unless Billing orders by key
             paid = JsonSerializer.Deserialize(delivery.Body.Span, ReceiptsJson.Default.InvoicePaid)
                 ?? throw new JsonException("The message body is null.");
         }
@@ -54,40 +57,58 @@ internal sealed partial class InvoicePaidConsumer(
             return;
         }
 
-        InboxResult result;
-        try
+        // A failure is retried here, waiting longer each time (1, 2, 4 … up to 30 s; about two and a half minutes in
+        // all), so a database restart is ridden out. Not requeued: a nack with requeue does not count toward the queue's
+        // x-delivery-limit, so a message that always fails would come back for ever and, with one active consumer, hold
+        // the whole queue. Past the last attempt it goes to the dead-letter queue: the invoice's next message is then
+        // applied, a gap, and a replay of this one comes back Regressed. Someone has to look at receipts.invoice-paid.dead.
+        OrderedInboxResult result;
+        for (var attempt = 1; ; attempt++)
         {
-            await using var scope = scopes.CreateAsyncScope();
-            result = await scope.ServiceProvider.GetRequiredService<InvoicePaidHandler>().HandleAsync(messageId, paid, stoppingToken);
-        }
-        catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
-        {
-            // Nothing was committed (the inbox rolled back). Wait longer at each redelivery (1, 2, 4 … up to 30 s), so a
-            // database restart is ridden out; past the queue's x-delivery-limit (definitions.json) the broker
-            // dead-letters the message, and someone has to look at receipts.invoice-paid.dead.
-            var delay = TimeSpan.FromSeconds(Math.Min(Math.Pow(2, DeliveryCount(delivery)), 30));
-            LogFailed(logger, messageId, delay, exception);
-            await Task.Delay(delay, stoppingToken);
-            await channel.BasicNackAsync(delivery.DeliveryTag, multiple: false, requeue: true, stoppingToken);
-            return;
+            try
+            {
+                await using var scope = scopes.CreateAsyncScope();
+                result = await scope.ServiceProvider.GetRequiredService<InvoicePaidHandler>().HandleAsync(messageId, order, paid, stoppingToken);
+                break;
+            }
+            catch (Exception exception) when (!stoppingToken.IsCancellationRequested && attempt < MaxAttempts)
+            {
+                // Nothing was committed: the inbox rolled back.
+                var delay = TimeSpan.FromSeconds(Math.Min(Math.Pow(2, attempt - 1), 30));
+                LogFailed(logger, messageId, attempt, delay, exception);
+                await Task.Delay(delay, stoppingToken);
+            }
+            catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
+            {
+                LogGaveUp(logger, messageId, attempt, exception);
+                await channel.BasicNackAsync(delivery.DeliveryTag, multiple: false, requeue: false, stoppingToken);
+                return;
+            }
         }
 
         try
         {
-            // Ack only after the inbox committed, whether this delivery was processed or a duplicate.
-            await channel.BasicAckAsync(delivery.DeliveryTag, multiple: false, stoppingToken);
+            if (result == OrderedInboxResult.Regressed)
+            {
+                // Older than a message already applied for its invoice: nothing was applied, and the inbox logged why
+                // (EventId 50). To the dead-letter queue, never acknowledged as processed.
+                await channel.BasicNackAsync(delivery.DeliveryTag, multiple: false, requeue: false, stoppingToken);
+            }
+            else
+            {
+                // Ack only after the inbox committed, whether this delivery was processed or a duplicate.
+                await channel.BasicAckAsync(delivery.DeliveryTag, multiple: false, stoppingToken);
+            }
             LogHandled(logger, messageId, result);
         }
         catch (Exception exception) when (!stoppingToken.IsCancellationRequested)
         {
-            // Committed but not acked (the channel closed): the broker redelivers it and the inbox returns Duplicate.
+            // The channel closed: the broker delivers it again. Processed, it comes back Duplicate; regressed, Regressed.
             LogAckFailed(logger, messageId, exception);
         }
     }
 
-    // Quorum queues count redeliveries in x-delivery-count; absent on the first delivery.
-    private static long DeliveryCount(BasicDeliverEventArgs delivery) =>
-        delivery.BasicProperties.Headers?.TryGetValue("x-delivery-count", out var count) == true && count is long n ? n : 0;
+    private const int MaxAttempts = 10;
 
     private async Task<IConnection> ConnectAsync(ConnectionFactory factory, CancellationToken stoppingToken)
     {
@@ -109,12 +130,15 @@ internal sealed partial class InvoicePaidConsumer(
     private static partial void LogConsuming(ILogger logger, string queue);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Message {MessageId}: {Result}.")]
-    private static partial void LogHandled(ILogger logger, Guid messageId, InboxResult result);
+    private static partial void LogHandled(ILogger logger, Guid messageId, OrderedInboxResult result);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "Message {MessageId} failed; it will be delivered again in {Delay}.")]
-    private static partial void LogFailed(ILogger logger, Guid messageId, TimeSpan delay, Exception exception);
+    [LoggerMessage(Level = LogLevel.Error, Message = "Message {MessageId} failed (attempt {Attempt}); trying again in {Delay}.")]
+    private static partial void LogFailed(ILogger logger, Guid messageId, int attempt, TimeSpan delay, Exception exception);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Message {MessageId} committed but the ack failed; the redelivery will be a duplicate.")]
+    [LoggerMessage(Level = LogLevel.Error, Message = "Message {MessageId} failed {Attempt} times; sent to the dead-letter queue. Its invoice's next message will be applied without it.")]
+    private static partial void LogGaveUp(ILogger logger, Guid messageId, int attempt, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Message {MessageId} was handled but the ack or nack failed; it will be delivered again.")]
     private static partial void LogAckFailed(ILogger logger, Guid messageId, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Unreadable message rejected.")]

@@ -37,6 +37,9 @@ public sealed class SchemaTests(PostgresFixture postgres)
     private static async Task AssertOrderingObjectsAsync(Func<string, Task<long>> scalar)
     {
         Assert.Equal(1, await scalar("SELECT count(*) FROM pg_class WHERE oid = 'waybill.outbox_keys'::regclass AND reloptions @> '{fillfactor=80}'"));
+        // Sequence verification in the inbox (stage 10): the last sequence each handler applied per key, rewritten in place.
+        Assert.Equal(1, await scalar("SELECT count(*) FROM pg_class WHERE oid = 'waybill.inbox_keys'::regclass AND reloptions @> '{fillfactor=80}'"));
+        Assert.Equal(4, await scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'waybill' AND table_name = 'inbox_keys' AND column_name IN ('handler', 'key', 'last_seq', 'last_message_id') AND is_nullable = 'NO'"));
         Assert.Equal(3, await scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'waybill' AND table_name = 'outbox' AND column_name IN ('lock_keys', 'released_at', 'released_by')"));
         Assert.Equal(2, await scalar("""
             SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
@@ -131,6 +134,7 @@ public sealed class SchemaTests(PostgresFixture postgres)
     // counters, and a key starting again at 1 looks like a regression to its consumers.
     [Theory]
     [InlineData("INSERT INTO waybill.outbox_keys VALUES ('invoice-1', 3)")]
+    [InlineData("INSERT INTO waybill.inbox_keys VALUES ('receipts', 'invoice-1', 3, gen_random_uuid())")]
     [InlineData("""
         INSERT INTO waybill.outbox (id, type, key_hash, payload, content_type, status, released_at, released_by)
         VALUES (gen_random_uuid(), 'billing.invoice-paid.v1', 0, '\x00', 'application/json', 'released', clock_timestamp(), 'ops')
@@ -155,12 +159,27 @@ public sealed class SchemaTests(PostgresFixture postgres)
         await using var schema = new WaybillSchemaContext(WaybillSchemaContext.Options(database.ConnectionString));
 
         await schema.GetService<IMigrator>().MigrateAsync(LastV01Migration, ct);
-        Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'waybill' AND table_name IN ('outbox_keys', 'settings', 'outbox_partitions', 'outbox_instances')"));
+        Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'waybill' AND table_name IN ('outbox_keys', 'inbox_keys', 'settings', 'outbox_partitions', 'outbox_instances')"));
         Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM pg_trigger WHERE tgrelid = 'waybill.outbox'::regclass AND NOT tgisinternal"));
         Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'waybill' AND table_name = 'outbox' AND column_name IN ('next_attempt_at', 'lock_keys', 'released_at', 'released_by')"));
 
         await WaybillSchema.MigrateAsync(database.ConnectionString, ct);
         await AssertOrderingObjectsAsync(database.ScalarAsync);
+    }
+
+    // A database that applied the v0.2 migration before stage 10 added inbox_keys to it (no tag yet) has no such table;
+    // the guard must not fail on it, or the Down could never run there.
+    [Fact]
+    public async Task Schema_DownSemInboxKeys_NaoFalha()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        await database.ExecuteAsync("DROP TABLE waybill.inbox_keys");
+        await using var schema = new WaybillSchemaContext(WaybillSchemaContext.Options(database.ConnectionString));
+
+        await schema.GetService<IMigrator>().MigrateAsync(LastV01Migration, ct);
+
+        Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'waybill' AND table_name = 'outbox_keys'"));
     }
 
     [Fact]

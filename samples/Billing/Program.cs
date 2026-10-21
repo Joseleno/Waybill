@@ -23,7 +23,8 @@ builder.Services.AddWaybillRabbitMQ(o =>
     o.Uri = new Uri(broker);
     o.Exchange = "events";
 });
-builder.Services.AddWaybillDispatcher<BillingDbContext>(); // same database as the context
+// Ordered by key: each invoice's messages go out in commit order, numbered, and Receipts checks the numbers.
+builder.Services.AddWaybillDispatcher<BillingDbContext>(o => o.OrderByKey = true); // same database as the context
 builder.Services.AddWaybillRetention<BillingDbContext>();
 builder.Services.AddHealthChecks().AddWaybillDispatcherCheck();
 

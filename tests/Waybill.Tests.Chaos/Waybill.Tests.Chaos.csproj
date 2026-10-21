@@ -23,6 +23,10 @@
     <Compile Include="..\Waybill.Tests.Integration\G2\DispatcherHarness.cs" Link="Shared\DispatcherHarness.cs" />
     <Compile Include="..\Waybill.Tests.Integration\G4\OrderingHarness.cs" Link="Shared\OrderingHarness.cs" />
     <Compile Include="..\Waybill.Tests.Integration\Observabilidade\GaugeReader.cs" Link="Shared\GaugeReader.cs" />
+    <Compile Include="..\Waybill.Tests.Integration\G2\RabbitMq\SampleTopology.cs" Link="Shared\SampleTopology.cs" />
+    <Compile Include="..\Waybill.Tests.Integration\G3\InboxHarness.cs" Link="Shared\InboxHarness.cs" />
+    <Compile Include="..\Waybill.Tests.Integration\G4\InboxOrderHarness.cs" Link="Shared\InboxOrderHarness.cs" />
+    <Compile Include="..\Waybill.Tests.Integration\Retencao\RetentionHarness.cs" Link="Shared\RetentionHarness.cs" />
   </ItemGroup>
 
 </Project>

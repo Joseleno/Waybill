@@ -99,7 +99,10 @@ Keep `InboxRetention` above the longest delay between enqueueing a message and i
 - the longest a message may wait in the broker queue (consumer down, queue TTL);
 - the window in which you might reprocess dead-lettered messages or replay a queue.
 
-Replaying a queue or an offset older than the inbox retention is not covered.
+Replaying a queue or an offset older than the inbox retention is not covered. With sequence verification
+(`ProcessInOrderAsync`), a late copy of an ordered message past the retention is not applied again: older than the
+key's last applied message, it is refused as a regression; the last applied message itself is still recognized by its
+id. Messages without a sequence keep the boundary above.
 
 ## Ordering by key
 
@@ -142,7 +145,8 @@ COMMIT;
 ```
 
 To turn ordering off, stop every dispatcher, clear the ordering state, and start them without `OrderByKey` (and with
-`MaxPerKey` back at 1, which needs ordering). From then on, messages are not numbered. Never delete
+`MaxPerKey` back at 1, which needs ordering). From then on, messages are not numbered, and those numbered before go
+out without their sequence: consumers that verify sequences only deduplicate them. Never delete
 `waybill.outbox_keys`: turned on again, each key continues from its last sequence, where starting again at 1 would look
 like a regression to its consumers. The `UPDATE` makes every unfinished numbered message claimable without ordering:
 one waiting behind its key's head is otherwise left out of the claim, and behind a dead-lettered head (which stops
@@ -323,7 +327,8 @@ The returned sequences are the gaps; no row returned means the key was mistyped.
 to `pending` (the database refuses it): its successors may already be out. Releasing does not unsend: if an earlier
 attempt to publish it went unconfirmed (a timeout, a lost connection), that attempt may have reached the broker, or
 may still reach it after the key's later messages. Consumers then see a message older than ones they already have,
-which their inbox does not mistake for a duplicate. Retention keeps released messages, like the DLQ.
+which their inbox does not mistake for a duplicate; with sequence verification it is refused as a regression (see
+"Sequence verification in the inbox"). Retention keeps released messages, like the DLQ.
 
 Never delete a message of a key to get it moving: release it. A deleted message leaves no record of the gap, and an
 unconfirmed attempt to publish it may still arrive.
@@ -365,6 +370,80 @@ RETURNING o.key, o.sequence;
 
 Marking is always safe: the claim still checks that a message is its key's first, so a mark too many costs one more
 look and nothing goes out of order. Both read every unfinished numbered message.
+
+## Sequence verification in the inbox
+
+Ordering by key guarantees the first arrival of each message, not every arrival: a late copy can come after the key's
+later messages. `ProcessInOrderAsync` (new in v0.2) never applies, for a key, a message whose `sequence` is not after
+the last one the handler applied for that key. It deduplicates first, as `ProcessAsync` does, then checks the sequence:
+
+- **Processed:** in order; the handler ran and the key moved to this message. Acknowledge it.
+- **Duplicate:** already applied. Also the result for the key's last applied message redelivered after inbox retention
+  deleted its record: same sequence, same message id. Acknowledge it.
+- **Regressed:** older than the last applied message, or the last applied sequence on another message (a producer
+  restored from a backup). Nothing ran, nothing was recorded, and a redelivery is refused again. Send it to the queue's
+  dead-letter exchange (`basic.nack` without requeue); never acknowledge it as processed. A warning with EventId 50
+  names the handler, the key, both sequences and both message ids.
+
+A gap is not an error, and the inbox never holds a message back waiting for one: a consumer of some of a key's message
+types sees gaps, and so does one after a release. `ProcessAsync` never reads `waybill.inbox_keys`.
+
+What it relies on:
+
+- **The producer orders by key.** Messages without a key, written with ordering off, or published by a dispatcher that
+  does not order carry no `waybill-sequence`, and are only deduplicated. Turning ordering off includes the backlog
+  numbered before it: from then on nothing goes out with a sequence.
+- **One producer per handler name.** Sequences are counted per key in the producer's database. Two producers behind one
+  handler name would refuse each other's messages: give each its own handler name. Sequences are tracked per handler
+  name, so give one name to every message type of a key whose order matters.
+- **One consumer at a time, one delivery at a time.** Order of arrival is order of application only then. Declare the
+  queue with `x-single-active-consumer` (a second instance waits) and handle deliveries one by one. With competing
+  consumers nothing is applied out of order, but a valid message may come back `Regressed`. A single-active-consumer
+  quorum queue refuses `basic.get`: the management UI's "Get messages" does not work on it.
+- **Dead-lettering that never drops.** The queue needs a dead-letter exchange: `basic.nack` without requeue on a queue
+  without one discards the message. Quorum queues dead-letter at most once by default; `x-dead-letter-strategy:
+  at-least-once` needs `x-overflow: reject-publish` on the same queue, and without it RabbitMQ falls back to at-most-once
+  and only logs it. Give the dead queue `x-overflow: reject-publish` too: with the default, a full dead queue drops its
+  oldest messages. Dead-lettering is asynchronous. When the dead queue is full, a dead letter stays held in the source
+  queue, counted in `messages` but in neither `messages_ready` nor `messages_unacknowledged`; RabbitMQ retries it later
+  (measured on 4.3.6: not within a minute of making room). Watch the dead queue's length, and that difference.
+- **Its table.** The application's role needs `SELECT`, `INSERT` and `UPDATE` on `waybill.inbox_keys`.
+
+The samples' `rabbitmq/definitions.json` declares the queue this way. RabbitMQ keeps a queue's arguments: importing
+definitions again over an existing queue changes nothing, with no error, so a queue declared before needs to be
+recreated.
+
+**Locks and timeouts.** The key's row stays locked from the check to the commit: a delivery of the same key to the same
+handler waits for it, and a slow handler holds its key back. The wait counts against the command timeout (30 seconds by
+default with Npgsql; past it the call throws, retried as a whole only under `EnableRetryOnFailure`, otherwise by the
+consumer's own retry) and against the broker's delivery timeout (`consumer_timeout`).
+
+**A handler that fails.** `basic.nack` with requeue does not count toward a quorum queue's `x-delivery-limit` (measured
+on RabbitMQ 4.3.6): only a delivery handed back by a closed channel does, after a crash or a `consumer_timeout`. A
+message that always fails and is requeued comes back for ever and, with one active consumer, holds the whole queue.
+Retry in the consumer with a growing wait, long enough to ride out a database restart, then send the message to the
+dead-letter exchange (the sample: ten attempts, about two and a half minutes). The key's next message is then applied
+without it: a gap. Sent again later, it comes back `Regressed`.
+
+**The consumer's dead-letter queue is evidence, not a retry queue.** A regression may be a late copy of a message the
+handler already applied, once inbox retention deleted its record. Reapplying a message from it is the application's
+decision, knowing that. To see where a key stands for a handler:
+
+```sql
+SELECT last_seq, last_message_id FROM waybill.inbox_keys
+WHERE handler = 'receipts.issue-receipt' AND key = 'order-42';
+```
+
+**A producer that starts numbering again.** If the producer's database is rebuilt and its keys start again at 1,
+everything it sends is refused as a regression. With the handler's consumers stopped, forget the handler's sequences:
+
+<!-- inbox-forget-keys -->
+```sql
+DELETE FROM waybill.inbox_keys WHERE handler = 'receipts.issue-receipt';
+```
+
+Forgetting them also lets a late copy of an old message through as new: do it only when the producer really started
+again. `waybill.inbox_keys` keeps one row per handler and key ever verified, and is never cleaned by retention.
 
 ## PostgreSQL: JIT
 
