@@ -31,7 +31,7 @@ São raros, mas sem a verificação a G4 teria de dizer "nesses casos uma mensag
 | O motivo da regressão | O escopo pede "vai à DLX com motivo". O `nack` deixa na DLX só `x-death reason=rejected`, igual a qualquer recusa. O motivo fica num log `Warning` do inbox, com `EventId` estável e campos estruturados: handler, chave, `sequence` recebida, última aplicada, `message_id` e o tipo da regressão (menor, ou igual com outro id). O operador cruza pelo `message_id`. O ADR 0010 emenda a linha do escopo |
 | Regressão pode já ter sido aplicada | No caso 1 da premissa, a mensagem recusada é cópia de uma que já foi aplicada. Por isso a DLX do consumidor não é fila de reprocessamento: é evidência para investigar. Reaplicar uma mensagem dela é decisão da aplicação, sabendo disso. Fica no ADR e no `OPERATIONS.md` |
 | Mensagem sem `sequence` | Processada só com a deduplicação, sem ler `inbox_keys`: sem chave, escrita antes de ligar a ordenação ou publicada com ela desligada |
-| Tipo da ordem no núcleo | `struct` em `src/Waybill` com a chave e a `sequence`, validada na construção: `sequence >= 1`, chave não vazia e até 255 bytes UTF-8, como no `Enqueue`. Fica no núcleo para o pacote do RabbitMQ não depender do de EF |
+| Tipo da ordem no núcleo | `struct` em `src/Waybill` com a chave e a `sequence`, validada na construção: `sequence >= 1`, chave não nula e até 255 bytes UTF-8, exatamente a regra do `Enqueue`, que aceita chave vazia (revisão do PLAN: recusar a vazia transformaria em veneno uma mensagem que o próprio Waybill produz). Fica no núcleo para o pacote do RabbitMQ não depender do de EF |
 | Gap | Não é erro, e o inbox não reordena. Um consumidor que assina só parte dos tipos de uma chave vê gaps legítimos, e uma liberada deixa gap. A justificativa vai para o ADR |
 | Escopo da `sequence` | Contada por chave no banco do produtor (`outbox_keys`). Um handler com a verificação ligada consome as chaves de um produtor só; dois produtores pedem dois nomes de handler. A verificação é por nome de handler: um nome por tipo de mensagem na mesma chave não tem ordem entre os tipos. Os dois avisos vão no XML doc e no `OPERATIONS.md` |
 | Recomeço do produtor | Se as sequências do produtor recomeçarem (banco recriado), tudo vira regressão. O `OPERATIONS.md` ganha o SQL que esquece as sequências de um handler, marcado para um teste que o executa (como `<!-- dlq-requeue -->`), com os consumidores do handler parados |
@@ -48,9 +48,11 @@ São raros, mas sem a verificação a G4 teria de dizer "nesses casos uma mensag
 
 ## Falha do handler
 
-- **Requeue depois de exceção.** Se a fila recolocar a mensagem atrás da seguinte da chave, a seguinte seria aplicada antes e a devolvida viraria regressão. A documentação do RabbitMQ diz "na posição original, se possível", sem garantia. **A verificar no PLAN, com teste contra a imagem do broker fixada nos testes.**
-- **Limite de entregas.** Uma mensagem que falha até o `x-delivery-limit` vai à DLX pelo broker. A seguinte da chave é aplicada, o que deixa um gap, e reenviar a morta depois dá `Regressed`.
-- **Política recomendada.** Repetir dentro do consumidor, com espera, antes de devolver à fila. O exemplo passa a fazer assim, e o `OPERATIONS.md` explica o gap do limite de entregas.
+Medido na revisão do PLAN contra `rabbitmq:4-alpine` (4.3.6), com prefetch 1:
+
+- **Requeue depois de exceção.** A mensagem devolvida com `basic.nack` e requeue voltou antes da seguinte em todas as tentativas. A documentação diz "na posição original, se possível", sem garantia, e a imagem dos testes é flutuante: um teste fixa o comportamento e avisa se ele mudar.
+- **Limite de entregas.** `basic.nack` com requeue **não conta** para o `x-delivery-limit`. Só a devolução por canal fechado (queda do consumidor, `consumer_timeout`) conta. Uma mensagem que sempre falha e volta com requeue gira para sempre e, com um consumidor ativo por fila, para a fila inteira. O exemplo da v0.1 confia nesse limite, e o comentário dele está errado.
+- **Política do exemplo.** Repetir dentro do consumidor, com espera crescente. Esgotadas as tentativas, `nack` sem requeue para a DLX, com log de erro. Isso deixa um gap na chave: a seguinte é aplicada, e reenviar a morta depois dá `Regressed`. É a mesma troca da DLQ do outbox, mas sem bloquear a chave, porque o consumidor não tem como bloqueá-la sem parar a fila. O `OPERATIONS.md` explica a troca e o gap, que também aparece quando o broker devolve por `consumer_timeout` até o limite.
 
 ## API candidata (o desenho final fecha no PLAN)
 
@@ -76,7 +78,8 @@ switch (result)
 
 | Cenário | Resultado esperado |
 | --- | --- |
-| **Propriedade no RabbitMQ**, com regressões provocadas de propósito: dispatcher zumbi com confirmações retidas além do lease, retenção do inbox em zero, liberadas com tentativa anterior sem confirmação, janela com a ordenação desligada; um consumidor ativo, sequencial, sem falhas do handler | Por handler e chave, as sequências aplicadas crescem estritamente; toda regressão chega à DLX do consumidor; nenhuma é aplicada; toda mensagem não liberada é aplicada uma vez; **o número de regressões é maior que zero** |
+| **Propriedade no RabbitMQ**, só mensagens com chave: N dispatchers, um deles zumbi (publicação atrasada além do lease), retenção do inbox em zero, e cópias tardias injetadas depois da drenagem; um consumidor ativo, sequencial, sem falhas do handler | Por handler e chave, as sequências aplicadas crescem estritamente; o conteúdo da DLX é exatamente o conjunto das `Regressed`; nenhuma é aplicada; toda mensagem é aplicada uma vez; cada cópia injetada sai `Regressed`; regressões naturais (do zumbi) contadas à parte, e maiores que zero no job agendado. Liberadas e a janela desligada têm testes próprios (revisão do PLAN: no teste de propriedade, elas seriam injeção disfarçada) |
+| Janela com a ordenação desligada | Linhas numeradas publicadas fora de ordem depois do SQL `ordering-reset`: as que chegam atrás de uma maior saem `Regressed` |
 | Consumidor que assina só parte dos tipos de uma chave | Não fica preso em gap |
 | Reentrega de uma mensagem já aplicada, depois da seguinte | `Duplicate` |
 | Regressão de mensagem cujo registro no inbox já foi limpo pela retenção | `Regressed`; o handler não roda; nada é gravado; a reentrega dá `Regressed` de novo |
@@ -88,7 +91,7 @@ switch (result)
 | Commit ambíguo no método novo (perda do ack do commit, repetição da estratégia) | `Duplicate`; a chave avançou uma vez |
 | Handler lança exceção | Nada gravado; a reentrega da mesma mensagem é processada |
 | Handler que enfileira mensagens ordenadas no outbox na mesma transação | Sem deadlock entre `inbox_keys` e `outbox_keys` |
-| Handler falha e a mensagem volta com requeue, com a seguinte da chave na fila | A devolvida é aplicada antes da seguinte, ou a política de repetição muda (ver "Falha do handler") |
+| Handler falha e a mensagem volta com requeue, com a seguinte da chave na fila | A devolvida volta antes da seguinte; `nack` com requeue não conta entregas, o canal fechado conta (ver "Falha do handler") |
 | Cabeçalho `waybill-sequence` malformado; `sequence` sem chave | Erro na leitura, como o `message_id` inválido |
 | Verificação desligada (`ProcessAsync`) | Comportamento da v0.1, sem leitura nem escrita em `inbox_keys` |
 | Mensagem sem `sequence` na verificação ligada | Só deduplicação; `inbox_keys` intocada |
