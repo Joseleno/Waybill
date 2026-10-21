@@ -10,9 +10,9 @@ Um commit por cenário provado, na ordem abaixo. Os nomes dos testes estão no `
 - [x] Núcleo: `MessageOrder` validado; testes de unidade; API pública declarada
 - [x] Inbox: `OrderedInboxResult`, `ProcessInOrderAsync`, SQL da verificação, log `EventId` 50; os cenários `G4_Inbox_*`, um commit cada
 - [ ] Mutações de todas as armadilhas do PLAN (feitas: ordem dos testes, trava antes do handler, `<`, `last_message_id`, rollback, log, `Lower`/`Reused`, `to_regclass`; faltam as do `FakeInbox` e do RabbitMQ), cada uma pega pelo teste citado, registradas no commit
-- [ ] RabbitMQ: `GetWaybillOrder` (com `byte[]`); `G4_RabbitMq_RegressaoChegaADlx`
-- [ ] `FakeInbox` com a mesma regra; equivalência ampliada
-- [ ] Propriedade `G4_Propriedade_RegressaoNaDlx` no caos (PR curto e agendado), oráculo da DLX exata, injeção depois da drenagem, regressões naturais > 0 no agendado
+- [x] RabbitMQ: `GetWaybillOrder` (com `byte[]`); `G4_RabbitMq_RegressaoChegaADlx`
+- [x] `FakeInbox` com a mesma regra; equivalência ampliada
+- [x] Propriedade `G4_Propriedade_RegressaoNaDlx` no caos (PR curto e agendado), oráculo da DLX exata, injeção depois da drenagem, regressões naturais > 0 no agendado
 - [ ] Exemplo: `Billing` com `OrderByKey`; `Receipts` com `ProcessInOrderAsync`, `switch`, até cinco tentativas no consumidor e depois DLX; `definitions.json` nas condições do broker; `smoke.sh` confere os argumentos das filas e publica uma regressão `Reused`; README do exemplo com `docker compose down -v`
 - [ ] `OPERATIONS.md` (seção nova e SQL `inbox-forget-keys` testado), escopo, ADR 0010, CHANGELOG (com "Breaking" pelo membro novo no `IInbox`)
 - [ ] Revisão de código independente antes da PR
