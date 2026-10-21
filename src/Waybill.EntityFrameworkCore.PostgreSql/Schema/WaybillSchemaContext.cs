@@ -125,6 +125,20 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
             // Retention deletes by age; the message_id may come from another system and not be a UUIDv7 (ADR 0004).
             inbox.HasIndex(m => m.ProcessedAt).HasDatabaseName("ix_inbox_processed_at");
         });
+
+        // Sequence verification in the inbox (stage 10): the last sequence each handler applied per key, and its message.
+        // Never cleaned: forgetting it would let a late copy of an old message through as new. Every message in order
+        // rewrites the row without touching the key, so it can be updated in place (HOT).
+        modelBuilder.Entity<InboxKeyRow>(key =>
+        {
+            key.ToTable(WaybillSchema.InboxKeysTable);
+            key.HasKey(k => new { k.Handler, k.Key }).HasName("pk_inbox_keys");
+            key.Property(k => k.Handler).HasColumnName("handler");
+            key.Property(k => k.Key).HasColumnName("key");
+            key.Property(k => k.LastSeq).HasColumnName("last_seq");
+            key.Property(k => k.LastMessageId).HasColumnName("last_message_id");
+            key.HasStorageParameter("fillfactor", 80);
+        });
     }
 
     public static DbContextOptions<WaybillSchemaContext> Options(string connectionString) =>
@@ -191,6 +205,14 @@ internal sealed class InboxRow
     public required string Handler { get; set; }
     public Guid MessageId { get; set; }
     public DateTimeOffset ProcessedAt { get; set; }
+}
+
+internal sealed class InboxKeyRow
+{
+    public required string Handler { get; set; }
+    public required string Key { get; set; }
+    public long LastSeq { get; set; }
+    public Guid LastMessageId { get; set; }
 }
 
 /// <summary>Lets <c>dotnet ef migrations add</c> build the schema context; no database is touched.</summary>

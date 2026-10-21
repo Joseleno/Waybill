@@ -52,6 +52,14 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     seq bigint NOT NULL,
                     CONSTRAINT pk_outbox_keys PRIMARY KEY (key))
                 WITH (fillfactor = 80);
+
+                CREATE TABLE IF NOT EXISTS waybill.inbox_keys (
+                    handler text NOT NULL,
+                    key text NOT NULL,
+                    last_seq bigint NOT NULL,
+                    last_message_id uuid NOT NULL,
+                    CONSTRAINT pk_inbox_keys PRIMARY KEY (handler, key))
+                WITH (fillfactor = 80);
                 """);
 
             // 'released' joins the statuses. Replacing a CHECK takes an exclusive lock, so the new one is added NOT VALID
@@ -284,6 +292,12 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     IF EXISTS (SELECT 1 FROM waybill.outbox_keys) OR EXISTS (SELECT 1 FROM waybill.outbox WHERE status = 'released') THEN
                         RAISE EXCEPTION 'The Waybill schema only moves forward once ordering by key has numbered a key or released a row: going back would drop the per-key counters, and a key starting again at 1 looks like a regression to its consumers. Turn ordering off and keep the v0.2 schema (OPERATIONS.md, Rollback).';
                     END IF;
+                    -- Nested, not OR-ed: a database migrated before inbox_keys joined this migration has no such table.
+                    IF to_regclass('waybill.inbox_keys') IS NOT NULL THEN
+                        IF EXISTS (SELECT 1 FROM waybill.inbox_keys) THEN
+                            RAISE EXCEPTION 'The Waybill schema only moves forward once an inbox handler has verified a sequence: going back would drop the last sequence each handler applied per key, and a late copy of an old message would be applied as new. Keep the v0.2 schema (OPERATIONS.md, Rollback).';
+                        END IF;
+                    END IF;
                 END $$;
 
                 DROP TRIGGER IF EXISTS outbox_sequence ON waybill.outbox;
@@ -310,6 +324,7 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     DROP COLUMN IF EXISTS is_head;
 
                 DROP TABLE IF EXISTS waybill.outbox_keys;
+                DROP TABLE IF EXISTS waybill.inbox_keys;
                 DROP TABLE IF EXISTS waybill.settings;
                 DROP TABLE IF EXISTS waybill.outbox_partitions;
                 DROP TABLE IF EXISTS waybill.outbox_instances;
