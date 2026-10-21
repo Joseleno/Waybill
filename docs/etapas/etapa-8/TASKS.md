@@ -179,4 +179,4 @@ Desenho e aceite: seção 8c-2 do `PLAN.md`, revista pelo time de quatro revisor
   - `plano-v0.2.md`, com o ponto de controle de Oct 28.
   - XML doc do `ITransport`.
   - CHANGELOG.
-- [ ] **Verificação completa e revisão independente antes da PR.** Unidade; integração no PG 18 e no 15; caos curto; exemplos; pack. O merge sai até cerca de Oct 30.
+- [x] **Verificação completa e revisão independente antes da PR.** Unidade; integração no PG 18 e no 15; caos curto; exemplos; pack. O merge sai até cerca de Oct 30.
