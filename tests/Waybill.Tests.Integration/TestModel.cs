@@ -106,7 +106,8 @@ public sealed class TestDatabase
         params Microsoft.EntityFrameworkCore.Diagnostics.IInterceptor[] interceptors)
     {
         var services = new ServiceCollection();
-        services.AddLogging(logging => logging.AddProvider(logs ?? new LogSink()));
+        logs ??= new LogSink();
+        services.AddLogging(logging => logging.AddProvider(logs).SetMinimumLevel(logs.MinimumLevel));
         services.AddWaybill(options =>
         {
             options.MaxPayloadBytes = 64 * 1024;
