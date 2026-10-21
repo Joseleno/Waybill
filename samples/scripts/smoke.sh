@@ -54,7 +54,7 @@ dead_count() {
   docker compose exec -T rabbitmq rabbitmqctl -q list_queues name messages | awk '$1 == "receipts.invoice-paid.dead" { print $2 }'
 }
 dead_before=$(dead_count)
-reused=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
+reused=$( (cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen) | tr 'A-F' 'a-f')  # lowercase, as .NET logs a Guid
 payload="{\\\"InvoiceId\\\":\\\"$id\\\",\\\"Number\\\":\\\"INV-REUSED\\\",\\\"Amount\\\":42.50,\\\"PaidAt\\\":\\\"2026-01-01T00:00:00+00:00\\\"}"
 curl -fsS -u waybill:waybill -H 'Content-Type: application/json' \
   -X POST "http://localhost:${RABBITMQ_UI_PORT:-15672}/api/exchanges/%2F/events/publish" \

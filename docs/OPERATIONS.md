@@ -415,7 +415,8 @@ recreated.
 
 **Locks and timeouts.** The key's row stays locked from the check to the commit: a delivery of the same key to the same
 handler waits for it, and a slow handler holds its key back. The wait counts against the command timeout (30 seconds by
-default with Npgsql; past it, the whole unit is retried) and against the broker's delivery timeout (`consumer_timeout`).
+default with Npgsql; past it the call throws, retried as a whole only under `EnableRetryOnFailure`, otherwise by the
+consumer's own retry) and against the broker's delivery timeout (`consumer_timeout`).
 
 **A handler that fails.** `basic.nack` with requeue does not count toward a quorum queue's `x-delivery-limit` (measured
 on RabbitMQ 4.3.6): only a delivery handed back by a closed channel does, after a crash or a `consumer_timeout`. A

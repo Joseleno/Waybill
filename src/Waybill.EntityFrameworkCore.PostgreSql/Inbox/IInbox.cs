@@ -89,7 +89,8 @@ public interface IInbox<TContext>
     /// <para>
     /// The key's row stays locked until the commit: deliveries of one key to one handler are applied one at a time,
     /// and a slow handler holds its key back. The wait for that lock counts against the command timeout (30 s by
-    /// default with Npgsql), after which the whole unit is retried, and against the broker's delivery timeout.
+    /// default with Npgsql: the call throws, and is retried as a whole only under <c>EnableRetryOnFailure</c>) and against the
+    /// broker's delivery timeout.
     /// Sequences are counted per key in the producer's database: a handler verifies the keys of one producer.
     /// </para>
     /// <para>
