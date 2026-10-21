@@ -174,9 +174,10 @@ public sealed class FakeInbox<TContext>(TContext context, FakeInboxMemory memory
         {
             if (order is { } verified)
             {
+                // Taken before the try: a wait cancelled here never held the key, and must not let it go.
+                var last = await memory.LockKeyAsync(handler, verified.Key, cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    var last = await memory.LockKeyAsync(handler, verified.Key, cancellationToken).ConfigureAwait(false);
                     if (last is { } previous && previous.Sequence >= verified.Sequence)
                     {
                         if (previous.Sequence == verified.Sequence && previous.MessageId == messageId)

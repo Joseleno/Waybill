@@ -128,6 +128,43 @@ public sealed class FakeInboxEquivalenceTests(PostgresFixture postgres)
         }
     }
 
+    // A delivery cancelled while it waits for its key must not let the key go: it never held it. The real inbox only
+    // rolls back; a fake that released the holder's lock would let a third delivery into the handler meanwhile.
+    [Fact]
+    public async Task FakeInbox_EsperaPelaChaveCancelada_NaoSoltaAChaveDeQuemEstaNoHandler()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        await using var services = FakeServices(database);
+        var (holderInside, releaseHolder) = (new TaskCompletionSource(), new TaskCompletionSource());
+        try
+        {
+            var holder = Task.Run(() => DeliverOrderedAsync(services, "h1", MessageA, 5, async (db, token) =>
+            {
+                holderInside.TrySetResult();
+                await releaseHolder.Task;
+                await InboxHarness.ApplyEffect(db, token);
+            }), ct);
+            await holderInside.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            using var cancel = new CancellationTokenSource();
+            var cancelled = Task.Run(() => DeliverOrderedAsync(services, "h1", MessageB, 6, InboxHarness.ApplyEffect, cancel.Token), ct);
+            await Task.Delay(200, ct);
+            await cancel.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+
+            var third = Task.Run(() => DeliverOrderedAsync(services, "h1", Guid.CreateVersion7(), 4, InboxHarness.ApplyEffect), ct);
+            await Task.Delay(300, ct);
+            Assert.False(third.IsCompleted, "a third delivery got the key while the holder was still in its handler");
+
+            releaseHolder.SetResult();
+            Assert.Equal([OrderedInboxResult.Processed, OrderedInboxResult.Regressed], [await holder, await third]);
+        }
+        finally
+        {
+            releaseHolder.TrySetResult();
+        }
+    }
+
     [Fact]
     public async Task FakeInbox_ShouldHaveProcessed()
     {
@@ -193,11 +230,11 @@ public sealed class FakeInboxEquivalenceTests(PostgresFixture postgres)
     }
 
     private static async Task<OrderedInboxResult> DeliverOrderedAsync(
-        IServiceProvider services, string handler, Guid messageId, long? sequence, Func<AppDbContext, CancellationToken, Task> handle)
+        IServiceProvider services, string handler, Guid messageId, long? sequence, Func<AppDbContext, CancellationToken, Task> handle, CancellationToken cancellationToken = default)
     {
         await using var scope = services.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<IInbox<AppDbContext>>().ProcessInOrderAsync(
-            handler, messageId, sequence is { } s ? new MessageOrder("order-42", s) : null, handle);
+            handler, messageId, sequence is { } s ? new MessageOrder("order-42", s) : null, handle, cancellationToken);
     }
 
     private static ServiceProvider FakeServices(TestDatabase database) =>
