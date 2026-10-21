@@ -12,7 +12,7 @@ Com a etapa 8, a primeira cópia de cada mensagem chega na ordem de commit, e as
 
 1. **Cópia tardia depois da retenção do inbox.** A retenção apagou o registro `(handler, message_id)` da original, e a cópia passa pela deduplicação.
 2. **Mensagem liberada da DLQ.** Uma tentativa anterior dela ficou sem confirmação e chega depois das seguintes da chave (`OPERATIONS.md`, "A key stopped by the DLQ").
-3. **Janela com a ordenação desligada.** Mensagens já numeradas ficam reivindicáveis sem ordem (SQL `ordering-reset`) e podem sair fora de ordem.
+3. ~~**Janela com a ordenação desligada.**~~ Não é caso de detecção (achado na implementação, Oct 21): o claim sem ordenação não devolve a `sequence` (`OutboxStore`), então as mensagens publicadas com a ordenação desligada, inclusive as numeradas antes, saem sem `waybill-sequence`, e o consumidor só as deduplica. Desligar a ordenação é abrir mão da ordem; o `OPERATIONS.md` diz isso.
 4. **Produtor restaurado de backup.** `outbox_keys` volta no tempo, e mensagens novas reusam sequências que o consumidor já aplicou.
 
 São raros, mas sem a verificação a G4 teria de dizer "nesses casos uma mensagem pode ser aplicada fora de ordem sem ninguém saber". Com ela, nenhuma regressão é aplicada e toda regressão chega à DLX. A etapa é pequena, não traz dependência nova e é o que resta do núcleo da v0.2 depois do ADR 0009.
@@ -78,8 +78,8 @@ switch (result)
 
 | Cenário | Resultado esperado |
 | --- | --- |
-| **Propriedade no RabbitMQ**, só mensagens com chave: N dispatchers, um deles zumbi (publicação atrasada além do lease), retenção do inbox em zero, e cópias tardias injetadas depois da drenagem; um consumidor ativo, sequencial, sem falhas do handler | Por handler e chave, as sequências aplicadas crescem estritamente; o conteúdo da DLX é exatamente o conjunto das `Regressed`; nenhuma é aplicada; toda mensagem é aplicada uma vez; cada cópia injetada sai `Regressed`; regressões naturais (do zumbi) contadas à parte, e maiores que zero no job agendado. Liberadas e a janela desligada têm testes próprios (revisão do PLAN: no teste de propriedade, elas seriam injeção disfarçada) |
-| Janela com a ordenação desligada | Linhas numeradas publicadas fora de ordem depois do SQL `ordering-reset`: as que chegam atrás de uma maior saem `Regressed` |
+| **Propriedade no RabbitMQ**, só mensagens com chave: N dispatchers, um deles zumbi (publicação atrasada além do lease), retenção do inbox em zero, e cópias tardias injetadas depois da drenagem; um consumidor ativo, sequencial, sem falhas do handler | Por handler e chave, as sequências aplicadas crescem estritamente; o conteúdo da DLX é exatamente o conjunto das `Regressed`; nenhuma é aplicada; toda mensagem é aplicada uma vez; cada cópia injetada sai `Regressed`; regressões naturais (do zumbi) contadas à parte, e maiores que zero no job agendado. As liberadas têm teste próprio (revisão do PLAN: no teste de propriedade, seriam injeção disfarçada) |
+| ~~Janela com a ordenação desligada~~ | Fora: as mensagens dessa janela saem sem `sequence` (premissa, item 3). Documentado no `OPERATIONS.md` |
 | Consumidor que assina só parte dos tipos de uma chave | Não fica preso em gap |
 | Reentrega de uma mensagem já aplicada, depois da seguinte | `Duplicate` |
 | Regressão de mensagem cujo registro no inbox já foi limpo pela retenção | `Regressed`; o handler não roda; nada é gravado; a reentrega dá `Regressed` de novo |
