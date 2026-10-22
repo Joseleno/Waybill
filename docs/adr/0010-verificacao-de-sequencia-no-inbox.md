@@ -32,8 +32,8 @@ O desenho passou por uma revisão de construtor e por uma revisão adversarial d
    - O `basic.nack` deixa na DLX só `x-death reason=rejected`.
    - O inbox loga um `Warning` (EventId 50) com o handler, a chave, as duas sequências, os dois `message_id` e o tipo (`Lower` ou `Reused`), uma vez por chamada, fora da estratégia de execução. O operador cruza pelo `message_id`.
    - Republicar na DLX com cabeçalho próprio pediria um resultado mais rico, e um publish e um ack que não são atômicos.
-8. **As condições do broker fazem parte da garantia.** Todas estão no `definitions.json` do exemplo, e o teste as lê de lá:
-   - um consumidor ativo por fila, uma entrega de cada vez (`x-single-active-consumer`);
+8. **As condições do broker fazem parte da garantia.** As da fila estão no `definitions.json` do exemplo, e o teste as lê de lá; a de uma entrega de cada vez é do consumidor (`basic.qos` com prefetch 1, como no exemplo e nos testes):
+   - um consumidor ativo por fila (`x-single-active-consumer`), com prefetch 1;
    - DLX na fila;
    - `x-dead-letter-strategy: at-least-once` com `x-overflow: reject-publish`; sem ele, o RabbitMQ cai em silêncio para at-most-once (medido);
    - a fila de mortas com `reject-publish`.

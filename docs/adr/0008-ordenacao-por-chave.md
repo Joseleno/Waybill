@@ -26,7 +26,7 @@ A 8a espaçou o `basic.return` (ADR 0006), e a 8b entregou a posse da partição
    - não fica buraco no rollback nem no savepoint do EF;
    - a transação anterior sai do ProcArray antes de soltar a trava, então todo snapshot que vê `n` vê `n − 1`.
 3. **A lista de chaves viaja na linha.** O EF insere em ordem de `id`, não de chave. Duas transações com K1 e K2 em ordens opostas fariam deadlock. O caminho escolhido:
-   - um interceptor de `SavingChanges` grava em `lock_keys`, em toda linha com chave, as chaves distintas do `SaveChanges` quando são duas ou mais;
+   - um interceptor de `SavingChanges` grava em `lock_keys`, só na primeira linha com chave que o EF insere (a de menor id; ver o último marcador deste item), as chaves distintas do `SaveChanges` quando são duas ou mais;
    - o trigger trava a lista, ordenada por `COLLATE "C"`, na primeira linha da outbox: primeiro insere as chaves novas (`ON CONFLICT DO NOTHING`), depois trava todas com `FOR UPDATE`;
    - em seguida, anula a coluna;
    - um marcador `set_config(…, true)`, que vale só na transação, evita travar de novo nas linhas seguintes;
@@ -37,7 +37,7 @@ A 8a espaçou o `basic.return` (ADR 0006), e a 8b entregou a posse da partição
 4. **Ids na ordem do `Enqueue`.** Dois UUIDv7 do mesmo milissegundo comparavam em ordem aleatória, então mensagens de uma chave numa transação recebiam `sequence` fora da ordem do `Enqueue`: numa rajada de 200, 197. O `message_id` passou a ser um UUIDv7 monotônico no processo (RFC 9562, seção 6.2, método 1). Um contador de 12 bits em `rand_a` ordena os ids do mesmo milissegundo, e passando de 4096 o gerador usa o milissegundo seguinte.
 5. **Cabeça por chave.** A cabeça é a primeira linha com `sequence` não terminal da chave:
    - não terminal: `pending` (inclusive em espera depois de um `basic.return`), `claimed` e `dlq`; terminal: `published` e `released`;
-   - com M = 1, o claim leva só cabeças: além da condição de reivindicável e da posse da partição, exige que não exista antecessora não terminal (`ix_outbox_key_sequence`);
+   - com M = 1, o claim leva só cabeças: além da condição de reivindicável e da posse da partição, exige que ela seja a menor `sequence` não terminal da chave (revisto na parte 1b, item 11: antes, `NOT EXISTS` de antecessora em `ix_outbox_key_sequence`);
    - a condição de reivindicável e a posse se repetem no `UPDATE` externo; o filtro de cabeça não se repete, pelo item 6;
    - o relógio é lido uma vez por instrução e vale para todas as linhas e para o lease que elas recebem;
    - linhas com chave e sem `sequence` (gravadas antes de ligar a ordenação) não entram no filtro.
@@ -47,7 +47,7 @@ A 8a espaçou o `basic.return` (ADR 0006), e a 8b entregou a posse da partição
    - **Reenvio da DLQ e liberação.** O reenvio leva `dlq` a `pending`; a liberação, `dlq` a `released`. No snapshot a linha ainda é `dlq`, então o snapshot só erra para o lado conservador.
    - **Retenção.** Apaga só `published`, que já é terminal.
    - **O trigger.** Nenhuma antecessora nasce depois de uma sucessora visível, porque a `sequence` segue a ordem de commit.
-   - **O que segura tudo isso.** Uma linha nunca sai de terminal, e um trigger recusa `published` ou `released` voltarem. Com uma linha por chave no lote, uma cabeça pulada pelo `SKIP LOCKED` não leva nada atrás dela. É o risco aberto pelo spike.
+   - **O que segura tudo isso.** Uma linha nunca sai de terminal, e um trigger recusa `published` ou `released` voltarem. Uma cabeça pulada pelo `SKIP LOCKED` não leva nada atrás dela: com M = 1 o lote tem uma linha por chave, e com M ≥ 2 as sucessoras só vêm de cabeças travadas na mesma instrução (parte 2, item 18). É o risco aberto pelo spike.
 7. **DLQ e liberação.**
    - Uma linha na DLQ para a própria chave, e as outras chaves seguem.
    - O log da DLQ traz a chave e a `sequence`.
@@ -63,8 +63,8 @@ A 8a espaçou o `basic.return` (ADR 0006), e a 8b entregou a posse da partição
 9. **`OutgoingMessage.Sequence` e `waybill-sequence`.**
    - O transporte recebe a `sequence` da mensagem ordenada, e nula nas demais.
    - O RabbitMQ a envia no cabeçalho `waybill-sequence`, como string decimal, ao lado de `waybill-key`.
-   - Uma linha levada pela cabeça que tem mais da mesma chave atrás manda o laço direto ao ciclo seguinte; sem isso, uma chave sozinha sairia a uma mensagem por `PollingInterval`.
-10. **O enunciado da G4 na publicação.** Por chave, a partir da primeira mensagem com `sequence`, a primeira cópia de cada mensagem a chegar ao broker chega depois da primeira cópia de todas as anteriores, na ordem de commit. Cópias repetidas podem chegar depois e são reconhecidas pelo `message_id`. Uma mensagem liberada fica fora da sequência: deixa lacuna e, se uma tentativa anterior dela ficou sem confirmação, uma cópia ainda pode chegar a qualquer momento. Vai para o escopo agora e para o `GUARANTEES.md` só na etapa 12, com a detecção no consumidor (etapa 10).
+   - Quando a última linha reivindicada de uma chave tem mais atrás, ou uma linha reivindicada da chave não foi enviada, e a chave não parou por `Returned` ou defeito, um ciclo com progresso manda o laço direto ao seguinte; sem isso, uma chave sozinha sairia a uma mensagem por `PollingInterval`.
+10. **O enunciado da G4 na publicação.** Por chave, a partir da primeira mensagem com `sequence`, a primeira cópia de cada mensagem a chegar ao broker chega depois da primeira cópia de todas as anteriores, na ordem de commit. Cópias repetidas podem chegar depois e são reconhecidas pelo `message_id`. Uma mensagem liberada fica fora da sequência: deixa lacuna e, se uma tentativa anterior dela ficou sem confirmação, uma cópia ainda pode chegar a qualquer momento. Está no escopo e, desde a etapa 12, no `GUARANTEES.md`, com a detecção no consumidor (etapa 10).
 
 ## Respostas às perguntas do plano da v0.2
 
@@ -99,7 +99,7 @@ A 8a espaçou o `basic.return` (ADR 0006), e a 8b entregou a posse da partição
 - **A trava da chave vai até o commit.** Uma transação que enfileira K e depois escreve na linha R da aplicação faz deadlock com outra que escreve R e depois enfileira K. Nenhuma lista cobre isso. O `OPERATIONS.md` manda enfileirar no último `SaveChanges`.
 - **Isolamento.** Em `REPEATABLE READ` ou `SERIALIZABLE`, enfileirar ao mesmo tempo na mesma chave dá 40001. O EF o entrega como falha transitória, e repetir resolve.
 - **Custo do claim com fila longa à frente.** O claim percorre `ix_outbox_claimable` em ordem de `id` e lê, e descarta, as linhas de uma chave com fila longa à frente, seja uma chave parada na DLQ, seja uma chave quente. São ~4 buffers e ~12 µs por linha (p50 de 120 ms com 10 mil linhas, 1,19 s com 100 mil). Passou do limite de 50 ms da etapa, então um ponteiro de cabeça vem em PR próprio antes da 8c-2. Achado para esse desenho: uma marca de cabeça calculada no INSERT corre contra a publicação concorrente da cabeça anterior. Resolvido pela parte 1b, abaixo.
-- **Ordem de upgrade.** O INSERT do pacote passa a ter `lock_keys`, então a migration da v0.2 roda antes do deploy de quem enfileira. O `Down` recusa depois que uma chave foi numerada ou uma linha liberada.
+- **Ordem de upgrade.** O INSERT do pacote passa a ter `lock_keys`, então a migration da v0.2 roda antes do deploy de quem enfileira. O `Down` recusa depois que uma chave foi numerada ou uma linha liberada, ou depois que um handler do inbox verificou uma sequência (ADR 0010).
 - **Ordenação desligada.** O claim fica igual ao da versão anterior; o p99 da transação variou mais de 5% entre rodadas só por ruído nesta máquina, e o critério é decidido no job agendado.
   - O job agendado reprovou o p99 da transação em 6 de 9 execuções (+4,7% a +15,7%). A causa estava no teste: a linha de base registrava o contexto à mão, e a variante desligada usava o `AddDbContext`, que monta as opções em cada escopo. Esse custo do cliente caía na conta da ordenação.
   - Medido em Oct 20, 2026, local, com o p99 da transação contra a linha de base:
@@ -171,14 +171,14 @@ O desenho passou por um time de cinco revisores (concorrência, desempenho, EF e
 
 ### Decisão
 
-11. **A marca.** Coluna `is_head boolean DEFAULT true`, fora do modelo do usuário. `true` é candidata ao claim: a cabeça, ou um falso positivo. `false` quer dizer que a antecessora é linha da própria transação; nula, que a decisão ficou para o commit. Só `true` entra no `ix_outbox_claimable`, cujo predicado passa a ser `status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)`, com o mesmo nome. Os três SQL que o percorrem repetem o predicado, para que um plano genérico o use. A marca só restringe as candidatas: o claim continua decidindo a cabeça no snapshot, agora por `min(sequence)`, que o planner resolve por uma descida de índice com qualquer estatística. Um falso positivo custa uma sonda; uma marca faltando pararia a chave, e o resto da decisão existe para que isso não aconteça.
+11. **A marca.** Coluna `is_head boolean DEFAULT true`, fora do modelo do usuário. `true` é candidata ao claim: a cabeça, ou um falso positivo. `false` quer dizer que a antecessora é linha da própria transação; nula, que a decisão ficou para o commit. Só `true` entra no `ix_outbox_claimable`, cujo predicado passa a ser `status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)`, com o mesmo nome. Os SQL que o percorrem (os três claims, com o das rodadas da parte 2, e a idade do mais antigo) repetem o predicado, para que um plano genérico o use. A marca só restringe as candidatas: o claim continua decidindo a cabeça no snapshot, agora por `min(sequence)`, que o planner resolve por uma descida de índice com qualquer estatística. Um falso positivo custa uma sonda; uma marca faltando pararia a chave, e o resto da decisão existe para que isso não aconteça.
 12. **No INSERT.** Depois de numerar, o trigger grava `false` se a antecessora é a última linha numerada desta transação (lembrada num GUC local, desfeito com o savepoint), `true` fora de READ COMMITTED, nula se há antecessora inacabada visível, e `true` nos outros casos.
 13. **No commit.** Um constraint trigger diferido decide as linhas nulas: escolhe a antecessora inacabada mais alta sem trava e a trava com `FOR SHARE SKIP LOCKED`, refazendo o filtro.
     - **Travou:** ela continua inacabada até o fim deste commit. Quem a terminar depois espera esse fim, e a promoção, VOLATILE e com snapshot novo, vê esta linha. A marca fica nula.
     - **Pulou ou já terminou:** a linha se marca. No pior caso é um falso positivo.
     - **O produtor nunca espera o dispatcher**, então não há ciclo de travas.
     - **Por que fora de READ COMMITTED a linha nasce `true`:** travar uma antecessora publicada depois do snapshot daria 40001 no commit, um modo de falha novo.
-14. **Promoção.** Quando uma linha numerada termina (`published` ou `released`) ou é apagada inacabada, a primeira linha inacabada da chave recebe a marca. A promoção não depende de `settings`, para que uma chave numerada siga andando com a ordenação desligada e religada. Ela só roda em READ COMMITTED: em níveis mais estritos leria o snapshot da transação e deixaria sem marca a linha de um produtor commitada no meio. O dispatcher já roda em READ COMMITTED, e uma liberação ou um `DELETE` de operador em outro nível é recusado com mensagem (achado da revisão independente).
+14. **Promoção.** Quando uma linha numerada termina (`published` ou `released`) ou é apagada inacabada, a primeira linha inacabada da chave recebe a marca (refeita na parte 2, item 25: dispara só de linha marcada, sai se há antecessora inacabada, e trava e reconfere o alvo). A promoção não depende de `settings`, para que uma chave numerada siga andando com a ordenação desligada e religada. Ela só roda em READ COMMITTED: em níveis mais estritos leria o snapshot da transação e deixaria sem marca a linha de um produtor commitada no meio. O dispatcher já roda em READ COMMITTED, e uma liberação ou um `DELETE` de operador em outro nível é recusado com mensagem (achado da revisão independente).
 15. **Desligar.** O SQL `ordering-reset` marca toda linha numerada inacabada, na transação que apaga `settings`: o claim sem ordenação percorre o mesmo índice, e atrás de uma cabeça na DLQ, que não para nada com a ordenação desligada, as linhas nunca sairiam. O `UPDATE` não vê a linha de um produtor que numerou com `settings` ainda presente e não tinha commitado; o dispatcher sem ordenação marca essas sobras no startup e a cada `PartitionLease`, quando nenhuma instância ordena (achado da revisão independente).
 16. **Privilégios e checagens.** As funções novas são `SECURITY DEFINER`, como a do contador. A checagem do dispatcher (startup e a cada `PartitionLease`) cobre os quatro triggers, e uma sessão do dispatcher com `session_replication_role = replica`, onde a própria marcação não dispararia a promoção, é erro crítico.
 17. **Rede.** O Waybill não deixa cabeça sem marca, mas uma ação externa pode deixar. Os atores um a um:
@@ -186,7 +186,7 @@ O desenho passou por um time de cinco revisores (concorrência, desempenho, EF e
     - **uma sessão replica de operador, um restore parcial, um `UPDATE` de `is_head` à mão:** cobertos pela varredura abaixo;
     - **um `DELETE` de linha inacabada:** promove, como a liberação, e o `OPERATIONS.md` diz para liberar, não apagar.
 
-    A cada manutenção de partições, o dispatcher percorre uma fatia de 2 mil chaves das suas partições, saltando de chave em chave no índice, e marca a primeira linha inacabada que estiver sem marca. Cada reparo gera um log de erro com a chave e a `sequence` e conta em `waybill.outbox.heads_repaired`, que fica em zero se nada mexeu na outbox por fora. O `OPERATIONS.md` traz a consulta e o SQL para achar e marcar de uma vez.
+    A cada manutenção de partições, o dispatcher percorre a próxima fatia de 2 mil chaves (de todas as partições, em ordem de chave), saltando de chave em chave no índice, e marca, nas partições que detém, a primeira linha inacabada que estiver sem marca. Cada reparo gera um log de erro com a chave e a `sequence` e conta em `waybill.outbox.heads_repaired`, que fica em zero se nada mexeu na outbox por fora. O `OPERATIONS.md` traz a consulta e o SQL para achar e marcar de uma vez.
 
 ### Alternativas descartadas (parte 1b)
 

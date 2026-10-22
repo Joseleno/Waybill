@@ -31,7 +31,7 @@ Any number of instances may run either service against the same database.
 | `WaybillDispatcherOptions.MaxReturns` | 5 | How many times a message may come back unroutable (`basic.return`) before it goes to the DLQ. |
 | `WaybillDispatcherOptions.ReturnBackoff` | 1 minute | How long a message waits after its first return before it is published again. The wait doubles with each return, up to `MaxReturnBackoff`. With the defaults a message waits 1 + 2 + 4 + 8 = 15 minutes in all before its fifth return sends it to the DLQ: time to create the missing binding. Zero publishes it again on the next cycle, as in 0.1. |
 | `WaybillDispatcherOptions.MaxReturnBackoff` | 10 minutes | The longest single wait after a return. At most one day. |
-| `WaybillDispatcherOptions.OrderByKey` | off | Ordering by key, being built for v0.2. Set on the dispatchers only; the applications that enqueue need no setting. See [Ordering by key](#ordering-by-key). |
+| `WaybillDispatcherOptions.OrderByKey` | off | Ordering by key (new in 0.2). Set on the dispatchers only; the applications that enqueue need no setting. See [Ordering by key](#ordering-by-key). |
 | `WaybillDispatcherOptions.Partitions` | 16 | With `OrderByKey`: how many partitions (P) keys are spread over. From 1 to 1024; the same on every dispatcher. |
 | `WaybillDispatcherOptions.PartitionLease` | 60 seconds | With `OrderByKey`: how long a dispatcher holds a partition without renewing it, so how long the keys of a crashed dispatcher wait. At least twice the claim lease, a whole number of milliseconds, and the same on every dispatcher. Without `OrderByKey`: how often the dispatcher checks that no other one orders. Always positive and at most one day. |
 | `WaybillDispatcherOptions.MaxPerKey` | 1 | With `OrderByKey`: how many messages of one key a batch may carry (M). Above 1 the batch goes out in rounds, a key's next message only after the broker confirmed its previous one; see [What it costs](#what-it-costs). From 1 to 100; above 1 only with `OrderByKey`. It may differ between dispatchers. Above `BatchSize` it has no further effect. |
@@ -179,7 +179,7 @@ id. Messages without a sequence keep the boundary above.
 
 ## Ordering by key
 
-Ordering by key is new in v0.2 (not released yet) and is off by default. With `OrderByKey` on, the messages of each key
+Ordering by key is new in 0.2 and is off by default. With `OrderByKey` on, the messages of each key
 are published in commit order: per key, the first copy of each message to reach the broker arrives after the first
 copy of every earlier one. Later copies (a republication after a lease ran out, an attempt left unconfirmed) can arrive
 at any time and carry the same message id, which the consumers' inbox recognizes. Each ordered message carries its
@@ -191,7 +191,7 @@ broker confirmed its previous one.
 With `OrderByKey` on, each key belongs to a partition, `key_hash % Partitions`, and each partition is held by one
 dispatcher at a time. Dispatchers share the partitions evenly (at most `ceil(Partitions / live dispatchers)` each),
 renew them every `(PartitionLease − claim lease) / 4` (7.5 seconds with the defaults), and hand them back on shutdown. With ordering on, no wait between cycles is longer than a quarter of `PartitionLease`. A crashed dispatcher's partitions move to the others after
-`PartitionLease`. Messages without a key are not ordered and are published by any dispatcher. Dispatchers beyond
+`PartitionLease` and one more upkeep interval (about 67.5 seconds with the defaults). Messages without a key are not ordered and are published by any dispatcher. Dispatchers beyond
 `Partitions` publish only messages without a key.
 
 `Partitions` and `PartitionLease` are stored in `waybill.settings` by the first dispatcher that orders, and every
@@ -245,7 +245,7 @@ COMMIT;
   enqueue with the v0.2 package: their INSERT carries a column the 0.1 schema does not have.
 - **Register the context with `AddDbContext`, `AddDbContextPool` or a context factory.** `AddWaybillOutbox` then adds an
   interceptor that hands the database the keys of each `SaveChanges`, so it locks them in one order. A context built by
-  hand lacks it (a warning says so once): nothing is lost or reordered, but transactions that enqueue several keys may
+  hand lacks it (an Information log says so once, at the first keyed `Enqueue`): nothing is lost or reordered, but transactions that enqueue several keys may
   deadlock and have to be retried.
 - **A key's counter is locked from the INSERT to the commit.** Transactions of the same key wait for each other.
   Enqueue in the last `SaveChanges` before the commit: a transaction that enqueues a key and then writes an application
