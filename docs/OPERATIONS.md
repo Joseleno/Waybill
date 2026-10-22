@@ -52,7 +52,13 @@ stopped without one in `heads_repaired`. A value that keeps growing means events
 are not leaving: broker down, dispatcher stopped, or a dispatcher that cannot keep up. Alert on it staying above what
 your consumers can tolerate. If a sample fails (database unreachable), the gauge keeps its last value and an error is
 logged; it never drops to 0 because of a failure. The meter comes from the host's `IMeterFactory` when one is
-registered, so OpenTelemetry or any `MeterListener` picks it up; Waybill does not depend on OpenTelemetry.
+registered, so OpenTelemetry or any `MeterListener` picks it up; Waybill does not depend on OpenTelemetry. Its name
+is `WaybillDiagnostics.MeterName`.
+
+**Aggregate the outbox gauges by max, never by sum.** Every dispatcher instance reads the same table and reports the
+same value of `oldest_pending.age`, `blocked_keys` and `dlq`; summing them across instances multiplies it by the number
+of instances. An instance that cannot reach the database keeps its last value, so with max an alert can outlast its
+cause for as long as that instance stays cut off: the safe side.
 
 **Health check `waybill-dispatcher`:**
 
@@ -65,7 +71,9 @@ registered, so OpenTelemetry or any `MeterListener` picks it up; Waybill does no
 The entry's data carries `oldest_pending_age_seconds`.
 
 **The DLQ.** Dead-lettered messages stay in `waybill.outbox` with `status = 'dlq'` and a `dlq_reason`, and retention
-never deletes them. Watch their count:
+never deletes them. **`waybill.outbox.dlq`** (meter `Waybill`, unit `{message}`) reports their count, with ordering on
+or off, read through a partial index; before a dispatcher's first sample it reports nothing, never a 0 that would read
+as an empty DLQ. Alert on it above 0. The same count in SQL:
 
 ```sql
 SELECT count(*) FROM waybill.outbox WHERE status = 'dlq';
@@ -86,6 +94,19 @@ WHERE status = 'dlq' AND dlq_reason = '312 NO_ROUTE';
 
 Do not reprocess a message older than the consumers' inbox retention: a consumer that already applied it no longer
 remembers it, and would apply it again.
+
+## Tracing
+
+The message carries the W3C trace context of the code that enqueued it (`traceparent` and `tracestate`), stored with
+the outbox row, and the RabbitMQ transport sends it as headers. A consumer that continues from it stays in the trace of
+the request that wrote the message, however long the message waited in the outbox.
+
+RabbitMQ.Client opens a span of its own for each publish while your telemetry listens to its publisher source
+(`RabbitMQActivitySource.PublisherSourceName`), and writes that span's context over the message's `traceparent`. Waybill
+keeps the message's trace in that case: while the client publishes, the message's stored context is the current
+activity, so the client's span, and the context the consumer receives, stay in the message's trace. That activity is
+not exported, so in the trace the client's span hangs from a span id no backend received. In 0.1, with that source
+listened, every message reached its consumers in a new trace.
 
 ## Sizing the inbox retention
 
@@ -383,7 +404,9 @@ the last one the handler applied for that key. It deduplicates first, as `Proces
 - **Regressed:** older than the last applied message, or the last applied sequence on another message (a producer
   restored from a backup). Nothing ran, nothing was recorded, and a redelivery is refused again. Send it to the queue's
   dead-letter exchange (`basic.nack` without requeue); never acknowledge it as processed. A warning with EventId 50
-  names the handler, the key, both sequences and both message ids.
+  names the handler, the key, both sequences and both message ids, and **`waybill.inbox.regressions`** (meter
+  `Waybill`, a counter) adds one, tagged with `waybill.inbox.handler` and `waybill.inbox.regression` (`lower` or
+  `reused`). The handler name becomes a metric tag: keep it a constant, never a value per message.
 
 A gap is not an error, and the inbox never holds a message back waiting for one: a consumer of some of a key's message
 types sees gaps, and so does one after a release. `ProcessAsync` never reads `waybill.inbox_keys`.

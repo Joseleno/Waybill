@@ -13,6 +13,9 @@ All notable changes to this project are documented here. The format follows
 - `waybill.outbox.blocked_keys`, the keys stopped by a message in the DLQ while ordering is on, and in `OPERATIONS.md` the SQL to find them and to release a key.
 - `waybill.outbox.heads_repaired`, the messages a dispatcher found first in their key yet not marked claimable and marked, with an error log each: zero unless something changed the outbox outside Waybill. `OPERATIONS.md` has the SQL to find and mark them at once.
 - `WaybillDispatcherOptions.MaxPerKey` (1 by default, up to 100, above 1 only with `OrderByKey`): a batch may carry up to that many messages of a key, published in rounds. Each call to the transport carries at most one ordered message of a key, and a key's next message goes out only after the broker confirmed its previous one. All the rounds of a batch share `PublishTimeout`; a round starts only if what is left is at least what the previous one took, and the dispatcher lowers its effective M while rounds run out of time. Any message of a round to be published again ends the batch; a stop request lets no new round start, and what the broker confirmed is recorded as published (ADR 0008, part 2; ADR 0003).
+- `waybill.outbox.dlq`, the messages in the outbox DLQ, with ordering on or off, read through a new partial index; nothing is reported before a dispatcher's first sample. Every dispatcher instance reports the same value of the outbox gauges: aggregate them by max, not sum (`OPERATIONS.md`).
+- `waybill.inbox.regressions`, a counter of the messages the inbox's sequence check refused, tagged with the handler and the reason (`lower`, `reused`). The inbox registers it, so a service that only consumes reports it too.
+- `WaybillDiagnostics.MeterName`, the name of Waybill's meter, for `AddMeter`.
 
 ### Changed
 
@@ -27,6 +30,11 @@ All notable changes to this project are documented here. The format follows
 - **Breaking:** `IInbox<TContext>` gains `ProcessInOrderAsync`; an implementation outside Waybill must add it. `ProcessAsync` is unchanged.
 - The `waybill` schema gains `inbox_keys`, the last sequence each handler applied per key. Retention never deletes it, and the v0.2 migration's `Down` refuses once it has rows. A database that applied the unreleased v0.2 migration before this change must be recreated.
 - The samples: Billing orders by key; Receipts verifies sequences, retries a failing message in the consumer before dead-lettering it (a `basic.nack` with requeue never counts toward `x-delivery-limit`), and its queue gets single active consumer and at-least-once dead-lettering.
+- The `waybill` schema gains `ix_outbox_dlq`, built concurrently. A database that applied the unreleased v0.2 migration before this change must be recreated.
+
+### Fixed
+
+- With RabbitMQ.Client's publisher source listened to (`RabbitMQActivitySource.PublisherSourceName`), the client wrote its own span's context over each message's `traceparent`, and consumers started a new trace. The transport now makes the message's stored context current while the client publishes, so consumers stay in the trace of the code that enqueued the message (ADR 0011).
 
 ## [0.1.0-alpha] - 2026-10-06
 
