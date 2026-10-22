@@ -16,7 +16,7 @@ namespace Waybill.RabbitMQ;
 /// by the dispatcher) and the next batch opens a fresh one.
 /// </remarks>
 internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions> options, ILogger<RabbitMqTransport> logger)
-    : ITransport, IAsyncDisposable
+    : ITransport, ITransportTracing, IAsyncDisposable
 {
     internal const string KeyHeader = "waybill-key";
     internal const string SequenceHeader = "waybill-sequence";
@@ -66,13 +66,43 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
         for (var i = 0; i < batch.Count; i++)
         {
             if (!attempts[i].ChannelClosedByBroker)
+            {
                 results[i] = attempts[i].Result;
+            }
             else if (cancellationToken.IsCancellationRequested)
+            {
                 results[i] = PublishResult.RetryAfter(TransportFailure.ConfirmTimeout, "the publish timeout ended the isolation");
+            }
             else
+            {
+                batch[i].SendActivity?.AddEvent(new ActivityEvent("waybill.isolated"));
                 results[i] = await PublishAloneAsync(exchange, batch[i], cancellationToken).ConfigureAwait(false);
+            }
         }
         return results;
+    }
+
+    /// <summary>
+    /// The destination as the semantic conventions name it for RabbitMQ: <c>{exchange}:{routing key}</c>, or the part
+    /// that is not empty, or <c>amq.default</c>. The routing key is the message name.
+    /// </summary>
+    public string? Destination(OutgoingMessage message)
+    {
+        var exchange = options.Value.Exchange ?? "";
+        return (exchange.Length > 0, message.Name.Length > 0) switch
+        {
+            (true, true) => $"{exchange}:{message.Name}",
+            (true, false) => exchange,
+            (false, true) => message.Name,
+            _ => "amq.default",
+        };
+    }
+
+    public void AddTags(OutgoingMessage message, ICollection<KeyValuePair<string, object?>> tags)
+    {
+        tags.Add(new("messaging.system", "rabbitmq"));
+        tags.Add(new("messaging.destination.name", Destination(message)));
+        tags.Add(new("messaging.rabbitmq.destination.routing_key", message.Name));
     }
 
     private async Task<PublishResult> PublishAloneAsync(string exchange, OutgoingMessage message, CancellationToken cancellationToken)
@@ -129,10 +159,21 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
 
         try
         {
-            using (StartPropagation(message))
+            // The message's context is current while the client publishes (its span hangs from it): the dispatcher's
+            // send span, or, when there is none, a propagation activity. Set inside this per-message async method, so it
+            // never reaches the other messages of the batch nor the dispatcher.
+            var previous = Activity.Current;
+            using var propagation = message.SendActivity is null ? StartPropagation(message) : null;
+            if (message.SendActivity is { } send)
+                Activity.Current = send;
+            try
             {
                 await channel.BasicPublishAsync(exchange, message.Name, mandatory: true, properties, message.Payload, cancellationToken)
                     .ConfigureAwait(false);
+            }
+            finally
+            {
+                Activity.Current = previous;
             }
             return new Attempt(PublishResult.Confirmed, false);
         }

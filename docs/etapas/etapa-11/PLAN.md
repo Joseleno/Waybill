@@ -101,6 +101,7 @@ Cada uma deve derrubar o teste indicado:
 
 - **`StartActivity` mexe no `Current`, e restaurar à mão falha.** Fora do fluxo da mensagem, `StartIsolated` e `StopIsolated`.
 - **Ouvinte é global.** Fontes nomeadas, filtro no `Sample` e nos callbacks, `None` (nunca `PropagationData`) para spans de outros testes, raiz gravada.
+- **Aceitar raízes pelo nome alcança outros testes.** `publish billing.invoice-paid.v1` é também o nome dos spans do cliente de qualquer teste paralelo que publique sem `traceparent` (o de 406 da `SmallMessagesCollection`): nunca contar spans aceitos pelo nome; asserir sobre o que a mensagem recebeu.
 - **Amostragem por pai.** Uma raiz de teste com flags `00` esconde tudo; o mesmo vale em produção sem a instrumentação de entrada.
 - **`StartActivity` devolve nulo sem ouvinte e com `Sample` = `None`.** Todo código aceita nulo.
 - **`HasIndex(m => m.Id)` sem nome reconfigura o `ix_outbox_claimable`.**

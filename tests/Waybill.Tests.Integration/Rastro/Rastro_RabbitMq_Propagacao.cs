@@ -26,8 +26,10 @@ public sealed class Rastro_RabbitMq_Propagacao(PostgresFixture postgres, RabbitM
 
         Assert.Equal(3, received.Count);
         Assert.All(received, traceParent => Assert.Equal(recorder.TraceId, Context(traceParent).TraceId));
-        // Control: the client's spans were sampled, so the client did write its own traceparent into each message.
-        Assert.Equal(3, recorder.Stopped.Count(s => s.Source.Name == RabbitMQActivitySource.PublisherSourceName));
+        // Control: the client wrote its own span's context into each message, so the header is not the stored one. (Not
+        // a count of the client's spans: another collection publishes the same routing key without a trace at the same
+        // time, and its root spans carry the name this recorder accepts.)
+        Assert.All(received, traceParent => Assert.NotEqual(recorder.Root.Id, traceParent));
     }
 
     [Fact]
@@ -39,6 +41,28 @@ public sealed class Rastro_RabbitMq_Propagacao(PostgresFixture postgres, RabbitM
 
         Assert.Equal(3, received.Count);
         Assert.All(received, traceParent => Assert.Equal(recorder.Root.Id, traceParent));
+    }
+
+    // Both sources listened: the client's span hangs from Waybill's send span of the same message, and the consumer gets
+    // the client's context, in the request's trace.
+    [Fact]
+    public async Task Rastro_RabbitMq_DuasFontes_ClienteDentroDoSend()
+    {
+        using var recorder = new TraceRecorder(WaybillDiagnostics.ActivitySourceName, RabbitMQActivitySource.PublisherSourceName);
+
+        var received = await PublishUnderRootAsync(recorder);
+
+        var sends = recorder.Stopped.Where(a => a.Source.Name == WaybillDiagnostics.ActivitySourceName && a.OperationName.StartsWith("send", StringComparison.Ordinal)).ToList();
+        var clients = recorder.Stopped.Where(a => a.Source.Name == RabbitMQActivitySource.PublisherSourceName).ToList();
+        Assert.Equal(3, sends.Count);
+        Assert.Equal(3, clients.Count);
+        Assert.Equal(sends.Select(s => s.SpanId.ToHexString()).Order(), clients.Select(c => c.ParentSpanId.ToHexString()).Order()); // one each
+        Assert.Equal(clients.Select(c => c.Id).Order(), received.Order());
+        var send = sends[0];
+        Assert.Equal($"send {send.GetTagItem("messaging.destination.name")}", send.OperationName);
+        Assert.EndsWith($":{MessageName}", (string)send.GetTagItem("messaging.destination.name")!);
+        Assert.Equal("rabbitmq", send.GetTagItem("messaging.system"));
+        Assert.Equal(MessageName, send.GetTagItem("messaging.rabbitmq.destination.routing_key"));
     }
 
     // Enqueues three messages under the test's root, then publishes them from a flow without Activity.Current, as the
