@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0-alpha] - 2026-10-22
+
 Ordering by key, with sequence verification in the inbox, and tracing. What each guarantee covers, now with G4, and the test that proves it, is in [GUARANTEES.md](GUARANTEES.md).
 
 ### Upgrading from 0.1.0-alpha
@@ -109,5 +111,6 @@ First release. What each guarantee covers, and the test that proves it, is in [G
 - `GUARANTEES.md`, with a test that fails the build when a cited test disappears.
 - Design documents and ADRs 0001 to 0005 in `docs/` (in Portuguese).
 
-[Unreleased]: https://github.com/Joseleno/Waybill/compare/v0.1.0-alpha...HEAD
+[Unreleased]: https://github.com/Joseleno/Waybill/compare/v0.2.0-alpha...HEAD
+[0.2.0-alpha]: https://github.com/Joseleno/Waybill/compare/v0.1.0-alpha...v0.2.0-alpha
 [0.1.0-alpha]: https://github.com/Joseleno/Waybill/releases/tag/v0.1.0-alpha
