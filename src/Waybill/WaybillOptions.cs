@@ -22,6 +22,13 @@ public sealed class WaybillOptions
     public bool ThrowOnPendingMessagesAtDispose { get; set; }
 
     /// <summary>
+    /// When <see langword="true"/>, Waybill's spans carry the message's aggregate key (<c>waybill.key</c>) and tenant id
+    /// (<c>waybill.tenant_id</c>). Off by default: a key is often the id of an aggregate or a customer, and traces leave
+    /// the application for whoever stores them.
+    /// </summary>
+    public bool RecordKeyAndTenantInTraces { get; set; }
+
+    /// <summary>
     /// Registers a message type under a stable name. The name travels in the envelope and is the contract with
     /// consumers, so renaming or moving the class does not change it. Serialization uses the source-generated
     /// <paramref name="typeInfo"/>.

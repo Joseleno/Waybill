@@ -11,4 +11,8 @@
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Waybill.Tests.Integration\Rastro\TraceRecorder.cs" Link="TraceRecorder.cs" />
+  </ItemGroup>
+
 </Project>

@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
-namespace Waybill.Tests.Integration.Rastro;
+namespace Waybill.Tests; // shared: the unit test project links this file
 
 /// <summary>
 /// Records the spans of one test. An <see cref="ActivityListener"/> hears every source in the process, and test classes
@@ -21,13 +21,21 @@ internal sealed class TraceRecorder : IDisposable
 
     /// <param name="sources">The sources to listen to, by name.</param>
     public TraceRecorder(params string[] sources)
+        : this(recorded: true, sources)
+    {
+    }
+
+    /// <param name="recorded">Whether the root is recorded; a root that is not stands for a request nobody samples.</param>
+    /// <param name="sources">The sources to listen to, by name.</param>
+    public TraceRecorder(bool recorded, params string[] sources)
     {
         _sources = new HashSet<string>(sources, StringComparer.Ordinal);
         // The root comes first: its trace id is what the listener filters on. Sourceless, so no listener samples it,
         // and recorded, as an incoming request a host instruments.
         Root = new Activity("test-root");
         Root.SetIdFormat(ActivityIdFormat.W3C);
-        Root.ActivityTraceFlags = ActivityTraceFlags.Recorded;
+        if (recorded)
+            Root.ActivityTraceFlags = ActivityTraceFlags.Recorded;
         _listener = new ActivityListener
         {
             ShouldListenTo = source => _sources.Contains(source.Name),

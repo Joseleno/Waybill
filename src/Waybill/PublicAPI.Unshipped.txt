@@ -14,3 +14,6 @@ static Waybill.MessageOrder.operator ==(Waybill.MessageOrder left, Waybill.Messa
 ~override Waybill.MessageOrder.ToString() -> string
 Waybill.WaybillDiagnostics
 const Waybill.WaybillDiagnostics.MeterName = "Waybill" -> string!
+const Waybill.WaybillDiagnostics.ActivitySourceName = "Waybill" -> string!
+Waybill.WaybillOptions.RecordKeyAndTenantInTraces.get -> bool
+Waybill.WaybillOptions.RecordKeyAndTenantInTraces.set -> void
