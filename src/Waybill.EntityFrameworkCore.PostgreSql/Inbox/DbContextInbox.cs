@@ -8,7 +8,8 @@ using Microsoft.Extensions.Logging;
 
 namespace Waybill.EntityFrameworkCore;
 
-internal sealed partial class DbContextInbox<TContext>(TContext context, ILogger<DbContextInbox<TContext>> logger) : IInbox<TContext>
+internal sealed partial class DbContextInbox<TContext>(TContext context, ILogger<DbContextInbox<TContext>> logger, InboxMetrics metrics)
+    : IInbox<TContext>
     where TContext : DbContext
 {
     public async Task<InboxResult> ProcessAsync(
@@ -89,8 +90,11 @@ internal sealed partial class DbContextInbox<TContext>(TContext context, ILogger
         if (refused is { } applied && order is { } received)
         {
             if (result == OrderedInboxResult.Regressed)
-                LogRegression(logger, handler, received.Key, received.Sequence, applied.Sequence, messageId, applied.MessageId,
-                    applied.Sequence == received.Sequence ? Regression.Reused : Regression.Lower);
+            {
+                var regression = applied.Sequence == received.Sequence ? Regression.Reused : Regression.Lower;
+                LogRegression(logger, handler, received.Key, received.Sequence, applied.Sequence, messageId, applied.MessageId, regression);
+                metrics.RecordRegression(handler, regression == Regression.Reused ? "reused" : "lower");
+            }
             else
                 LogDuplicateBySequence(logger, handler, received.Key, received.Sequence, messageId);
         }
