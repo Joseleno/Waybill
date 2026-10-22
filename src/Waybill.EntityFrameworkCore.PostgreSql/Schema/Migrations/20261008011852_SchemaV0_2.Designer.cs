@@ -226,6 +226,9 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                         .HasDatabaseName("ix_outbox_key_sequence")
                         .HasFilter("sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq')");
 
+                    b.HasIndex(new[] { "Id" }, "ix_outbox_dlq")
+                        .HasFilter("status = 'dlq'");
+
                     b.ToTable("outbox", "waybill", t =>
                         {
                             t.HasCheckConstraint("ck_outbox_status", "status IN ('pending', 'claimed', 'published', 'dlq', 'released')");

@@ -57,6 +57,7 @@ public sealed class G4_CustoDesligada_ContraV01(PostgresFixture postgres)
                         DROP TRIGGER outbox_terminal_guard ON waybill.outbox;
                         DROP INDEX waybill.ix_outbox_key_sequence;
                         DROP INDEX waybill.ix_outbox_blocked_keys;
+                        DROP INDEX waybill.ix_outbox_dlq;
                         """);
                 }
                 (baseline ? baseP99 : offP99).Add(await TransactionP99Async(database, baseline));

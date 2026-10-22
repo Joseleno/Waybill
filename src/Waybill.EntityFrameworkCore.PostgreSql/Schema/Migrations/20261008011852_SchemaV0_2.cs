@@ -246,6 +246,8 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                 "(key, sequence) WHERE sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq')");
             CreateIndexConcurrently(migrationBuilder, "ix_outbox_blocked_keys",
                 "(key) WHERE status = 'dlq' AND sequence IS NOT NULL");
+            // The count behind waybill.outbox.dlq (stage 11), with ordering on or off: an index-only scan of a few pages.
+            CreateIndexConcurrently(migrationBuilder, "ix_outbox_dlq", "(id) WHERE status = 'dlq'");
 
             // The head pointer: the claim index keeps only rows a claim can take. Built beside the v0.1 one under a
             // temporary name, swapped in by renames (a short lock), the old one dropped CONCURRENTLY. Every step can run
@@ -311,6 +313,7 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                 DROP FUNCTION IF EXISTS waybill.outbox_terminal_guard();
                 DROP INDEX IF EXISTS waybill.ix_outbox_key_sequence;
                 DROP INDEX IF EXISTS waybill.ix_outbox_blocked_keys;
+                DROP INDEX IF EXISTS waybill.ix_outbox_dlq;
                 DROP INDEX IF EXISTS waybill.ix_outbox_claimable;
                 CREATE INDEX ix_outbox_claimable ON waybill.outbox (id) WHERE status IN ('pending', 'claimed');
 

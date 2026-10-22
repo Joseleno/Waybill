@@ -239,6 +239,9 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         LIMIT 1
         """;
 
+    // Messages in the DLQ, through ix_outbox_dlq: an index-only scan of a few pages, however many rows retention keeps.
+    internal const string DlqCountSql = "SELECT count(*) FROM waybill.outbox WHERE status = 'dlq'";
+
     // The head pointer's safety net (ADR 0008). Walks, in key order from the first key or from after a cursor, the next
     // keys of a slice that have an unfinished numbered row, jumping from key to key in ix_outbox_key_sequence (a recursive
     // CTE, read only as far as the slice needs), and marks each key's first unfinished row left unmarked, in the partitions
