@@ -107,6 +107,8 @@ verifying sequences, refuses it instead of applying it.
 
 <!-- ordering -->
 ```csharp
+using Waybill.RabbitMQ; // GetWaybillMessageId, GetWaybillOrder
+
 // Producer: every dispatcher on the database orders. The key is the aggregate's id.
 services.AddWaybillDispatcher<AppDbContext>(o => o.OrderByKey = true);
 outbox.Enqueue(new InvoicePaid(invoice.Id, invoice.Amount), key: invoice.Id.ToString());
@@ -129,8 +131,8 @@ var result = await inbox.ProcessInOrderAsync("receipts", args.BasicProperties.Ge
 - **A message in the outbox DLQ stops its key,** and only its key, until you requeue or release it.
   `waybill.outbox.blocked_keys` counts the stopped keys.
 - **Leave it off** when your consumers do not depend on the order of a key's messages. Ordering costs throughput in the
-  claim and time in the producer's transaction, and with it off nothing changes from 0.1 except one read per keyed
-  message.
+  claim and time in the producer's transaction. With it off, its only cost is one read per keyed message; the
+  other changes of 0.2 are in the [CHANGELOG](https://github.com/Joseleno/Waybill/blob/main/CHANGELOG.md).
 
 [OPERATIONS.md](https://github.com/Joseleno/Waybill/blob/main/docs/OPERATIONS.md#ordering-by-key) has the costs
 measured, partitions and leases, `MaxPerKey` for keys with long queues, upgrading, and the SQL to find and release a

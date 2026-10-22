@@ -189,12 +189,10 @@ ran out or after a publication whose outcome was unknown, may still arrive at an
 Holds when:
 
 - Messages of one key are enqueued with that key. The numbers follow the commit order, and a rollback leaves no gap;
-  messages of one key in one transaction follow the order of `Enqueue`; a transaction that writes several keys locks
-  them in one order, so two transactions writing them in opposite orders do not deadlock.
+  messages of one key in one transaction follow the order of `Enqueue`.
   [`G4_SequenciaContigua_LeitorConcorrenteSempreVePrefixoContiguo`](tests/Waybill.Tests.Integration/G4/G4_SequenciaContiguaNaOrdemDeCommit.cs),
   [`G4_SequenciaContigua_RollbackForcado_SeguinteFicaComONumero`](tests/Waybill.Tests.Integration/G4/G4_SequenciaContiguaNaOrdemDeCommit.cs),
-  [`G4_MesmaChaveNaMesmaTransacao_SequenciaNaOrdemDoEnqueue_Rajada`](tests/Waybill.Tests.Integration/G4/G4_MesmaChaveNaMesmaTransacao_SequenciaNaOrdemDoEnqueue.cs),
-  [`G4_ListaDeChaves_OrdensOpostas_SemDeadlock`](tests/Waybill.Tests.Integration/G4/G4_ListaDeChaves_SemDeadlock.cs)
+  [`G4_MesmaChaveNaMesmaTransacao_SequenciaNaOrdemDoEnqueue_Rajada`](tests/Waybill.Tests.Integration/G4/G4_MesmaChaveNaMesmaTransacao_SequenciaNaOrdemDoEnqueue.cs)
 - Every dispatcher on the database orders, with the same `Partitions` and `PartitionLease`. Each key belongs to one
   partition, held by one dispatcher at a time, and the claim checks that in the same statement. A dispatcher whose
   settings differ from the database's, whose ordering triggers are missing or disabled, whose session runs as a
@@ -261,8 +259,8 @@ Holds when:
   [`G4_Retencao_ApagaPublicadaEInboxAntigosEMantemContadoresLiberadasEInboxKeys`](tests/Waybill.Tests.Integration/G4/G4_Retencao_NaoApagaOutboxKeysNemReleased.cs)
 - The queue has one active consumer taking one delivery at a time (single active consumer on RabbitMQ), which is
   broker configuration Waybill cannot test, and dead-letters at least once: with the dead-letter queue full, a refused
-  regression stays held in the source queue instead of being dropped. A delivery nacked with requeue comes back before
-  the next one.
+  regression stays held in the source queue instead of being dropped. On the sample's quorum queue, a delivery nacked
+  with requeue comes back before the next one (broker behavior, measured).
   [`G4_RabbitMq_FilaDeMortasCheia_RegressaoFicaRetidaNaOrigem`](tests/Waybill.Tests.Integration/G2/RabbitMq/G4_RabbitMq_RegressaoChegaADlx.cs),
   [`G4_RabbitMq_NackComRequeue_VoltaAntesDaSeguinteSemContarEntrega`](tests/Waybill.Tests.Integration/G2/RabbitMq/G4_RabbitMq_RequeueDepoisDeFalha.cs)
 
@@ -276,6 +274,13 @@ Not covered:
   [`G4_Inbox_CopiaDaLiberadaDepoisDaSeguinte_EhRegressao`](tests/Waybill.Tests.Integration/G4/G4_Inbox_LiberadaChegaTarde_EhRegressao.cs)
 - A message without a `sequence` (no key, or written or published with ordering off) is only deduplicated.
   [`G4_Inbox_SemOrdem_ProcessaEDeduplicaSemTocarInboxKeys`](tests/Waybill.Tests.Integration/G4/G4_Inbox_SemOrdem_SoDeduplicacao.cs)
+- Deadlocks between producers. A key is locked from its INSERT to the commit. The keys of one `SaveChanges` are locked
+  in one order when the context is registered with `AddDbContext`, `AddDbContextPool` or a context factory, so two
+  such transactions writing them in opposite orders do not deadlock. Without that, or with a key enqueued before an
+  application write in the same transaction, opposite orders can deadlock, and the transaction has to be retried
+  (OPERATIONS.md). Nothing is published out of order either way.
+  [`G4_ListaDeChaves_OrdensOpostas_SemDeadlock`](tests/Waybill.Tests.Integration/G4/G4_ListaDeChaves_SemDeadlock.cs),
+  [`G4_ListaDeChaves_OrdensOpostasSemALista_Deadlock`](tests/Waybill.Tests.Integration/G4/G4_ListaDeChaves_SemDeadlock.cs)
 - An application transaction at `REPEATABLE READ` or `SERIALIZABLE` that enqueues to a key another transaction is
   writing can fail with a serialization error (40001); running it again succeeds.
   [`G4_AplicacaoEmRRouSerializable_ChaveIncrementadaDepoisDoSnapshot`](tests/Waybill.Tests.Integration/G4/G4_AplicacaoEmRRouSerializable_Erro40001ERepetirResolve.cs)
@@ -305,8 +310,9 @@ comes back within twice the baseline (or the baseline plus 5 ms) and the outbox 
 [`CargaLonga_DepoisQueATransacaoLongaFecha_LatenciaDoClaimVoltaETamanhoParaDeCrescer`](tests/Waybill.Tests.Integration/CargaLonga/CargaLonga_TransacaoLongaAberta_LatenciaDoClaimEstabiliza.cs)
 
 With ordering on, a key stopped by the DLQ does not hold back the other keys, also with 100 thousand messages queued
-behind it, and releasing it with the SQL in OPERATIONS.md lets it flow again, in order. What ordering costs, and the
-claim latency with a large backlog, are measured and published in OPERATIONS.md, with no pass mark.
+behind it, and the claim reads a bounded number of buffers past it; releasing it with the SQL in OPERATIONS.md lets
+it flow again, in order. What ordering costs, and the claim latency with a large backlog, are measured and published
+in OPERATIONS.md, with no pass mark on time.
 [`G4_ChaveBloqueadaComCemMilAFrente_OutrasChavesFluem_CustoMedido`](tests/Waybill.Tests.Integration/G4/G4_ChaveBloqueadaComCemMilAFrente_ClaimContinuaFluindo.cs),
 [`Operacao_SqlDoOperationsLiberaAChave_EElaVoltaAFluirEmOrdem`](tests/Waybill.Tests.Integration/Operacao_LiberarChave.cs)
 

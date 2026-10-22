@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -65,8 +66,9 @@ public sealed partial class ReadmeTests(PostgresFixture postgres)
         Assert.True(counted <= 10, $"The README API takes {counted} lines, more than ten");
     }
 
-    // The README's "Ordering by key" section: these lines run here, against a real database, and a delivery older than
-    // the one the handler applied comes back Regressed, so the README cannot show an ordering API that drifted.
+    // The README's "Ordering by key" section. Every line must be in this file (the Enqueue line runs in the test above).
+    // The dispatcher line is registered and read back; the consumer line runs against a real database, on deliveries
+    // built as RabbitMQ.Client hands them over, and the one older than the applied one comes back Regressed.
     [Fact]
     public async Task Readme_Ordenacao_Compila()
     {
@@ -106,13 +108,18 @@ public sealed partial class ReadmeTests(PostgresFixture postgres)
         Assert.Empty(MissingFromTests(SnippetLines(OrderingSnippet(), "ordering")));
     }
 
-    // A delivery as RabbitMQ.Client hands it to a consumer, with the headers the Waybill transport writes.
+    // A delivery as RabbitMQ.Client hands it to a consumer, with the headers the Waybill transport writes: header strings
+    // arrive from the broker as bytes.
     private static BasicDeliverEventArgs Delivery(Guid invoiceId, long sequence)
     {
         var properties = new BasicProperties
         {
             MessageId = Guid.CreateVersion7().ToString(),
-            Headers = new Dictionary<string, object?> { ["waybill-key"] = invoiceId.ToString(), ["waybill-sequence"] = sequence.ToString(CultureInfo.InvariantCulture) },
+            Headers = new Dictionary<string, object?>
+            {
+                ["waybill-key"] = Encoding.UTF8.GetBytes(invoiceId.ToString()),
+                ["waybill-sequence"] = Encoding.UTF8.GetBytes(sequence.ToString(CultureInfo.InvariantCulture)),
+            },
         };
         var body = JsonSerializer.SerializeToUtf8Bytes(new InvoicePaid(invoiceId, sequence), AppJson.Default.InvoicePaid);
         return new BasicDeliverEventArgs("consumer", (ulong)sequence, false, "events", "billing.invoice-paid.v1", properties, body);
