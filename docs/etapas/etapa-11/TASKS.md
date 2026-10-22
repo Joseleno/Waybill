@@ -15,7 +15,7 @@ Um commit por cenário provado, na ordem abaixo. Os nomes dos testes estão no `
 - [x] 8. `send` no dispatcher: `ExecuteAsync` zerando o `Current`; abertura na rodada com nome e atributos do transporte; `SendActivity` interno; troca do `traceparent` no dicionário; `FinishResult` com os ids aplicados e `Fenced` derivado; desfecho mapeado; fim no `try/finally` interno; os `Rastro_Send_*`, `Rastro_Ciclo_SqlForaDosSpansDeMensagem`, `Rastro_SemSpanDeCiclo`
 - [x] 9. Transporte: `InternalsVisibleTo` do núcleo para `Waybill.RabbitMQ`; `SendActivity` no `Current`, evento de isolamento, destino pela regra das convenções; `Rastro_RabbitMq_DuasFontes_ClienteDentroDoSend`, `Rastro_RabbitMq_Isolamento406_EventoNoSend`
 - [x] 10. `process` no inbox; os `Rastro_Process_*` e a parte do `process` de `Rastro_ChaveETenant_SoComAOpcao`
-- [ ] 11. `Rastro_PontaAPonta_RequisicaoAteHandler`
+- [x] 11. `Rastro_PontaAPonta_RequisicaoAteHandler`
 - [ ] 12. Mutações do PLAN, registradas nos commits
 - [ ] 13. Exemplo: pacotes auditados, fontes e meter, dashboard do Aspire no compose, `smoke.sh`, README do exemplo com a tela do trace
 - [ ] 14. Documentos dos spans: `OPERATIONS.md` (rastro, fontes, amostragem, `error.type`, consumidor à mão), XML doc do `ITransport`, README, CHANGELOG, a linha do escopo citando `Rastro_PontaAPonta`, ADR 0011 completo
