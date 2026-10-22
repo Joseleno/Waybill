@@ -4,7 +4,7 @@
 - [x] `Garantias_CadaGarantiaTemTeste` espera G1 a G4; G4 no `GUARANTEES.md` com testes citados; "What Waybill does not promise" e "Operating over time"
 - [x] Revisão dos ADRs 0006 a 0011 contra o código; escopo (linha G4, benchmark da v0.2): 18 correções de texto nos ADRs, nenhuma de comportamento
 - [ ] README da `0.2.0-alpha`: status, garantias, "Ordering by key", when not to use, comparação remedida; `Readme_Ordenacao_Compila`
-- [ ] Releitura do `OPERATIONS.md`; CHANGELOG `[0.2.0-alpha]` por tema, com o upgrade da `0.1.0-alpha`
+- [x] Releitura do `OPERATIONS.md` (seções da ordenação, do inbox e do rastro conferidas pelos revisores dos ADRs; frases de versão corrigidas); CHANGELOG por tema, com o upgrade da `0.1.0-alpha` (data na branch de release)
 - [ ] Verificação completa; revisão de código independente; tag `v0.2.0-alpha-test.1` verde
 - [ ] Validação por agente sem contexto (primeiro evento, ordenação, upgrade da `0.1.0-alpha`); `FRICCAO.md`; PR para a `develop`
 - [ ] Branch `release/0.2.0-alpha`: CHANGELOG datado, PublicAPI Shipped; PR para a `main`; agendado verde com o código da release

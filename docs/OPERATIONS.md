@@ -335,8 +335,8 @@ cannot use: deploy the v0.2 dispatchers right after the migration. Afterwards, n
 SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
 ```
 
-The schema only moves forward once ordering has numbered a key or released a message: the v0.2 migration's `Down`
-refuses then. To go back to the 0.1 binaries, turn ordering off first (above) and keep the v0.2 schema.
+The schema only moves forward once ordering has numbered a key or released a message, or an inbox handler has verified
+a sequence: the v0.2 migration's `Down` refuses then. To go back to the 0.1 binaries, turn ordering off first (above) and keep the v0.2 schema.
 
 ### A key stopped by the DLQ
 
