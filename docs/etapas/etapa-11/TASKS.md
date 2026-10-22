@@ -31,6 +31,6 @@ Um commit por cenário provado, na ordem abaixo. Os nomes dos testes estão no `
   - `process` dentro da estratégia;
   - `InboxMetrics` só com o dispatcher, e com `AddSingleton`;
   - índice sem nome.
-- [ ] 13. Exemplo: pacotes auditados, fontes e meter, dashboard do Aspire no compose, `smoke.sh`, README do exemplo com a tela do trace
+- [x] 13. Exemplo: pacotes auditados (OpenTelemetry 1.19.x, Apache-2.0, sem CVE, só nos samples), fontes e meter, dashboard do Aspire 13.6.1 no compose, `smoke.sh` confere o dashboard, README do exemplo descreve o trace em texto. O compose não subiu localmente (memória da máquina); o job do exemplo no CI o roda
 - [ ] 14. Documentos dos spans: `OPERATIONS.md` (rastro, fontes, amostragem, `error.type`, consumidor à mão), XML doc do `ITransport`, README, CHANGELOG, a linha do escopo citando `Rastro_PontaAPonta`, ADR 0011 completo
 - [ ] 15. Revisão de código independente antes da PR
