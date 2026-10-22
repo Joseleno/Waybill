@@ -54,11 +54,12 @@ Deriva do `SPEC.md` desta pasta, com as decisões do autor de Oct 21, 2026. Revi
 | `Rastro_Send_FilhoDoContextoGravado_ComLink` | Uma mensagem, `FakeTransport` | Um `send` Producer, pai e link = contexto gravado com `IsRemote`; atributos; o transporte recebe o `traceparent` do `send` | Integração |
 | `Rastro_Send_TracestatePreservado` | Contexto com `tracestate` | O `send` e a `Propagation` levam o mesmo `tracestate` | Integração |
 | `Rastro_Send_Desfechos` (teoria) | Confirmada; retry por conexão; timeout de confirmação; nack; returned com orçamento; `MaxReturns` esgotado; defect; payload acima do limite; fence perdido; timeout do lote; `FinishAsync` lançando | `waybill.send.outcome` e `error.type` pelo mapeamento, coerentes com o banco; `unknown` no último; cada span parado uma vez (contado no `ActivityStopped`) | Integração |
-| `Rastro_Send_LinhaNaoEnviada_SemSpan` (teoria) | Chave parada; rodada cortada; `Ended` depois de um retry; desligamento antes de uma rodada; linha rejeitada pelo plano | Nenhum `send` para essas linhas | Integração |
+| `Rastro_Send_LinhaNaoEnviada_SemSpan` (teoria) | Chave parada; rodada cortada; `Ended` depois de um retry; desligamento antes de uma rodada. A linha rejeitada pelo plano de rodadas nunca vem do claim (código defensivo); como o span só abre para o que vai ao transporte ou é julgado na rodada, ela fica sem span por construção | Nenhum `send` para essas linhas | Integração |
 | `Rastro_Send_LeaseVencido_MesmoTraceMesmoPai` | O `FakeTransport` vence o lease por SQL durante a primeira tentativa; outro dispatcher reivindica | Dois `send` no mesmo trace, com o mesmo pai | Integração |
 | `Rastro_Send_LoteMisto_NaoCruza` | Três mensagens de três raízes e uma sem `traceparent`, ciclo rodando sob uma `Activity` ambiente (como um host iniciado dentro de um span) | Cada `send` no seu trace; o sem `traceparent` é raiz própria, aceita pelo `message_id`, e não filho da ambiente | Integração |
 | `Rastro_Send_TraceparentMalformado_Raiz` | Cabeçalho `traceparent` inválido | `send` raiz, sem link, sem exceção | Integração |
 | `Rastro_Ciclo_SqlForaDosSpansDeMensagem` | Ouvinte também do `Npgsql` (controle: ele recebe os comandos do ciclo); ciclo sob um `Current` parado; e um ouvinte que lança no `ActivityStarted` | Nenhum comando do `FinishAsync` tem um `send` como ancestral; o `Current` depois do ciclo é o de antes | Integração, coleção sem paralelismo |
+| `Rastro_Ciclo_OuvinteQueLanca_PublicaMesmoAssim` | Ouvinte que lança no `ActivityStarted` de todo `send` | As mensagens são publicadas; o ciclo não lança. Um ouvinte com defeito custa o span, nunca a publicação | Integração, coleção sem paralelismo |
 | `Rastro_SemSpanDeCiclo` | Ouvinte sem filtro da fonte `Waybill`; claim, varredura e retenção sem mensagens | Nenhum span | Integração, coleção sem paralelismo |
 | `Rastro_Send_SemOuvinte_CabecalhoIntacto` | Nenhum ouvinte da fonte `Waybill` | Nenhum span; o transporte recebe o `traceparent` gravado | Integração |
 | `Rastro_RabbitMq_SoFonteDoClienteOuvida_ConsumidorNoTrace` | Só o publisher do cliente ouvido, pelo nome; dispatcher sem `Current`; broker real | O `traceparent` recebido pelo consumidor tem o `TraceId` do contexto gravado. Visto falhando antes da correção | `BrokerCollection` |
@@ -83,7 +84,7 @@ Todos rodam no PR (sem `Category=Long`). O exemplo: o `smoke.sh` confere que o d
 Cada uma deve derrubar o teste indicado:
 
 - **`Propagation` desligado:** `SoFonteDoClienteOuvida`.
-- **`StartIsolated` trocado por salvar e restaurar o `Current`:** `SqlForaDosSpansDeMensagem` (o `Current` parado e o ouvinte que lança).
+- **`StartIsolated` trocado por salvar e restaurar o `Current`:** `Rastro_StartIsolated_CurrentParado_NaoMuda` (unitário). O `SqlForaDosSpansDeMensagem` não a pega: os spans abrem dentro do `PublishRoundsAsync`, um método assíncrono, que devolve o contexto ao retornar; ele protege a propriedade de ponta a ponta.
 - **`ExecuteAsync` sem zerar o `Current`, e o span aberto com pai `default` herdando a ambiente:** `LoteMisto`.
 - **Pai = `Current` do dispatcher no lugar do contexto gravado:** `LeaseVencido` e `PontaAPonta`.
 - **`TryParse` sem `isRemote`:** `FilhoDoContextoGravado`.

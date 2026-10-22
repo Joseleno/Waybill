@@ -29,7 +29,11 @@ internal sealed record ReturnPolicy(int MaxReturns, TimeSpan Backoff, TimeSpan M
 }
 
 /// <summary>What recording a batch's outcome did: rows fenced off, and rows that went to the DLQ with their reason.</summary>
-internal sealed record FinishResult(int Fenced, IReadOnlyList<(Guid Id, string Reason)> DeadLettered);
+/// <summary>What a marking applied.</summary>
+/// <param name="Applied">The status each row the marking reached ended in; a row not here was fenced.</param>
+/// <param name="Fenced">How many rows the marking could not reach: no longer claimed by this owner, with this fence.</param>
+/// <param name="DeadLettered">The rows that went to the DLQ, with the reason.</param>
+internal sealed record FinishResult(IReadOnlyDictionary<Guid, string> Applied, int Fenced, IReadOnlyList<(Guid Id, string Reason)> DeadLettered);
 
 /// <summary>The dispatcher's SQL against <c>waybill.outbox</c>, as proven in the stage 0 spike (ADR 0001).</summary>
 internal sealed class OutboxStore(NpgsqlDataSource dataSource)
@@ -396,9 +400,11 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         Add(ReturnedSql, PublishStatus.Returned, withReason: true, withBudget: true);
         Add(DlqSql, PublishStatus.Defect, withReason: true, withBudget: false);
         if (batch.BatchCommands.Count == 0)
-            return new FinishResult(0, []);
+            return new FinishResult(new Dictionary<Guid, string>(), 0, []);
 
-        var applied = 0;
+        // Local to this call: the batch is one implicit transaction, so a statement that fails undoes the ones before
+        // it, whose rows the reader may already have returned. Only a call that returns says what was applied.
+        var applied = new Dictionary<Guid, string>();
         var deadLettered = new List<(Guid, string)>();
         await using (var reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -406,14 +412,15 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
             {
                 while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    applied++;
-                    if (reader.GetString(1) == "dlq")
-                        deadLettered.Add((reader.GetGuid(0), reader.GetString(2)));
+                    var (id, status) = (reader.GetGuid(0), reader.GetString(1));
+                    applied[id] = status;
+                    if (status == "dlq")
+                        deadLettered.Add((id, reader.GetString(2)));
                 }
             } while (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false));
         }
 
-        return new FinishResult(outcomes.Count - applied, deadLettered);
+        return new FinishResult(applied, outcomes.Count - applied.Count, deadLettered);
     }
 
     /// <summary>Hands back every row still claimed by <paramref name="owner"/> (graceful shutdown).</summary>
