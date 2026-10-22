@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
@@ -128,8 +129,11 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
 
         try
         {
-            await channel.BasicPublishAsync(exchange, message.Name, mandatory: true, properties, message.Payload, cancellationToken)
-                .ConfigureAwait(false);
+            using (StartPropagation(message))
+            {
+                await channel.BasicPublishAsync(exchange, message.Name, mandatory: true, properties, message.Payload, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             return new Attempt(PublishResult.Confirmed, false);
         }
         catch (PublishReturnException returned)
@@ -161,6 +165,33 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
             // Closed channel or connection: the outcome is unknown, so publish again. Never a defect of the message.
             return new Attempt(PublishResult.RetryAfter(TransportFailure.Connection, exception.Message), false);
         }
+    }
+
+    // A source with the client's publisher name: listeners pick sources by name, so it has listeners exactly when the
+    // client's own does. Nothing is ever started from it.
+    private static readonly ActivitySource s_clientPublisher = new(RabbitMQActivitySource.PublisherSourceName);
+
+    /// <summary>
+    /// While anything listens to the client's publisher source, the client opens a span of its own for each publish, with
+    /// <see cref="Activity.Current"/> as parent, and writes that span's traceparent over the message's. The dispatcher
+    /// has no Current, so the consumer would start a new trace. This puts the message's recorded context there: a
+    /// sourceless activity, child of it, that no exporter records. The client's span then hangs from an id that is not
+    /// exported, in the message's trace. Called inside the per-message async method, so Current never leaks out of it.
+    /// </summary>
+    /// <returns>The started activity, or null when nothing listens or the message has no valid W3C traceparent.</returns>
+    internal static Activity? StartPropagation(OutgoingMessage message)
+    {
+        if (!s_clientPublisher.HasListeners() || !message.Headers.TryGetValue("traceparent", out var traceParent))
+            return null;
+        message.Headers.TryGetValue("tracestate", out var traceState);
+        if (!ActivityContext.TryParse(traceParent, traceState, isRemote: true, out var parent))
+            return null;
+
+        var activity = new Activity("Waybill.Propagation");
+        activity.SetIdFormat(ActivityIdFormat.W3C); // even under a process-wide hierarchical default
+        activity.SetParentId(parent.TraceId, parent.SpanId, parent.TraceFlags);
+        activity.TraceStateString = parent.TraceState;
+        return activity.Start();
     }
 
     // 406 PRECONDITION_FAILED from the broker on a channel whose connection is still up: the broker refused something
