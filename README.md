@@ -65,8 +65,8 @@ Core migrations. If you use `Database.EnsureCreated()` instead, call it before `
 nothing when the database already has any table.
 
 - **Messages are registered by a stable name** (`billing.invoice-paid.v1`), not by class name, with a `JsonTypeInfo`
-  (source generation recommended). `Enqueue` refuses unregistered types, payloads that fail to serialize and payloads above
-  `MaxPayloadBytes`, before anything is written.
+  (source generation recommended). `MaxPayloadBytes` is required: the host fails to start without it. `Enqueue` refuses
+  unregistered types, payloads that fail to serialize and payloads above `MaxPayloadBytes`, before anything is written.
 - **The dispatcher** runs as a hosted service in your API or in a worker. It claims rows with
   `FOR UPDATE SKIP LOCKED`, publishes outside the transaction with publisher confirms, and hands messages back without
   spending attempts when the broker or the network fails (G2).
@@ -85,7 +85,8 @@ turn, and a script that stops the broker to show the backlog drain when it comes
 
 Wrap your handler, inside whatever consumer you already have, in
 `IInbox<TContext>.ProcessAsync(handlerName, messageId, (db, ct) => ...)` (registered by
-`AddWaybillInbox<TContext>()`). Waybill records `(handler, message_id)` and runs your handler in the same
+`AddWaybillInbox<TContext>()`, scoped like your context: in a hosted consumer, resolve it from a new scope per
+delivery). Waybill records `(handler, message_id)` and runs your handler in the same
 `READ COMMITTED` transaction, on the same context, then saves and commits: the handler only changes the context it
 receives, and needs no `SaveChanges` of its own. A repeated delivery returns `InboxResult.Duplicate` without running
 the handler, and you acknowledge the message after `ProcessAsync` returns. Events the handler enqueues commit together
@@ -124,10 +125,11 @@ var result = await inbox.ProcessInOrderAsync("receipts", args.BasicProperties.Ge
   Messages without a key are not ordered.
 - **Turn it on on every dispatcher at once,** after migrating to the 0.2 schema. A dispatcher that does not order stops
   with a critical log once the database orders, and so does one whose `Partitions` or `PartitionLease` differ.
-- **The consuming queue needs one active consumer** handling one delivery at a time (`x-single-active-consumer`), and
-  dead-letters at least once, so a refused message is never dropped. The sample's
-  [queue definitions](https://github.com/Joseleno/Waybill/blob/main/samples/rabbitmq/definitions.json) show the
-  arguments. A gap is not an error: a consumer of some of a key's message types processes the ones it gets.
+- **The consuming queue needs one active consumer handling one delivery at a time,** and dead-letters at least once,
+  so a refused message is never dropped: a quorum queue with `x-single-active-consumer: true`,
+  `x-dead-letter-exchange`, `x-dead-letter-strategy: at-least-once` and `x-overflow: reject-publish`; a dead-letter
+  queue with `x-overflow: reject-publish`; and the consumer on `basic.qos` with prefetch 1. The sample's
+  [queue definitions](https://github.com/Joseleno/Waybill/blob/main/samples/rabbitmq/definitions.json) have them. A gap is not an error: a consumer of some of a key's message types processes the ones it gets.
 - **A message in the outbox DLQ stops its key,** and only its key, until you requeue or release it.
   `waybill.outbox.blocked_keys` counts the stopped keys.
 - **Leave it off** when your consumers do not depend on the order of a key's messages. Ordering costs throughput in the

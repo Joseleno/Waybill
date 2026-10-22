@@ -16,10 +16,24 @@ one (for example, a user with fewer rights). Set it too when the context is conf
 Npgsql leaves the password out of that context's connection string. Retention is a hosted service of its own, so a consumer that only uses the inbox can run it without a dispatcher.
 Any number of instances may run either service against the same database.
 
+## Upgrading from 0.1
+
+1. Update the packages. Code written for 0.1 compiles unchanged, unless it implements `IInbox<TContext>` itself, which
+   gains `ProcessInOrderAsync`.
+2. Run `WaybillSchema.MigrateAsync` over a direct connection, not a pooler in transaction mode, before deploying the
+   applications that enqueue with 0.2. Then check that no index was left invalid (see
+   [Upgrading and rolling back](#upgrading-and-rolling-back)).
+3. Deploy the 0.2 dispatchers right after the migration.
+4. Decide on unroutable messages: in 0.2 one waits up to 15 minutes in all before the DLQ, where 0.1 took seconds.
+   `ReturnBackoff` at zero keeps the 0.1 behavior (see [Defaults](#defaults)).
+5. Optionally, turn ordering on, as [Ordering by key](#ordering-by-key) describes. Nothing about ordering changes
+   until you do.
+
 ## Defaults
 
 | Option | Default | Meaning |
 | --- | --- | --- |
+| `WaybillOptions.MaxPayloadBytes` | none: required | The largest serialized payload `Enqueue` accepts; above it, `Enqueue` throws before anything is written. Keep it below the broker's `max_message_size`. The host fails to start without it. |
 | `WaybillRetentionOptions.OutboxRetention` | 7 days | A **published** outbox row is deleted this long after its publication. Pending, claimed and dead-lettered rows are never deleted, however old. |
 | `WaybillRetentionOptions.InboxRetention` | 30 days | An inbox row is deleted this long after the message was processed. See [Sizing the inbox retention](#sizing-the-inbox-retention). |
 | `WaybillRetentionOptions.Interval` | 5 minutes | Wait between cleanup passes. A failed pass is logged and retried at the next interval. |
