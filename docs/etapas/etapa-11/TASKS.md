@@ -16,7 +16,21 @@ Um commit por cenário provado, na ordem abaixo. Os nomes dos testes estão no `
 - [x] 9. Transporte: `InternalsVisibleTo` do núcleo para `Waybill.RabbitMQ`; `SendActivity` no `Current`, evento de isolamento, destino pela regra das convenções; `Rastro_RabbitMq_DuasFontes_ClienteDentroDoSend`, `Rastro_RabbitMq_Isolamento406_EventoNoSend`
 - [x] 10. `process` no inbox; os `Rastro_Process_*` e a parte do `process` de `Rastro_ChaveETenant_SoComAOpcao`
 - [x] 11. `Rastro_PontaAPonta_RequisicaoAteHandler`
-- [ ] 12. Mutações do PLAN, registradas nos commits
+- [x] 12. Mutações do PLAN, registradas nos commits. Todas mortas:
+  - propagação desligada;
+  - salvar e restaurar o `Current` no lugar do `StartIsolated` (o teste unitário do `Current` parado; o de SQL não a pega, ver PLAN);
+  - `StartIsolated` sem zerar o `Current`;
+  - pai do `send` vindo do dispatcher;
+  - `TryParse` sem `isRemote`;
+  - desfecho sem o que o banco aplicou (fence e `MaxReturns`);
+  - spans fechados fora do `try` interno;
+  - evento de isolamento omitido;
+  - `SendActivity` sem virar `Current`;
+  - `create` antes da validação;
+  - `create` sem W3C;
+  - `process` dentro da estratégia;
+  - `InboxMetrics` só com o dispatcher, e com `AddSingleton`;
+  - índice sem nome.
 - [ ] 13. Exemplo: pacotes auditados, fontes e meter, dashboard do Aspire no compose, `smoke.sh`, README do exemplo com a tela do trace
 - [ ] 14. Documentos dos spans: `OPERATIONS.md` (rastro, fontes, amostragem, `error.type`, consumidor à mão), XML doc do `ITransport`, README, CHANGELOG, a linha do escopo citando `Rastro_PontaAPonta`, ADR 0011 completo
 - [ ] 15. Revisão de código independente antes da PR
