@@ -14,9 +14,9 @@ O timebox é de oito semanas, como o da v0.1. A duração de cada etapa é estim
 
 | Etapa | Duração | Entrega central |
 | --- | --- | --- |
-| 8. Ordenação por chave | 3 semanas, em três PRs | Espaçamento do `basic.return`, lease por partição, cabeça por chave, `sequence` no envelope; G4 na publicação |
+| 8. Ordenação por chave | 3 semanas, em três PRs | Concluída em Oct 21, 2026 (PRs #17, #18, #19, #20, #22 e #23; ADRs 0006 a 0008): espaçamento do `basic.return`, lease por partição, cabeça por chave com ponteiro, `sequence` no envelope; G4 na publicação |
 | ~~9. Transporte Kafka~~ | **Adiada** (ADR 0009) | Fora da v0.2 até haver pedido com caso de uso real; era `Waybill.Kafka` com producer transacional por partição, com G2 e G4 estrita no Kafka |
-| 10. Verificação de sequência no inbox | 4 a 5 dias | `inbox_keys`, regressão detectada e devolvida à aplicação para a DLX; G4 do RabbitMQ completa |
+| 10. Verificação de sequência no inbox | 4 a 5 dias | Concluída em Oct 21, 2026 (PR #27, ADR 0010): `inbox_keys`, regressão detectada e devolvida à aplicação para a DLX; G4 do RabbitMQ completa |
 | 11. OpenTelemetry | 3 a 5 dias | Trace da requisição HTTP até o handler no exemplo; métricas de atraso, chaves bloqueadas e DLQ |
 | 12. Documentação e release | 3 a 4 dias | `GUARANTEES.md` com a G4, `OPERATIONS.md`, `0.2.0-alpha` no nuget.org |
 
@@ -205,7 +205,7 @@ A G4 entra no `GUARANTEES.md` agora, com a redação assimétrica do escopo e o 
 | --- | --- | --- |
 | ~~G2. Todo evento persistido é publicado ou vai para a DLQ, também no Kafka~~ | 9, adiada (ADR 0009) | Broker parado por 1 h sem nada na DLQ; mensagem grande isolada no lote; Toxiproxy no meio da transação |
 | ~~G4. Ordem por chave, no Kafka~~ | 8, 9, adiada (ADR 0009) | Teste de propriedade com zumbis fenceados pelo broker; duplicata tardia absorvida pelo inbox |
-| G4. Ordem por chave, no RabbitMQ | 8, 10 | Teste de propriedade com toda regressão na DLX; consumidor com assinatura parcial sem gap; reentrega legítima sai como duplicata |
+| G4. Ordem por chave, no RabbitMQ | 8, 10 | Teste de propriedade com toda regressão na DLX; consumidor com assinatura parcial sem gap; reentrega legítima sai como duplicata; regressão depois da retenção do inbox não é aplicada |
 | Operação sustentável (não é garantia, é condição de uso) | 8 | Linhas em espera à frente do backlog; backlog de um milhão de pendentes; chave bloqueada liberada pelo SQL documentado |
 
 **O que não entra na v0.2 e por quê**
