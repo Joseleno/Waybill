@@ -6,7 +6,7 @@ An event you enqueue in the same transaction as your data reaches the broker. Th
 database is applied once, even when the message is delivered more than once. Waybill is not a messaging framework:
 you keep consuming with whatever broker client you already use.
 
-**Status: alpha (0.1.0-alpha).** The API can still change before 1.0. Every promise below has a test
+**Status: alpha (0.2.0-alpha).** The API can still change before 1.0. Every promise below has a test
 behind it, listed in [GUARANTEES.md](https://github.com/Joseleno/Waybill/blob/main/GUARANTEES.md); anything not listed
 there is not promised.
 
@@ -98,6 +98,44 @@ properties. The sample's
 [receipts consumer](https://github.com/Joseleno/Waybill/blob/main/samples/Receipts/InvoicePaidConsumer.cs) is a
 complete one.
 
+## Ordering by key
+
+Off by default. Turned on, the messages of each aggregate key are published in commit order (G4): per key, the first
+copy of each message reaches the broker after the first copy of every earlier one. RabbitMQ cannot fence off a
+dispatcher that lost its claim, so a late copy of an earlier message can still arrive after a later one; the inbox,
+verifying sequences, refuses it instead of applying it.
+
+<!-- ordering -->
+```csharp
+// Producer: every dispatcher on the database orders. The key is the aggregate's id.
+services.AddWaybillDispatcher<AppDbContext>(o => o.OrderByKey = true);
+outbox.Enqueue(new InvoicePaid(invoice.Id, invoice.Amount), key: invoice.Id.ToString());
+
+// Consumer, in your RabbitMQ.Client handler: args is the delivery, inbox the IInbox<AppDbContext> from DI.
+var result = await inbox.ProcessInOrderAsync("receipts", args.BasicProperties.GetWaybillMessageId(),
+    args.BasicProperties.GetWaybillOrder(), (db, ct) => ApplyAsync(db, args.Body, ct), ct);
+// Regressed: nothing was applied. Nack it without requeue, to the queue's dead-letter exchange; otherwise ack.
+```
+
+- **The database numbers each keyed message** in the transaction that writes it, so the order is the commit order,
+  across every instance of your application. Transactions that write the same key wait for each other until commit.
+  Messages without a key are not ordered.
+- **Turn it on on every dispatcher at once,** after migrating to the 0.2 schema. A dispatcher that does not order stops
+  with a critical log once the database orders, and so does one whose `Partitions` or `PartitionLease` differ.
+- **The consuming queue needs one active consumer** handling one delivery at a time (`x-single-active-consumer`), and
+  dead-letters at least once, so a refused message is never dropped. The sample's
+  [queue definitions](https://github.com/Joseleno/Waybill/blob/main/samples/rabbitmq/definitions.json) show the
+  arguments. A gap is not an error: a consumer of some of a key's message types processes the ones it gets.
+- **A message in the outbox DLQ stops its key,** and only its key, until you requeue or release it.
+  `waybill.outbox.blocked_keys` counts the stopped keys.
+- **Leave it off** when your consumers do not depend on the order of a key's messages. Ordering costs throughput in the
+  claim and time in the producer's transaction, and with it off nothing changes from 0.1 except one read per keyed
+  message.
+
+[OPERATIONS.md](https://github.com/Joseleno/Waybill/blob/main/docs/OPERATIONS.md#ordering-by-key) has the costs
+measured, partitions and leases, `MaxPerKey` for keys with long queues, upgrading, and the SQL to find and release a
+stopped key.
+
 ## Testing your code
 
 `Waybill.Testing` has in-memory `FakeOutbox<TContext>` and `FakeInbox<TContext>`, checked for equivalence against the
@@ -114,9 +152,10 @@ each linked to the test that proves it:
    is dropped silently.
 3. **G3.** The effect a consumer writes to its own database is applied once, even when the message is delivered more
    than once.
+4. **G4.** With ordering on, messages of one aggregate key reach the broker first in commit order, and a consumer that
+   verifies sequences never applies one out of order.
 
-Publication is at least once: consumers see duplicates, and the inbox is how their effect is applied once. Version 0.1
-makes no ordering promise; ordering by aggregate key is planned for 0.2.
+Publication is at least once: consumers see duplicates, and the inbox is how their effect is applied once.
 
 ## When not to use Waybill
 
@@ -126,7 +165,8 @@ makes no ordering promise; ordering by aggregate key is planned for 0.2.
   produce events.
 - **Your broker is not RabbitMQ.** A Kafka transport is designed but deferred until someone needs it: describe your
   use case in [#24](https://github.com/Joseleno/Waybill/issues/24).
-- **You need ordering per aggregate today.** It is planned for 0.2.
+- **You need strict order end to end, or order across aggregates.** On RabbitMQ, Waybill orders the first arrival of
+  each message of a key and detects the late copies in the consumer; it does not reorder them.
 - **The effect you need once is outside your database** (an e-mail, a call to a payment gateway). The inbox protects
   your database, not the calls that leave it.
 
@@ -185,9 +225,10 @@ dashboard.
 ## Design documents
 
 The design is documented in Portuguese in [`docs/`](https://github.com/Joseleno/Waybill/tree/main/docs): scope and
-boundaries, the development plan and five architecture decision records, from the row claim
-([ADR 0001](https://github.com/Joseleno/Waybill/blob/main/docs/adr/0001-claim-por-linha-skip-locked-e-fencing.md)) to
-the registration API ([ADR 0005](https://github.com/Joseleno/Waybill/blob/main/docs/adr/0005-ergonomia-do-registro.md)).
+boundaries, the development plans and eleven architecture decision records, from the row claim
+([ADR 0001](https://github.com/Joseleno/Waybill/blob/main/docs/adr/0001-claim-por-linha-skip-locked-e-fencing.md)) and
+ordering by key ([ADR 0008](https://github.com/Joseleno/Waybill/blob/main/docs/adr/0008-ordenacao-por-chave.md)) to
+tracing ([ADR 0011](https://github.com/Joseleno/Waybill/blob/main/docs/adr/0011-opentelemetry.md)).
 
 ## Building
 
