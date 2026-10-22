@@ -26,7 +26,10 @@ internal enum DispatchOutcome
 /// <param name="Claimed">Rows claimed.</param>
 /// <param name="Outcome">How the cycle ended.</param>
 /// <param name="BatchSize">The batch size this cycle used.</param>
-/// <param name="MoreOfKeys">Ordering by key: a claimed row had more rows of its key waiting behind it, claimable once it is published.</param>
+/// <param name="MoreOfKeys">
+/// Ordering by key: a key of the batch, not stopped for good, has rows claimable now: rows waiting behind its last claimed
+/// one, or claimed rows this batch did not send.
+/// </param>
 internal readonly record struct DispatchCycle(int Claimed, DispatchOutcome Outcome, int BatchSize, bool MoreOfKeys = false)
 {
     public bool TransportFailed => Outcome is DispatchOutcome.ConnectionFailure or DispatchOutcome.Pressure;
@@ -220,6 +223,7 @@ internal sealed partial class OutboxDispatcher
     {
         public IReadOnlyList<ClaimedMessage> Claimed { get; } = claimed;
 
+        /// <summary>What the transport said, or a local defect; a row without an outcome was not sent.</summary>
         public Dictionary<Guid, PublishResult> Outcomes { get; } = [];
 
         /// <summary>The results the breaker and the batch size react to (ADR 0003).</summary>
@@ -244,7 +248,7 @@ internal sealed partial class OutboxDispatcher
             Claimed.Where(c => c.Sequence is not null && !Finished.Contains(c.Message.Key!))
                 .GroupBy(c => c.Message.Key)
                 .Any(g => g.MaxBy(c => c.Rank)!.MoreOfKey
-                    || g.Any(c => !Outcomes.TryGetValue(c.Message.MessageId, out var result) || result == NotSent));
+                    || g.Any(c => !Outcomes.ContainsKey(c.Message.MessageId)));
 
         public void Stop(ClaimedMessage row, bool forGood)
         {
@@ -256,8 +260,8 @@ internal sealed partial class OutboxDispatcher
         }
     }
 
-    // A message that was never handed to the transport: it goes back as it was, without spending an attempt, and never
-    // reaches React.
+    // The outcome FinishAsync records for a row that has none in the batch, because it was never handed to the transport:
+    // it goes back as it was, without spending an attempt, and never reaches React.
     private static readonly PublishResult NotSent = PublishResult.RetryAfter(TransportFailure.Unspecified, "not sent in this batch");
 
     // M ≥ 2 (PLAN.md 8c-2): one call per round; round k carries the k-th message of each key, and only of keys whose
