@@ -13,7 +13,7 @@ public interface IOutbox
 {
     /// <summary>Enqueues <paramref name="message"/> and returns its message id (UUIDv7).</summary>
     /// <param name="message">The message. Its type must be registered with <see cref="WaybillOptions.AddMessage{TMessage}"/>.</param>
-    /// <param name="key">Aggregate key. Messages of the same key will be ordered once ordering ships (v0.2).</param>
+    /// <param name="key">Aggregate key, at most 255 UTF-8 bytes. With ordering on in the dispatcher (<c>OrderByKey</c>), messages of the same key are published in commit order.</param>
     /// <param name="correlationId">Optional correlation id carried in the envelope.</param>
     /// <param name="tenantId">Optional tenant id carried in the envelope.</param>
     /// <exception cref="InvalidOperationException">The type is not registered, or the payload exceeds <see cref="WaybillOptions.MaxPayloadBytes"/>.</exception>

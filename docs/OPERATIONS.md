@@ -16,10 +16,24 @@ one (for example, a user with fewer rights). Set it too when the context is conf
 Npgsql leaves the password out of that context's connection string. Retention is a hosted service of its own, so a consumer that only uses the inbox can run it without a dispatcher.
 Any number of instances may run either service against the same database.
 
+## Upgrading from 0.1
+
+1. Update the packages. Code written for 0.1 compiles unchanged, unless it implements `IInbox<TContext>` itself, which
+   gains `ProcessInOrderAsync`.
+2. Run `WaybillSchema.MigrateAsync` over a direct connection, not a pooler in transaction mode, before deploying the
+   applications that enqueue with 0.2. Then check that no index was left invalid (see
+   [Upgrading and rolling back](#upgrading-and-rolling-back)).
+3. Deploy the 0.2 dispatchers right after the migration.
+4. Decide on unroutable messages: in 0.2 one waits up to 15 minutes in all before the DLQ, where 0.1 took seconds.
+   `ReturnBackoff` at zero keeps the 0.1 behavior (see [Defaults](#defaults)).
+5. Optionally, turn ordering on, as [Ordering by key](#ordering-by-key) describes. Nothing about ordering changes
+   until you do.
+
 ## Defaults
 
 | Option | Default | Meaning |
 | --- | --- | --- |
+| `WaybillOptions.MaxPayloadBytes` | none: required | The largest serialized payload `Enqueue` accepts; above it, `Enqueue` throws before anything is written. Keep it below the broker's `max_message_size`. The host fails to start without it. |
 | `WaybillRetentionOptions.OutboxRetention` | 7 days | A **published** outbox row is deleted this long after its publication. Pending, claimed and dead-lettered rows are never deleted, however old. |
 | `WaybillRetentionOptions.InboxRetention` | 30 days | An inbox row is deleted this long after the message was processed. See [Sizing the inbox retention](#sizing-the-inbox-retention). |
 | `WaybillRetentionOptions.Interval` | 5 minutes | Wait between cleanup passes. A failed pass is logged and retried at the next interval. |
@@ -31,7 +45,7 @@ Any number of instances may run either service against the same database.
 | `WaybillDispatcherOptions.MaxReturns` | 5 | How many times a message may come back unroutable (`basic.return`) before it goes to the DLQ. |
 | `WaybillDispatcherOptions.ReturnBackoff` | 1 minute | How long a message waits after its first return before it is published again. The wait doubles with each return, up to `MaxReturnBackoff`. With the defaults a message waits 1 + 2 + 4 + 8 = 15 minutes in all before its fifth return sends it to the DLQ: time to create the missing binding. Zero publishes it again on the next cycle, as in 0.1. |
 | `WaybillDispatcherOptions.MaxReturnBackoff` | 10 minutes | The longest single wait after a return. At most one day. |
-| `WaybillDispatcherOptions.OrderByKey` | off | Ordering by key, being built for v0.2. Set on the dispatchers only; the applications that enqueue need no setting. See [Ordering by key](#ordering-by-key). |
+| `WaybillDispatcherOptions.OrderByKey` | off | Ordering by key (new in 0.2). Set on the dispatchers only; the applications that enqueue need no setting. See [Ordering by key](#ordering-by-key). |
 | `WaybillDispatcherOptions.Partitions` | 16 | With `OrderByKey`: how many partitions (P) keys are spread over. From 1 to 1024; the same on every dispatcher. |
 | `WaybillDispatcherOptions.PartitionLease` | 60 seconds | With `OrderByKey`: how long a dispatcher holds a partition without renewing it, so how long the keys of a crashed dispatcher wait. At least twice the claim lease, a whole number of milliseconds, and the same on every dispatcher. Without `OrderByKey`: how often the dispatcher checks that no other one orders. Always positive and at most one day. |
 | `WaybillDispatcherOptions.MaxPerKey` | 1 | With `OrderByKey`: how many messages of one key a batch may carry (M). Above 1 the batch goes out in rounds, a key's next message only after the broker confirmed its previous one; see [What it costs](#what-it-costs). From 1 to 100; above 1 only with `OrderByKey`. It may differ between dispatchers. Above `BatchSize` it has no further effect. |
@@ -179,7 +193,7 @@ id. Messages without a sequence keep the boundary above.
 
 ## Ordering by key
 
-Ordering by key is new in v0.2 (not released yet) and is off by default. With `OrderByKey` on, the messages of each key
+Ordering by key is new in 0.2 and is off by default. With `OrderByKey` on, the messages of each key
 are published in commit order: per key, the first copy of each message to reach the broker arrives after the first
 copy of every earlier one. Later copies (a republication after a lease ran out, an attempt left unconfirmed) can arrive
 at any time and carry the same message id, which the consumers' inbox recognizes. Each ordered message carries its
@@ -191,7 +205,7 @@ broker confirmed its previous one.
 With `OrderByKey` on, each key belongs to a partition, `key_hash % Partitions`, and each partition is held by one
 dispatcher at a time. Dispatchers share the partitions evenly (at most `ceil(Partitions / live dispatchers)` each),
 renew them every `(PartitionLease − claim lease) / 4` (7.5 seconds with the defaults), and hand them back on shutdown. With ordering on, no wait between cycles is longer than a quarter of `PartitionLease`. A crashed dispatcher's partitions move to the others after
-`PartitionLease`. Messages without a key are not ordered and are published by any dispatcher. Dispatchers beyond
+`PartitionLease` and one more upkeep interval (about 67.5 seconds with the defaults). Messages without a key are not ordered and are published by any dispatcher. Dispatchers beyond
 `Partitions` publish only messages without a key.
 
 `Partitions` and `PartitionLease` are stored in `waybill.settings` by the first dispatcher that orders, and every
@@ -245,7 +259,7 @@ COMMIT;
   enqueue with the v0.2 package: their INSERT carries a column the 0.1 schema does not have.
 - **Register the context with `AddDbContext`, `AddDbContextPool` or a context factory.** `AddWaybillOutbox` then adds an
   interceptor that hands the database the keys of each `SaveChanges`, so it locks them in one order. A context built by
-  hand lacks it (a warning says so once): nothing is lost or reordered, but transactions that enqueue several keys may
+  hand lacks it (an Information log says so once, at the first keyed `Enqueue`): nothing is lost or reordered, but transactions that enqueue several keys may
   deadlock and have to be retried.
 - **A key's counter is locked from the INSERT to the commit.** Transactions of the same key wait for each other.
   Enqueue in the last `SaveChanges` before the commit: a transaction that enqueues a key and then writes an application
@@ -335,8 +349,8 @@ cannot use: deploy the v0.2 dispatchers right after the migration. Afterwards, n
 SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
 ```
 
-The schema only moves forward once ordering has numbered a key or released a message: the v0.2 migration's `Down`
-refuses then. To go back to the 0.1 binaries, turn ordering off first (above) and keep the v0.2 schema.
+The schema only moves forward once ordering has numbered a key or released a message, or an inbox handler has verified
+a sequence: the v0.2 migration's `Down` refuses then. To go back to the 0.1 binaries, turn ordering off first (above) and keep the v0.2 schema.
 
 ### A key stopped by the DLQ
 
