@@ -33,4 +33,4 @@ Um commit por cenário provado, na ordem abaixo. Os nomes dos testes estão no `
   - índice sem nome.
 - [x] 13. Exemplo: pacotes auditados (OpenTelemetry 1.19.x, Apache-2.0, sem CVE, só nos samples), fontes e meter, dashboard do Aspire 13.6.1 no compose, `smoke.sh` confere o dashboard, README do exemplo descreve o trace em texto. O compose não subiu localmente (memória da máquina); o job do exemplo no CI o roda
 - [x] 14. Documentos dos spans: `OPERATIONS.md` (rastro, fontes, amostragem, `error.type`, consumidor à mão), XML doc do `ITransport`, README, CHANGELOG, a linha do escopo citando `Rastro_PontaAPonta`, ADR 0011 completo
-- [ ] 15. Revisão de código independente antes da PR
+- [x] 15. Revisão de código independente antes da PR: sem bloqueios; um teste unitário instável (o ouvinte que lança amostrava tudo da fonte), `Rastro_SemSpanDeCiclo` sem mensagens, o teste sem ouvinte que quase nunca estava sem ouvinte; um comentário do transporte reescrito

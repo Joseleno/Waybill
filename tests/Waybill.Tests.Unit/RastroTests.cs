@@ -140,7 +140,10 @@ public sealed class RastroIsolatedTests
         using var throwing = new ActivityListener
         {
             ShouldListenTo = source => source.Name == WaybillDiagnostics.ActivitySourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> options) => ActivitySamplingResult.AllDataAndRecorded,
+            // Only this test's trace: sampling takes the most permissive listener, and other tests run meanwhile.
+            Sample = (ref ActivityCreationOptions<ActivityContext> options) => options.Parent.TraceId == recorder.TraceId
+                ? ActivitySamplingResult.AllDataAndRecorded
+                : ActivitySamplingResult.None,
             ActivityStarted = activity =>
             {
                 if (activity.TraceId == recorder.TraceId)

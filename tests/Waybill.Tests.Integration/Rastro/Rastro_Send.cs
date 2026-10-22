@@ -237,11 +237,13 @@ public sealed class Rastro_Send(PostgresFixture postgres)
         Assert.Equal(send.Id, Assert.Single(transport.Received).Headers["traceparent"]);
     }
 
+    // Not sampled (other tests' recorders listen, and say None for this trace): the transport gets the traceparent
+    // recorded at Enqueue. With nothing listening at all, see Rastro_EstadoGlobal.
     [Fact]
-    public async Task Rastro_Send_SemOuvinte_CabecalhoIntacto()
+    public async Task Rastro_Send_NaoAmostrado_CabecalhoIntacto()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var recorder = new TraceRecorder(); // nothing listens to Waybill's source
+        using var recorder = new TraceRecorder(); // this test listens to nothing
         var (database, dataSource, _) = await EnqueueUnderRootAsync(recorder);
         await using var _ = dataSource;
         var transport = new FakeTransport();

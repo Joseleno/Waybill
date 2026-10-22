@@ -160,8 +160,9 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
         try
         {
             // The message's context is current while the client publishes (its span hangs from it): the dispatcher's
-            // send span, or, when there is none, a propagation activity. Set inside this per-message async method, so it
-            // never reaches the other messages of the batch nor the dispatcher.
+            // send span, or, when there is none, a propagation activity. Set inside this per-message async method: an
+            // async method gives its caller the caller's execution context back when it returns, so Current never
+            // reaches the other messages of the batch nor the dispatcher.
             var previous = Activity.Current;
             using var propagation = message.SendActivity is null ? StartPropagation(message) : null;
             if (message.SendActivity is { } send)

@@ -100,7 +100,7 @@ public sealed class Rastro_EstadoGlobal(PostgresFixture postgres)
     }
 
     // Claim, partition upkeep, the repair sweep, sampling and retention open no span: they would be a trace per polling
-    // cycle, unrelated to any message.
+    // cycle, unrelated to any message. With one message in the outbox, the only spans are its create and its send.
     [Fact]
     public async Task Rastro_SemSpanDeCiclo()
     {
@@ -110,6 +110,7 @@ public sealed class Rastro_EstadoGlobal(PostgresFixture postgres)
         await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
         var dispatcher = OrderingHarness.Create(dataSource, new FakeTransport(), OrderingHarness.Options(database, partitions: 4));
         Assert.Null(await dispatcher.CheckOrderingAsync(atStartup: true, ct));
+        await DispatcherHarness.EnqueueAsync(database, 1, key: _ => "invoice-1");
 
         for (var i = 0; i < 3; i++)
             await dispatcher.RunOnceAsync(ct);
@@ -117,6 +118,30 @@ public sealed class Rastro_EstadoGlobal(PostgresFixture postgres)
             await new OldestPendingSampler(new OutboxStore(dataSource), metrics).SampleAsync(ct);
         await RetentionHarness.Create(dataSource, RetentionHarness.Options(database)).RunOnceAsync(ct);
 
-        Assert.Empty(everything.Stopped);
+        Assert.Equal(1, await DispatcherHarness.CountAsync(database, "published"));
+        Assert.Equal(["create", "send"], everything.Stopped.Select(a => a.OperationName).Order());
+    }
+
+    // Nothing listens to Waybill's source (no recorder of a parallel test either: this collection runs alone): no span,
+    // nothing built, and the transport gets the traceparent recorded at Enqueue.
+    [Fact]
+    public async Task Rastro_Send_SemOuvinte_CabecalhoIntacto()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        var root = new Activity("request").SetIdFormat(ActivityIdFormat.W3C);
+        root.ActivityTraceFlags = ActivityTraceFlags.Recorded;
+        using (root.Start())
+            await DispatcherHarness.EnqueueAsync(database, 1);
+        Assert.False(WaybillActivity.Source.HasListeners());
+        await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
+        var transport = new FakeTransport();
+        var dispatcher = DispatcherHarness.Create(dataSource, transport, DispatcherHarness.Options(database));
+
+        await dispatcher.RunOnceAsync(ct);
+
+        var received = Assert.Single(transport.Received);
+        Assert.Equal(root.Id, received.Headers["traceparent"]);
+        Assert.Null(received.SendActivity);
     }
 }
