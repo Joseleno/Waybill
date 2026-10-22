@@ -36,7 +36,7 @@ public sealed partial class RastreabilidadeTests
         var sections = GuaranteeHeading().Split(markdown);
         var ids = GuaranteeHeading().Matches(markdown).Select(m => m.Groups[1].Value).ToArray();
 
-        Assert.Equal(["G1", "G2", "G3"], ids);
+        Assert.Equal(["G1", "G2", "G3", "G4"], ids);
         for (var i = 0; i < ids.Length; i++)
         {
             // Split with one capture group yields: preamble, id, body, id, body...

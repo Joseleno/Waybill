@@ -1,7 +1,7 @@
 # Etapa 12 — Tarefas
 
-- [ ] Decisões do SPEC confirmadas pelo autor (linhas (D) do PLAN)
-- [ ] `Garantias_CadaGarantiaTemTeste` espera G1 a G4; G4 no `GUARANTEES.md` com testes citados; "What Waybill does not promise" e "Operating over time"
+- [x] Decisões do SPEC confirmadas pelo autor (linhas (D) do PLAN): todas as recomendações, Oct 22, 2026
+- [x] `Garantias_CadaGarantiaTemTeste` espera G1 a G4; G4 no `GUARANTEES.md` com testes citados; "What Waybill does not promise" e "Operating over time"
 - [ ] Revisão dos ADRs 0006 a 0011 contra o código; escopo (linha G4, benchmark da v0.2)
 - [ ] README da `0.2.0-alpha`: status, garantias, "Ordering by key", when not to use, comparação remedida; `Readme_Ordenacao_Compila`
 - [ ] Releitura do `OPERATIONS.md`; CHANGELOG `[0.2.0-alpha]` por tema, com o upgrade da `0.1.0-alpha`

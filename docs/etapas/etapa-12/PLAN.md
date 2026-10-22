@@ -1,6 +1,6 @@
 # Etapa 12 — Plano e critérios de aceite
 
-Escrito com as recomendações do SPEC como premissa. Se o autor decidir diferente, mudam as linhas marcadas com (D).
+Escrito com as recomendações do SPEC como premissa; o autor confirmou todas em Oct 22, 2026. As linhas que dependiam disso levam (D).
 
 ## Desenho
 
