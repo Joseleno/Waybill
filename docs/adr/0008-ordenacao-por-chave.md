@@ -33,7 +33,7 @@ A 8a espaçou o `basic.return` (ADR 0006), e a 8b entregou a posse da partição
    - a trava cai depois das linhas da aplicação, no mesmo ponto em que um `SaveChanges` de uma chave trava;
    - a lista vai só na primeira linha com chave que o EF insere (o menor `id`), e não em todas: em todas, um `SaveChanges` de N chaves carregaria N × N chaves, também com a ordenação desligada (achado da revisão de código; com 10 mil chaves passaria do limite de 1 GB de uma mensagem do PostgreSQL).
 
-   O interceptor é registrado pelo `AddWaybillOutbox` e não faz I/O nem guarda estado. Ele não reabre o buraco de G1 do ADR 0002: aquele interceptor anexava linhas de um buffer próprio, e este só preenche uma coluna de linhas que já estão no change tracker. Um contexto montado fora de `AddDbContext` fica sem o interceptor e gera um aviso, uma vez por tipo. Sem ele nada se perde nem sai de ordem; só pode haver deadlock, e um deadlock se resolve repetindo a transação.
+   O interceptor é registrado pelo `AddWaybillOutbox` e não faz I/O nem guarda estado. Ele não reabre o buraco de G1 do ADR 0002: aquele interceptor anexava linhas de um buffer próprio, e este só preenche uma coluna de linhas que já estão no change tracker. Um contexto montado fora de `AddDbContext` fica sem o interceptor e gera um registro, uma vez por tipo, no primeiro `Enqueue` com chave e no nível `Information` (revisto no adendo do aviso de interceptor ausente, ao fim deste ADR). Sem ele nada se perde nem sai de ordem; só pode haver deadlock, e um deadlock se resolve repetindo a transação.
 4. **Ids na ordem do `Enqueue`.** Dois UUIDv7 do mesmo milissegundo comparavam em ordem aleatória, então mensagens de uma chave numa transação recebiam `sequence` fora da ordem do `Enqueue`: numa rajada de 200, 197. O `message_id` passou a ser um UUIDv7 monotônico no processo (RFC 9562, seção 6.2, método 1). Um contador de 12 bits em `rand_a` ordena os ids do mesmo milissegundo, e passando de 4096 o gerador usa o milissegundo seguinte.
 5. **Cabeça por chave.** A cabeça é a primeira linha com `sequence` não terminal da chave:
    - não terminal: `pending` (inclusive em espera depois de um `basic.return`), `claimed` e `dlq`; terminal: `published` e `released`;
@@ -396,3 +396,22 @@ O custo está no trigger de numeração: com a ordenação desligada, ele roda e
 
 - Quem não liga a ordenação paga o trigger em toda linha com chave, e o custo está publicado. Mensagem sem chave não paga nada.
 - O nome do teste agendado muda para `G4_CustoDesligada_ClaimAteCincoPorCentoETransacaoMedida`.
+
+## Adendo — aviso de interceptor ausente (2026-10-21)
+
+Status: aceito, decisão do autor.
+
+### Contexto
+
+O contexto montado à mão, sem o interceptor das travas de chave, gerava um `Warning` (EventId 2) no primeiro `Enqueue` de cada tipo de contexto, com ou sem chave e com a ordenação ligada ou desligada. A revisão da etapa 8 apontou o ruído e sugeriu `Information`. O produtor não tem como condicionar o aviso à ordenação: ela é opção do dispatcher (`OrderByKey`), que pode rodar em outro processo, e consultar `waybill.settings` no `Enqueue` seria I/O num caminho que não faz nenhum.
+
+### Decisão
+
+1. **O registro sai só no primeiro `Enqueue` com chave.** O interceptor só trava chaves não nulas, a vazia inclusive; sem chave, a falta dele não muda nada.
+2. **O nível passa de `Warning` para `Information`.** Sem o interceptor nada se perde nem sai de ordem; o pior caso é um deadlock que o banco desfaz e a aplicação repete.
+3. Continua uma vez por tipo de contexto e processo.
+
+### Consequências
+
+- Quem enfileira sem chave nunca vê o registro.
+- Testado por `G4_ContextoSemInterceptor_AvisaUmaVezEEnfileira` (nível e uma vez) e `G4_ContextoSemInterceptor_SemChave_NaoAvisa` (sem chave, nada; com chave vazia, o registro).
