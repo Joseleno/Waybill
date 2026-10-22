@@ -174,6 +174,14 @@ These remain with Waybill configured correctly, because they are outside the rea
 (`AddWaybillRetention`), the gauge `waybill.outbox.oldest_pending.age` (meter `Waybill`), the dispatcher health check
 (`AddHealthChecks().AddWaybillDispatcherCheck()`), autovacuum settings and how to size the inbox retention.
 
+**Tracing and metrics.** Waybill reports through `System.Diagnostics` and depends on no telemetry package. Listen to
+the activity source and the meter `WaybillDiagnostics` names (`Waybill`), and to RabbitMQ.Client's publisher and
+subscriber sources: a message's trace then runs from the request that wrote it through Waybill's `create` and `send`
+spans and the client's to the inbox's `process`, as one trace, however long the message waited in the outbox. The
+metrics cover the oldest pending message, keys stopped by the DLQ, the DLQ itself and the inbox's regressions.
+OPERATIONS.md has the spans, their attributes and what to aggregate how; the sample exports all of it to an Aspire
+dashboard.
+
 ## Design documents
 
 The design is documented in Portuguese in [`docs/`](https://github.com/Joseleno/Waybill/tree/main/docs): scope and

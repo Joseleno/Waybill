@@ -1,6 +1,6 @@
 # ADR 0011 — OpenTelemetry: propagação, métricas e spans
 
-- Status: aceito (parte 1: propagação e métricas; a parte 2, dos spans, entra com a implementação deles)
+- Status: aceito (parte 1: propagação e métricas; parte 2: spans)
 - Data: 2026-10-21
 - Etapa: 11 (v0.2)
 
@@ -46,3 +46,57 @@ O SPEC e o PLAN passaram por duas revisões adversariais e por um time de quatro
 Mutações vistas morrendo:
 - o índice declarado sem nome (`Schema_ModeloSemMudancaPendente`);
 - o registro do contador do inbox com `AddSingleton` (`Metrica_Regressoes_ServicoSemDispatcher`).
+
+## Decisão — parte 2: spans
+
+Convenções seguidas: as de mensageria do OpenTelemetry 1.44.0, ainda em desenvolvimento.
+
+1. **Três spans, cada um com um dono.**
+   - `create`: aberto no `Enqueue`, kind Producer, filho do `Current`, depois de toda validação. O `traceparent` gravado na linha passa a ser o dele.
+   - `send {destino}`: aberto pelo dispatcher, kind Producer, um por mensagem entregue ao transporte ou julgada na rodada (payload acima do limite), por claim. Fecha depois da marcação no banco, com `waybill.send.outcome` (`published`, `retry`, `returned`, `dlq`, `fenced`, `unknown`).
+   - `process`: aberto no inbox, kind Internal, um por chamada, fora da estratégia de execução; cada execução dela é um evento.
+2. **O pai do `send` é o contexto gravado, além do link** que as convenções pedem. Toda tentativa, também depois de um lease vencido, horas mais tarde, cai no trace da requisição. É o que o escopo promete.
+3. **O dispatcher é o dono do `send`, não o transporte.** Vários desfechos se decidem fora do transporte: canal indisponível, timeout do lote, `MaxReturns` esgotado, fence perdido, marcação que falha. O `FinishResult` devolve os ids aplicados com o status final, e o desfecho sai do que o banco gravou. O span chega ao transporte de dois jeitos:
+   - no cabeçalho `traceparent`, que qualquer transporte propaga;
+   - numa propriedade interna da mensagem, que o transporte do Waybill põe no `Current` em volta do `BasicPublishAsync`.
+
+   Ela é interna porque um transporte de terceiros poderia fechar o span antes do desfecho. O destino e os atributos do sistema vêm do transporte por uma interface interna; o `ITransport` não muda.
+4. **Abrir e fechar sem mexer no `Current` de quem chama.** Salvar e restaurar o `Current` à mão falha com um `Current` parado (o setter o ignora) e com um ouvinte que lança. Os spans do dispatcher abrem e fecham dentro de um método assíncrono que termina de forma síncrona: ele devolve o contexto de execução do chamador em qualquer caso. O laço do dispatcher começa sem `Current`, porque herda o contexto de quem iniciou o host.
+5. **Um ouvinte que lança custa o span, nunca a publicação.** O dispatcher segue sem o span da mensagem.
+6. **Nenhum span de ciclo.** Claim, manutenção das partições, varredura, amostragem e retenção seriam um trace por ciclo de polling, sem relação com as mensagens.
+7. **`process` é Internal.** O consumo é da aplicação. Com a instrumentação do cliente, o `deliver` dele já é o span Consumer e o pai; um segundo Consumer contaria o processamento duas vezes.
+8. **Ids em W3C sempre,** mesmo com outro formato padrão no processo: o `traceparent` gravado e o propagado precisam ser legíveis pelo consumidor.
+9. **Chave e tenant fora dos spans por padrão** (decisão do autor), ligáveis por `WaybillOptions.RecordKeyAndTenantInTraces`. O `process` só conhece a chave da ordem; o tenant, não.
+
+**Desvios das convenções:**
+- o `send` tem o contexto de criação como pai, além do link (item 2);
+- o `process` é Internal, não Consumer (item 7);
+- `create`, `process` e o `send` de um transporte de terceiros saem sem `messaging.system`, que é obrigatório: o núcleo e o inbox não conhecem o broker.
+
+## Alternativas descartadas — parte 2
+
+| Alternativa | Por que não |
+| --- | --- |
+| Um span por lote no dispatcher | Atravessaria traces, e, como `Current`, poria todas as mensagens do lote no trace do lote: o cliente injetaria esse contexto em cada uma |
+| O span de envio no transporte | Os desfechos decididos fora dele (canal indisponível, timeout do lote, `MaxReturns`, fence) ficariam sem span, e o status do span poderia contradizer o banco |
+| `SendActivity` público | Daria a transportes de terceiros um objeto mutável que eles poderiam fechar antes do desfecho; eles já recebem o contexto pelo `traceparent` |
+| `send` só com link, como as convenções pedem | A republicação sairia do trace da requisição |
+| Um span de `process` por tentativa da estratégia | Um commit ambíguo apareceria como dois processamentos |
+| Salvar e restaurar o `Current` à mão | Falha com um `Current` parado e com um ouvinte que lança (verificado) |
+
+## Consequências — parte 2
+
+- Sem ouvinte da fonte `Waybill`, nada é aberto nem alocado. Com ouvinte, cerca de 1,7 KB por mensagem no `send`.
+- Com o amostrador padrão, uma requisição não amostrada leva junto todo o trace da mensagem. O `OPERATIONS.md` manda ouvir também a instrumentação de entrada.
+- Uma republicação horas depois pode cair num trace que um coletor com *tail sampling* já fechou.
+- O `FakeOutbox` usa o mesmo `EnvelopeFactory` e emite `create`; o `FakeInbox` não emite `process`.
+
+## Testes que provam — parte 2
+
+- `Rastro_PontaAPonta_RequisicaoAteHandler`: um só trace em `create`, `send`, `publish` e `deliver` do cliente e `process`, cada um filho do anterior.
+- `Rastro_Send_*`: pai, link e cabeçalho; os desfechos; as linhas não enviadas; lease vencido; lote misto; `traceparent` malformado; sem ouvinte; chave e tenant.
+- `Rastro_Ciclo_SqlForaDosSpansDeMensagem`, `Rastro_Ciclo_OuvinteQueLanca_PublicaMesmoAssim`, `Rastro_SemSpanDeCiclo`.
+- `Rastro_RabbitMq_DuasFontes_ClienteDentroDoSend`, `Rastro_RabbitMq_Isolamento406_EventoNoSend`.
+- `Rastro_Process_*`; os `Rastro_Create_*` e `Rastro_StartIsolated_*` (unitários).
+
+As mutações estão listadas no `TASKS.md` da etapa 11; todas morreram.

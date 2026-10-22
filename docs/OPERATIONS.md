@@ -101,12 +101,64 @@ The message carries the W3C trace context of the code that enqueued it (`tracepa
 the outbox row, and the RabbitMQ transport sends it as headers. A consumer that continues from it stays in the trace of
 the request that wrote the message, however long the message waited in the outbox.
 
-RabbitMQ.Client opens a span of its own for each publish while your telemetry listens to its publisher source
-(`RabbitMQActivitySource.PublisherSourceName`), and writes that span's context over the message's `traceparent`. Waybill
-keeps the message's trace in that case: while the client publishes, the message's stored context is the current
-activity, so the client's span, and the context the consumer receives, stay in the message's trace. That activity is
-not exported, so in the trace the client's span hangs from a span id no backend received. In 0.1, with that source
-listened, every message reached its consumers in a new trace.
+**What to listen to.** Waybill opens its spans on the activity source `WaybillDiagnostics.ActivitySourceName`
+(`Waybill`) and depends on no telemetry package. With OpenTelemetry:
+
+```csharp
+tracing.AddSource(WaybillDiagnostics.ActivitySourceName,
+    RabbitMQActivitySource.PublisherSourceName, RabbitMQActivitySource.SubscriberSourceName);
+metrics.AddMeter(WaybillDiagnostics.MeterName);
+```
+
+Listen to your incoming requests too (ASP.NET Core's instrumentation, for one). With the default parent-based
+sampler, a request nobody samples is an activity that is not recorded, and nothing under it is either: the message
+gets no span at all, though its `traceparent` still carries the request's context.
+
+**The spans**, all in W3C format whatever the process default:
+
+| Span | Kind | Opened by | Parent | What it carries |
+| --- | --- | --- | --- | --- |
+| `create` | Producer | `Enqueue`, after every check: a refused message opens nothing | The current activity | `messaging.message.id`, `waybill.message.name`. Its context is what the row stores |
+| `send {destination}` | Producer | The dispatcher, once per message it hands to the transport (or judges itself: a payload above the limit), per claim | The stored context, also linked | `waybill.send.outcome`, `waybill.sequence` when ordered; with RabbitMQ, `messaging.system`, `messaging.destination.name` (`{exchange}:{routing key}`) and the routing key. Ends after the marking |
+| `process` | Internal | The inbox, once per `ProcessAsync` or `ProcessInOrderAsync` call | The current activity | `waybill.inbox.handler`, `waybill.inbox.result`, `waybill.sequence` when ordered; an event `waybill.attempt` per run of the execution strategy |
+
+- **`waybill.send.outcome`:** `published`, `retry` (handed back without spending an attempt), `returned` (waiting to be
+  published again), `dlq`, `fenced` (another dispatcher holds the row now), or `unknown` (the marking itself failed:
+  its commit may or may not have happened).
+- **`error.type`,** set on every span that ends as an error:
+  - from the transport: `connection`, `confirm_timeout`, `nacked` and `unspecified`;
+  - from the outcome: `returned`, `defect` and `fenced`;
+  - on `process`: `regressed`;
+  - otherwise, the full name of the exception's type.
+- **The parent of `send`.** Every attempt hangs from the stored context, so a message published again after a lease
+  expired, hours later, lands in the same trace. The OpenTelemetry messaging conventions ask only for a link to the
+  creation context; Waybill adds the parent so the trace stays one (ADR 0011).
+- **`process` is Internal, not Consumer.** The consumption is the application's: with RabbitMQ.Client's subscriber
+  source listened, the client's `deliver` span is the Consumer span and the parent.
+- **No span for the dispatcher's own work.** Claims, partition upkeep, the repair sweep, sampling and retention open
+  none: they would be a trace per polling cycle, unrelated to any message. Their SQL is traced by Npgsql's own
+  instrumentation, if you turn it on, and never under a message's span.
+- **Key and tenant.** Spans carry `waybill.key` and `waybill.tenant_id` only with `WaybillOptions.RecordKeyAndTenantInTraces`:
+  a key is often an aggregate or customer id, and traces leave the application.
+- **The conventions are still in development.** Waybill follows the OpenTelemetry semantic conventions for messaging
+  1.44.0, which are not stable; attribute names may change with them. `create`, `process`, and `send` through a transport
+  outside Waybill carry no `messaging.system`: they do not know the broker.
+
+**RabbitMQ.Client's own spans.** The client opens a span for each publish while your telemetry listens to its publisher
+source, with the current activity as parent, and writes that span's context over the message's `traceparent`. Waybill
+makes the message's `send` span current while the client publishes, so the client's span hangs from it, and the
+consumer receives a context in the message's trace. Without a listener on Waybill's source there is no `send` span, and
+Waybill makes a sourceless activity, child of the stored context, current instead: the consumer still stays in the
+trace, but the client's span hangs from a span id no backend received. Listen to both sources. In 0.1, with only the
+client's source listened, every message reached its consumers in a new trace. The client names the destination of its
+span after the exchange alone (`amq.default` for the default one), where Waybill's `send` uses `{exchange}:{routing key}`.
+
+**Consumers that set the context by hand.** Without the client's subscriber source, make the message's context current
+yourself before calling the inbox, and open the consumer's channel outside any activity: the client's consumer loop
+runs in the execution context of the channel's creation, and would otherwise run every delivery under that activity.
+
+**Late republication.** A message published again long after the request (a broker outage, a requeue from the DLQ) adds
+spans to a trace a collector with tail sampling may have closed already.
 
 ## Sizing the inbox retention
 

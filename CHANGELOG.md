@@ -16,6 +16,8 @@ All notable changes to this project are documented here. The format follows
 - `waybill.outbox.dlq`, the messages in the outbox DLQ, with ordering on or off, read through a new partial index; nothing is reported before a dispatcher's first sample. Every dispatcher instance reports the same value of the outbox gauges: aggregate them by max, not sum (`OPERATIONS.md`).
 - `waybill.inbox.regressions`, a counter of the messages the inbox's sequence check refused, tagged with the handler and the reason (`lower`, `reused`). The inbox registers it, so a service that only consumes reports it too.
 - `WaybillDiagnostics.MeterName`, the name of Waybill's meter, for `AddMeter`.
+- Tracing (ADR 0011): spans on the activity source `WaybillDiagnostics.ActivitySourceName`, with no telemetry package. `create` at `Enqueue`; `send` for each message the dispatcher publishes, child of the context recorded at `Enqueue` and linked to it, so every attempt lands in the same trace, ending with `waybill.send.outcome` from what the database recorded; `process` in the inbox, with the result. With RabbitMQ.Client's sources listened too, a message's trace runs from the request that wrote it to the handler. Claims, upkeep, sampling and retention open no span. The spans follow the OpenTelemetry semantic conventions for messaging 1.44.0, still in development: attribute names may change with them. `OPERATIONS.md` lists the spans, their attributes and the values of `error.type`.
+- `WaybillOptions.RecordKeyAndTenantInTraces` (off): Waybill's spans carry the message's key and tenant id.
 
 ### Changed
 
@@ -31,6 +33,7 @@ All notable changes to this project are documented here. The format follows
 - The `waybill` schema gains `inbox_keys`, the last sequence each handler applied per key. Retention never deletes it, and the v0.2 migration's `Down` refuses once it has rows. A database that applied the unreleased v0.2 migration before this change must be recreated.
 - The samples: Billing orders by key; Receipts verifies sequences, retries a failing message in the consumer before dead-lettering it (a `basic.nack` with requeue never counts toward `x-delivery-limit`), and its queue gets single active consumer and at-least-once dead-lettering.
 - The `waybill` schema gains `ix_outbox_dlq`, built concurrently. A database that applied the unreleased v0.2 migration before this change must be recreated.
+- While anything listens to Waybill's activity source, the `traceparent` stored with a message is that of its `create` span, and a transport receives in `OutgoingMessage.Headers` the `traceparent` of the message's `send` span, both in the trace of the code that enqueued the message. A transport outside Waybill propagates it as before.
 
 ### Fixed
 
