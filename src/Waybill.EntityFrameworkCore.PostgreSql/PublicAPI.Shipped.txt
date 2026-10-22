@@ -49,3 +49,20 @@ Microsoft.Extensions.DependencyInjection.WaybillHealthChecksBuilderExtensions
 static Microsoft.Extensions.DependencyInjection.WaybillHealthChecksBuilderExtensions.AddWaybillDispatcherCheck(this Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder! builder, string! name = "waybill-dispatcher", System.Collections.Generic.IEnumerable<string!>? tags = null) -> Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder!
 static Microsoft.Extensions.DependencyInjection.WaybillDispatcherServiceCollectionExtensions.AddWaybillDispatcher<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions!>? configure = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static Microsoft.Extensions.DependencyInjection.WaybillRetentionServiceCollectionExtensions.AddWaybillRetention<TContext>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.EntityFrameworkCore.Retention.WaybillRetentionOptions!>? configure = null) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxReturnBackoff.get -> System.TimeSpan
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxReturnBackoff.set -> void
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.ReturnBackoff.get -> System.TimeSpan
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.ReturnBackoff.set -> void
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.PartitionLease.get -> System.TimeSpan
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.PartitionLease.set -> void
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.Partitions.get -> int
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.Partitions.set -> void
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.OrderByKey.get -> bool
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.OrderByKey.set -> void
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxPerKey.get -> int
+Waybill.EntityFrameworkCore.Dispatching.WaybillDispatcherOptions.MaxPerKey.set -> void
+Waybill.EntityFrameworkCore.IInbox<TContext>.ProcessInOrderAsync(string! handler, System.Guid messageId, Waybill.MessageOrder? order, System.Func<TContext!, System.Threading.CancellationToken, System.Threading.Tasks.Task!>! handle, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Waybill.EntityFrameworkCore.OrderedInboxResult>!
+Waybill.EntityFrameworkCore.OrderedInboxResult
+Waybill.EntityFrameworkCore.OrderedInboxResult.Duplicate = 2 -> Waybill.EntityFrameworkCore.OrderedInboxResult
+Waybill.EntityFrameworkCore.OrderedInboxResult.Processed = 1 -> Waybill.EntityFrameworkCore.OrderedInboxResult
+Waybill.EntityFrameworkCore.OrderedInboxResult.Regressed = 3 -> Waybill.EntityFrameworkCore.OrderedInboxResult

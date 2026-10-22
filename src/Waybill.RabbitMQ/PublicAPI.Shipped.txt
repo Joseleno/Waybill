@@ -13,3 +13,4 @@ Waybill.RabbitMQ.WaybillRabbitMqOptions.WaybillRabbitMqOptions() -> void
 Microsoft.Extensions.DependencyInjection.WaybillRabbitMqServiceCollectionExtensions
 static Waybill.RabbitMQ.WaybillRabbitMqMessageExtensions.GetWaybillMessageId(this RabbitMQ.Client.IReadOnlyBasicProperties! properties) -> System.Guid
 static Microsoft.Extensions.DependencyInjection.WaybillRabbitMqServiceCollectionExtensions.AddWaybillRabbitMQ(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.RabbitMQ.WaybillRabbitMqOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static Waybill.RabbitMQ.WaybillRabbitMqMessageExtensions.GetWaybillOrder(this RabbitMQ.Client.IReadOnlyBasicProperties! properties) -> Waybill.MessageOrder?
