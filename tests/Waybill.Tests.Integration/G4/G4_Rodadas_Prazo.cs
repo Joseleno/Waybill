@@ -90,6 +90,31 @@ public sealed class G4_Rodadas_Prazo(PostgresFixture postgres)
         Assert.Equal(3, dispatcher.CurrentMaxPerKey);
     }
 
+    // A later round has only what is left of the deadline as its confirmation timeout, not a whole PublishTimeout. That
+    // timeout runs on the real clock: round 1 takes 3 s of a 6 s deadline on the fake one, and round 2, which the broker
+    // never confirms, is given up after about 3 s of real time instead of 6.
+    [Fact]
+    public async Task G4_RodadaTardia_TemSoOPrazoRestante()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var time = new FakeTimeProvider();
+        var (database, dispatcher, transport) = await DispatcherAsync(time, maxPerKey: 2, (call, batch) =>
+        {
+            if (call == 2)
+                return new TaskCompletionSource<IReadOnlyList<PublishResult>>().Task; // never confirmed
+            time.Advance(TimeSpan.FromSeconds(3));
+            return Confirm(batch);
+        }, publishTimeout: TimeSpan.FromSeconds(6));
+        await DispatcherHarness.EnqueueAsync(database, 2, key: _ => "K");
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        await dispatcher.RunOnceAsync(ct);
+        elapsed.Stop();
+
+        Assert.Equal(2, transport.Calls);
+        Assert.InRange(elapsed.Elapsed, TimeSpan.FromSeconds(2.5), TimeSpan.FromSeconds(5));
+    }
+
     public static TheoryData<string, int, bool> Pressure => new()
     {
         { "confirm timeout", 2, false }, // round 2 had only what round 1 left of the deadline
@@ -153,13 +178,14 @@ public sealed class G4_Rodadas_Prazo(PostgresFixture postgres)
     private static Task<IReadOnlyList<PublishResult>> Confirm(IReadOnlyList<OutgoingMessage> batch) => FakeTransport.ConfirmAll(batch);
 
     private async Task<(TestDatabase, OutboxDispatcher, FakeTransport)> DispatcherAsync(
-        FakeTimeProvider time, int maxPerKey, Func<int, IReadOnlyList<OutgoingMessage>, Task<IReadOnlyList<PublishResult>>> behavior, LogSink? logs = null)
+        FakeTimeProvider time, int maxPerKey, Func<int, IReadOnlyList<OutgoingMessage>, Task<IReadOnlyList<PublishResult>>> behavior, LogSink? logs = null,
+        TimeSpan? publishTimeout = null)
     {
         var database = await TestDatabase.CreateAsync(postgres);
         var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
         var transport = new FakeTransport((call, batch, _) => behavior(call, batch));
         var options = OrderingHarness.Options(database, partitions: 4, maxPerKey: maxPerKey);
-        options.PublishTimeout = PublishTimeout;
+        options.PublishTimeout = publishTimeout ?? PublishTimeout;
         options.PartitionLease = TimeSpan.FromDays(1); // the fake clock jumps; the partitions must not expire in it
         var dispatcher = OrderingHarness.Create(dataSource, transport, options, time, logs);
         Assert.Null(await dispatcher.CheckOrderingAsync(atStartup: true, TestContext.Current.CancellationToken));
