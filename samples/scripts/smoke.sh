@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks the queues' arguments, creates and pays one invoice, waits for the receipt and for both events on the
+# Checks the queues' arguments and that the Aspire dashboard answers, creates and pays one invoice, waits for the receipt and for both events on the
 # `audit` queue, then sends a regression and waits for it in the dead-letter queue.
 # Run from anywhere after `docker compose up --wait` in samples/.
 set -euo pipefail
@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 
 BILLING=${BILLING:-http://localhost:8080}
 RECEIPTS=${RECEIPTS:-http://localhost:8081}
+DASHBOARD=${DASHBOARD:-http://localhost:18888}
 
 wait_for() { # description, seconds, command...
   local description=$1 seconds=$2; shift 2
@@ -32,6 +33,8 @@ for argument in x-single-active-consumer at-least-once reject-publish; do
   fi
 done
 echo "ok: receipts.invoice-paid has the arguments of definitions.json"
+
+wait_for "the Aspire dashboard answers at $DASHBOARD" 60 curl -fsS "$DASHBOARD"
 
 before=$(audit_count)
 invoice=$(curl -fsS -X POST "$BILLING/invoices" -H 'Content-Type: application/json' \

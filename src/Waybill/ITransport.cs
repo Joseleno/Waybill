@@ -56,11 +56,22 @@ public sealed class OutgoingMessage
     /// <summary>Payload content type, for example <c>application/json</c>.</summary>
     public required string ContentType { get; init; }
 
-    /// <summary>Envelope headers: <c>traceparent</c>, <c>tracestate</c>, <c>correlation_id</c>, <c>tenant_id</c> when present.</summary>
+    /// <summary>
+    /// Envelope headers: <c>traceparent</c>, <c>tracestate</c>, <c>correlation_id</c>, <c>tenant_id</c> when present. The
+    /// <c>traceparent</c> is the trace context recorded at enqueue or, while anything listens to Waybill's activity source
+    /// (<see cref="WaybillDiagnostics.ActivitySourceName"/>), that of the dispatcher's <c>send</c> span for this message,
+    /// which hangs from it: propagate it as it is.
+    /// </summary>
     public required IReadOnlyDictionary<string, string> Headers { get; init; }
 
     /// <summary>When the message was written, by the database clock.</summary>
     public required DateTimeOffset CreatedAt { get; init; }
+
+    /// <summary>
+    /// The dispatcher's <c>send</c> span for this message, if any, for Waybill's own transport to make current while it
+    /// publishes. Internal: a transport outside Waybill could stop it before the dispatcher records the outcome.
+    /// </summary>
+    internal System.Diagnostics.Activity? SendActivity { get; set; }
 }
 
 /// <summary>What happened to one message of a published batch.</summary>

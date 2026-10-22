@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -210,8 +211,22 @@ internal sealed partial class OutboxDispatcher
         finally
         {
             // Recording the outcome is not cancelled by shutdown, nor skipped when a later round failed: what was
-            // published must say so, and what was not goes back as it was.
-            await FinishAsync(batch).ConfigureAwait(false);
+            // published must say so, and what was not goes back as it was. The send spans end after it, whatever happens.
+            FinishResult? finish = null;
+            Exception? failure = null;
+            try
+            {
+                finish = await FinishAsync(batch).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+                throw;
+            }
+            finally
+            {
+                EndSends(batch, finish, failure);
+            }
         }
         AdaptMaxPerKey(batch);
 
@@ -237,6 +252,9 @@ internal sealed partial class OutboxDispatcher
 
         /// <summary>A message must be published again: no round starts after this one.</summary>
         public bool Ended { get; set; }
+
+        /// <summary>The send span of each message handed to the transport or judged here, by message id.</summary>
+        public Dictionary<Guid, Activity> Sends { get; } = [];
 
         /// <summary>Rounds that ran; set when the deadline left no time for the next one.</summary>
         public int? CutAfter { get; set; }
@@ -312,6 +330,7 @@ internal sealed partial class OutboxDispatcher
                     toPublish.Add(row);
                 }
             }
+            OpenSends(batch, plan.Rounds[k], toPublish);
             if (toPublish.Count == 0)
             {
                 previous = TimeSpan.Zero;
@@ -359,7 +378,7 @@ internal sealed partial class OutboxDispatcher
         }
     }
 
-    private async Task FinishAsync(Batch batch)
+    private async Task<FinishResult> FinishAsync(Batch batch)
     {
         var outcomes = batch.Claimed
             .Select(c => (c, batch.Outcomes.TryGetValue(c.Message.MessageId, out var result) ? result : NotSent))
@@ -373,7 +392,119 @@ internal sealed partial class OutboxDispatcher
             var row = batch.Claimed.First(c => c.Message.MessageId == id);
             LogDeadLettered(_logger, id, row.Message.Key, row.Sequence, reason);
         }
+        return finish;
     }
+
+    // A send span for what this round hands to the transport or judges itself (a payload above the limit), never for a
+    // row it holds back: that one was not sent. The message carries the span to the transport: its traceparent becomes
+    // the span's, for any transport to propagate, and Waybill's own makes the span current while it publishes. The row
+    // in the database keeps the creation context, so a later attempt hangs from it again, in the same trace.
+    private void OpenSends(Batch batch, IReadOnlyList<ClaimedMessage> round, List<ClaimedMessage> toPublish)
+    {
+        if (!WaybillActivity.Source.HasListeners())
+            return;
+        var handed = toPublish.Select(r => r.Message.MessageId).ToHashSet();
+        foreach (var row in round)
+        {
+            var id = row.Message.MessageId;
+            var judged = batch.Outcomes.TryGetValue(id, out var result) && result.Status == PublishStatus.Defect;
+            if ((!handed.Contains(id) && !judged) || TryStartSend(row) is not { } send)
+                continue;
+            batch.Sends[id] = send;
+            row.Message.SendActivity = send;
+            if (row.Message.Headers is IDictionary<string, string> headers) // the store builds one per claim
+                headers["traceparent"] = send.Id!;
+        }
+    }
+
+    // A listener that throws costs the message its span, never its publication.
+    private Activity? TryStartSend(ClaimedMessage row)
+    {
+        try
+        {
+            return StartSend(row);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private Activity? StartSend(ClaimedMessage row)
+    {
+        var message = row.Message;
+        message.Headers.TryGetValue("tracestate", out var traceState);
+        var parent = message.Headers.TryGetValue("traceparent", out var traceParent)
+            && ActivityContext.TryParse(traceParent, traceState, isRemote: true, out var context)
+                ? context
+                : default; // none, or malformed: a root of its own
+        List<KeyValuePair<string, object?>> tags =
+        [
+            new("messaging.operation.type", "send"),
+            new("messaging.operation.name", "send"),
+            new("messaging.message.id", message.MessageId.ToString()),
+        ];
+        if (row.Sequence is { } sequence)
+            tags.Add(new("waybill.sequence", sequence));
+        if (_waybillOptions.Value.RecordKeyAndTenantInTraces)
+        {
+            if (message.Key is not null)
+                tags.Add(new("waybill.key", message.Key));
+            if (message.Headers.TryGetValue("tenant_id", out var tenant))
+                tags.Add(new("waybill.tenant_id", tenant));
+        }
+        var tracing = _transport as ITransportTracing;
+        tracing?.AddTags(message, tags);
+        var destination = tracing?.Destination(message);
+        // Parent and link: the conventions ask only for the link to the creation context; the parent keeps every attempt,
+        // hours later too, in the trace of the request that wrote the message (ADR 0011).
+        return WaybillActivity.StartIsolated(
+            destination is null ? "send" : $"send {destination}", ActivityKind.Producer, parent, tags,
+            parent == default ? null : [new ActivityLink(parent)]);
+    }
+
+    // Each span ends once, with what the marking recorded: "unknown" when it failed, since its commit may or may not have
+    // happened. A listener that throws on one span must neither keep the others open nor fail the cycle.
+    private static void EndSends(Batch batch, FinishResult? finish, Exception? failure)
+    {
+        foreach (var (id, send) in batch.Sends)
+        {
+            try
+            {
+                var result = batch.Outcomes.TryGetValue(id, out var outcome) ? outcome : NotSent;
+                var (state, error) = SendOutcome(result, failure is null ? finish?.Applied.GetValueOrDefault(id) : null, failure);
+                send.SetTag("waybill.send.outcome", state);
+                if (error is not null)
+                {
+                    send.SetTag("error.type", error);
+                    send.SetStatus(ActivityStatusCode.Error, failure?.Message ?? result.Reason);
+                }
+                WaybillActivity.StopIsolated(send);
+            }
+            catch (Exception)
+            {
+                // Telemetry only: the outcome is in the database, and the next span still has to end.
+            }
+        }
+    }
+
+    /// <summary>The send span's outcome, from the transport's result and the status the marking left (null: not reached).</summary>
+    internal static (string Outcome, string? ErrorType) SendOutcome(PublishResult result, string? applied, Exception? failure) =>
+        failure is not null ? ("unknown", failure.GetType().FullName)
+        : applied is null ? ("fenced", "fenced")
+        : result.Status switch
+        {
+            PublishStatus.Confirmed => ("published", null),
+            PublishStatus.Returned => applied == "dlq" ? ("dlq", "returned") : ("returned", "returned"),
+            PublishStatus.Defect => ("dlq", "defect"),
+            _ => ("retry", result.Failure switch
+            {
+                TransportFailure.Connection => "connection",
+                TransportFailure.ConfirmTimeout => "confirm_timeout",
+                TransportFailure.Nacked => "nacked",
+                _ => "unspecified",
+            }),
+        };
 
     // The marking runs again when PostgreSQL ends it as a deadlock victim or a serialization failure: every statement is
     // fenced, so what already applied applies once. Two zombies crossing on two keys can deadlock (8c-2 review).

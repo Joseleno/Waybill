@@ -29,7 +29,11 @@ internal sealed record ReturnPolicy(int MaxReturns, TimeSpan Backoff, TimeSpan M
 }
 
 /// <summary>What recording a batch's outcome did: rows fenced off, and rows that went to the DLQ with their reason.</summary>
-internal sealed record FinishResult(int Fenced, IReadOnlyList<(Guid Id, string Reason)> DeadLettered);
+/// <summary>What a marking applied.</summary>
+/// <param name="Applied">The status each row the marking reached ended in; a row not here was fenced.</param>
+/// <param name="Fenced">How many rows the marking could not reach: no longer claimed by this owner, with this fence.</param>
+/// <param name="DeadLettered">The rows that went to the DLQ, with the reason.</param>
+internal sealed record FinishResult(IReadOnlyDictionary<Guid, string> Applied, int Fenced, IReadOnlyList<(Guid Id, string Reason)> DeadLettered);
 
 /// <summary>The dispatcher's SQL against <c>waybill.outbox</c>, as proven in the stage 0 spike (ADR 0001).</summary>
 internal sealed class OutboxStore(NpgsqlDataSource dataSource)
@@ -239,6 +243,9 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         LIMIT 1
         """;
 
+    // Messages in the DLQ, through ix_outbox_dlq: an index-only scan of a few pages, however many rows retention keeps.
+    internal const string DlqCountSql = "SELECT count(*) FROM waybill.outbox WHERE status = 'dlq'";
+
     // The head pointer's safety net (ADR 0008). Walks, in key order from the first key or from after a cursor, the next
     // keys of a slice that have an unfinished numbered row, jumping from key to key in ix_outbox_key_sequence (a recursive
     // CTE, read only as far as the slice needs), and marks each key's first unfinished row left unmarked, in the partitions
@@ -393,9 +400,11 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
         Add(ReturnedSql, PublishStatus.Returned, withReason: true, withBudget: true);
         Add(DlqSql, PublishStatus.Defect, withReason: true, withBudget: false);
         if (batch.BatchCommands.Count == 0)
-            return new FinishResult(0, []);
+            return new FinishResult(new Dictionary<Guid, string>(), 0, []);
 
-        var applied = 0;
+        // Local to this call: the batch is one implicit transaction, so a statement that fails undoes the ones before
+        // it, whose rows the reader may already have returned. Only a call that returns says what was applied.
+        var applied = new Dictionary<Guid, string>();
         var deadLettered = new List<(Guid, string)>();
         await using (var reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -403,14 +412,15 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
             {
                 while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    applied++;
-                    if (reader.GetString(1) == "dlq")
-                        deadLettered.Add((reader.GetGuid(0), reader.GetString(2)));
+                    var (id, status) = (reader.GetGuid(0), reader.GetString(1));
+                    applied[id] = status;
+                    if (status == "dlq")
+                        deadLettered.Add((id, reader.GetString(2)));
                 }
             } while (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false));
         }
 
-        return new FinishResult(outcomes.Count - applied, deadLettered);
+        return new FinishResult(applied, outcomes.Count - applied.Count, deadLettered);
     }
 
     /// <summary>Hands back every row still claimed by <paramref name="owner"/> (graceful shutdown).</summary>
@@ -432,18 +442,23 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
                     THEN (SELECT count(DISTINCT key) FROM waybill.outbox WHERE status = 'dlq' AND sequence IS NOT NULL) END
         """;
 
-    /// <summary>How many keys a DLQ row stops; null while ordering by key is off.</summary>
-    public async Task<long?> BlockedKeysAsync(CancellationToken cancellationToken)
-    {
-        await using var command = dataSource.CreateCommand(BlockedKeysSql);
-        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is long blocked ? blocked : null;
-    }
+    // The three gauges' readings in one round trip, each a scalar subquery through its own index.
+    private const string SampleSql = $"SELECT ({OldestPendingAgeSql}), ({BlockedKeysSql}), ({DlqCountSql})";
 
-    /// <summary>Seconds since the oldest message not yet published was written; 0 when there is none.</summary>
-    public async Task<double> OldestPendingAgeAsync(CancellationToken cancellationToken)
+    /// <summary>What the gauges report, read in one statement.</summary>
+    /// <returns>
+    /// Seconds since the oldest message not yet published was written (0 when there is none); how many keys a DLQ row
+    /// stops (null while ordering by key is off); how many messages are in the DLQ.
+    /// </returns>
+    public async Task<(double OldestPendingAge, long? BlockedKeys, long Dlq)> SampleAsync(CancellationToken cancellationToken)
     {
-        await using var command = dataSource.CreateCommand(OldestPendingAgeSql);
-        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is double age ? Math.Max(age, 0) : 0;
+        await using var command = dataSource.CreateCommand(SampleSql);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        return (
+            reader.IsDBNull(0) ? 0 : Math.Max(reader.GetDouble(0), 0),
+            reader.IsDBNull(1) ? null : reader.GetInt64(1),
+            reader.GetInt64(2));
     }
 
     private static Dictionary<string, string> ParseHeaders(string? json)

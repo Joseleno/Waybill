@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Waybill.EntityFrameworkCore;
+using Waybill.EntityFrameworkCore.Dispatching;
 using Waybill.EntityFrameworkCore.Schema;
 
 namespace Waybill.Tests.Integration;
@@ -41,9 +42,10 @@ public sealed class SchemaTests(PostgresFixture postgres)
         Assert.Equal(1, await scalar("SELECT count(*) FROM pg_class WHERE oid = 'waybill.inbox_keys'::regclass AND reloptions @> '{fillfactor=80}'"));
         Assert.Equal(4, await scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'waybill' AND table_name = 'inbox_keys' AND column_name IN ('handler', 'key', 'last_seq', 'last_message_id') AND is_nullable = 'NO'"));
         Assert.Equal(3, await scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'waybill' AND table_name = 'outbox' AND column_name IN ('lock_keys', 'released_at', 'released_by')"));
-        Assert.Equal(2, await scalar("""
+        // ix_outbox_dlq (stage 11): the count behind waybill.outbox.dlq, every sample.
+        Assert.Equal(3, await scalar("""
             SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
-            WHERE c.relname IN ('ix_outbox_key_sequence', 'ix_outbox_blocked_keys') AND i.indisvalid AND i.indpred IS NOT NULL
+            WHERE c.relname IN ('ix_outbox_key_sequence', 'ix_outbox_blocked_keys', 'ix_outbox_dlq') AND i.indisvalid AND i.indpred IS NOT NULL
             """));
         Assert.Equal(2, await scalar("SELECT count(*) FROM pg_trigger WHERE tgrelid = 'waybill.outbox'::regclass AND tgname IN ('outbox_sequence', 'outbox_terminal_guard') AND tgenabled = 'O'"));
         Assert.Equal(1, await scalar("SELECT count(*) FROM pg_constraint WHERE conname = 'ck_outbox_status' AND convalidated AND pg_get_constraintdef(oid) LIKE '%released%'"));
@@ -162,9 +164,70 @@ public sealed class SchemaTests(PostgresFixture postgres)
         Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'waybill' AND table_name IN ('outbox_keys', 'inbox_keys', 'settings', 'outbox_partitions', 'outbox_instances')"));
         Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM pg_trigger WHERE tgrelid = 'waybill.outbox'::regclass AND NOT tgisinternal"));
         Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'waybill' AND table_name = 'outbox' AND column_name IN ('next_attempt_at', 'lock_keys', 'released_at', 'released_by')"));
+        Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM pg_class WHERE relname = 'ix_outbox_dlq'"));
 
         await WaybillSchema.MigrateAsync(database.ConnectionString, ct);
         await AssertOrderingObjectsAsync(database.ScalarAsync);
+    }
+
+    // A database that applied the v0.2 migration before stage 11 added ix_outbox_dlq to it (no tag yet) has no such index.
+    [Fact]
+    public async Task Schema_DownSemIndiceDaDlq_NaoFalha()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        await database.ExecuteAsync("DROP INDEX waybill.ix_outbox_dlq");
+        await using var schema = new WaybillSchemaContext(WaybillSchemaContext.Options(database.ConnectionString));
+
+        await schema.GetService<IMigrator>().MigrateAsync(LastV01Migration, ct);
+
+        Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'waybill' AND table_name = 'outbox_keys'"));
+    }
+
+    // The model says what the migrations built. An index on Id declared without a name would take over the claim index,
+    // the only other index on Id, and the snapshot would lose ix_outbox_claimable: the next scaffolded migration would
+    // drop it. No database needed.
+    [Fact]
+    public void Schema_ModeloSemMudancaPendente()
+    {
+        using var schema = new WaybillSchemaContext(WaybillSchemaContext.Options("Host=unused"));
+
+        Assert.False(schema.Database.HasPendingModelChanges());
+        var outbox = schema.Model.GetEntityTypes().Single(e => e.GetTableName() == "outbox");
+        var indexes = outbox.GetIndexes().Select(i => i.GetDatabaseName()).ToList();
+        Assert.Contains("ix_outbox_claimable", indexes);
+        Assert.Contains("ix_outbox_dlq", indexes);
+    }
+
+    // waybill.outbox.dlq counts the DLQ on every sample, from every dispatcher instance: through its partial index (an
+    // index-only or a bitmap scan of a few pages, as the planner likes), never a scan of the retained rows.
+    [Fact]
+    public async Task Schema_IndiceDaDlq_UsadoNaContagem()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        await database.ExecuteAsync("""
+            INSERT INTO waybill.outbox (id, type, key_hash, payload, content_type, status, dlq_reason)
+            SELECT gen_random_uuid(), 'billing.invoice-paid.v1', g, '\x00', 'application/json',
+                   CASE WHEN g % 2000 = 0 THEN 'dlq' ELSE 'published' END,
+                   CASE WHEN g % 2000 = 0 THEN 'defect' END
+            FROM generate_series(1, 20000) g
+            """);
+        await database.ExecuteAsync("VACUUM ANALYZE waybill.outbox");
+
+        await using var connection = new Npgsql.NpgsqlConnection(database.ConnectionString);
+        await connection.OpenAsync(ct);
+        await using var explain = new Npgsql.NpgsqlCommand("EXPLAIN " + OutboxStore.DlqCountSql, connection);
+        var plan = new List<string>();
+        await using (var reader = await explain.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+                plan.Add(reader.GetString(0));
+        }
+
+        Assert.Contains(plan, line => line.Contains("ix_outbox_dlq"));
+        Assert.DoesNotContain(plan, line => line.Contains("Seq Scan"));
+        Assert.Equal(10, await database.ScalarAsync(OutboxStore.DlqCountSql));
     }
 
     // A database that applied the v0.2 migration before stage 10 added inbox_keys to it (no tag yet) has no such table;

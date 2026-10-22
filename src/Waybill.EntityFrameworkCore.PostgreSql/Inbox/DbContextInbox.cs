@@ -5,10 +5,13 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Waybill.EntityFrameworkCore;
 
-internal sealed partial class DbContextInbox<TContext>(TContext context, ILogger<DbContextInbox<TContext>> logger) : IInbox<TContext>
+internal sealed partial class DbContextInbox<TContext>(
+    TContext context, ILogger<DbContextInbox<TContext>> logger, InboxMetrics metrics, IOptions<WaybillOptions> options)
+    : IInbox<TContext>
     where TContext : DbContext
 {
     public async Task<InboxResult> ProcessAsync(
@@ -39,6 +42,59 @@ internal sealed partial class DbContextInbox<TContext>(TContext context, ILogger
             throw new InvalidOperationException(
                 $"{typeof(TContext).Name} already has a transaction. The inbox owns the transaction of the handler it runs: call ProcessAsync on a context without one.");
 
+        // One span per call, outside the execution strategy: each attempt is an event on it. After an ambiguous commit the
+        // result is Duplicate although this very call applied the effect; the attempts show it.
+        using var process = StartProcess(handler, messageId, order);
+        try
+        {
+            var result = await ProcessWithStrategyAsync(handler, messageId, order, handle, process, cancellationToken).ConfigureAwait(false);
+            process?.SetTag("waybill.inbox.result", result switch
+            {
+                OrderedInboxResult.Processed => "processed",
+                OrderedInboxResult.Duplicate => "duplicate",
+                _ => "regressed",
+            });
+            if (result == OrderedInboxResult.Regressed)
+            {
+                process?.SetTag("error.type", "regressed");
+                process?.SetStatus(ActivityStatusCode.Error, "the sequence check refused the message");
+            }
+            return result;
+        }
+        catch (Exception exception) when (process is not null)
+        {
+            process.SetTag("error.type", exception.GetType().FullName);
+            process.SetStatus(ActivityStatusCode.Error, exception.Message);
+            throw;
+        }
+    }
+
+    // Internal: the consumption belongs to the application, whose Consumer span (the client's deliver, with RabbitMQ.Client's
+    // instrumentation) is the parent; a second Consumer span would count the processing twice (ADR 0011).
+    private Activity? StartProcess(string handler, Guid messageId, MessageOrder? order)
+    {
+        if (!WaybillActivity.Source.HasListeners())
+            return null;
+        List<KeyValuePair<string, object?>> tags =
+        [
+            new("messaging.operation.type", "process"),
+            new("messaging.operation.name", "process"),
+            new("messaging.message.id", messageId.ToString()),
+            new("waybill.inbox.handler", handler),
+        ];
+        if (order is { } ordered)
+        {
+            tags.Add(new("waybill.sequence", ordered.Sequence));
+            if (options.Value.RecordKeyAndTenantInTraces)
+                tags.Add(new("waybill.key", ordered.Key));
+        }
+        return WaybillActivity.Source.CreateActivity("process", ActivityKind.Internal, default(ActivityContext), tags, idFormat: ActivityIdFormat.W3C)?.Start();
+    }
+
+    private async Task<OrderedInboxResult> ProcessWithStrategyAsync(
+        string handler, Guid messageId, MessageOrder? order, Func<TContext, CancellationToken, Task> handle, Activity? process,
+        CancellationToken cancellationToken)
+    {
         // Inside the execution strategy, so a transient failure (including an ambiguous commit) retries the whole unit:
         // a commit that had in fact succeeded comes back as Duplicate, never as a second effect. What the sequence check
         // refused is logged once, after the strategy returns, however many times it ran.
@@ -47,6 +103,7 @@ internal sealed partial class DbContextInbox<TContext>(TContext context, ILogger
         {
             if (attempt++ > 0)
                 context.ChangeTracker.Clear();
+            process?.AddEvent(new ActivityEvent("waybill.attempt", tags: new ActivityTagsCollection { ["waybill.attempt"] = attempt }));
 
             await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct).ConfigureAwait(false);
             // A concurrent delivery of the same message waits here until the first transaction ends, then sees the row.
@@ -89,8 +146,11 @@ internal sealed partial class DbContextInbox<TContext>(TContext context, ILogger
         if (refused is { } applied && order is { } received)
         {
             if (result == OrderedInboxResult.Regressed)
-                LogRegression(logger, handler, received.Key, received.Sequence, applied.Sequence, messageId, applied.MessageId,
-                    applied.Sequence == received.Sequence ? Regression.Reused : Regression.Lower);
+            {
+                var regression = applied.Sequence == received.Sequence ? Regression.Reused : Regression.Lower;
+                LogRegression(logger, handler, received.Key, received.Sequence, applied.Sequence, messageId, applied.MessageId, regression);
+                metrics.RecordRegression(handler, regression == Regression.Reused ? "reused" : "lower");
+            }
             else
                 LogDuplicateBySequence(logger, handler, received.Key, received.Sequence, messageId);
         }

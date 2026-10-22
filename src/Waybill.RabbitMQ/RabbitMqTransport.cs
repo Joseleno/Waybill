@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
@@ -15,7 +16,7 @@ namespace Waybill.RabbitMQ;
 /// by the dispatcher) and the next batch opens a fresh one.
 /// </remarks>
 internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions> options, ILogger<RabbitMqTransport> logger)
-    : ITransport, IAsyncDisposable
+    : ITransport, ITransportTracing, IAsyncDisposable
 {
     internal const string KeyHeader = "waybill-key";
     internal const string SequenceHeader = "waybill-sequence";
@@ -65,13 +66,43 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
         for (var i = 0; i < batch.Count; i++)
         {
             if (!attempts[i].ChannelClosedByBroker)
+            {
                 results[i] = attempts[i].Result;
+            }
             else if (cancellationToken.IsCancellationRequested)
+            {
                 results[i] = PublishResult.RetryAfter(TransportFailure.ConfirmTimeout, "the publish timeout ended the isolation");
+            }
             else
+            {
+                batch[i].SendActivity?.AddEvent(new ActivityEvent("waybill.isolated"));
                 results[i] = await PublishAloneAsync(exchange, batch[i], cancellationToken).ConfigureAwait(false);
+            }
         }
         return results;
+    }
+
+    /// <summary>
+    /// The destination as the semantic conventions name it for RabbitMQ: <c>{exchange}:{routing key}</c>, or the part
+    /// that is not empty, or <c>amq.default</c>. The routing key is the message name.
+    /// </summary>
+    public string? Destination(OutgoingMessage message)
+    {
+        var exchange = options.Value.Exchange ?? "";
+        return (exchange.Length > 0, message.Name.Length > 0) switch
+        {
+            (true, true) => $"{exchange}:{message.Name}",
+            (true, false) => exchange,
+            (false, true) => message.Name,
+            _ => "amq.default",
+        };
+    }
+
+    public void AddTags(OutgoingMessage message, ICollection<KeyValuePair<string, object?>> tags)
+    {
+        tags.Add(new("messaging.system", "rabbitmq"));
+        tags.Add(new("messaging.destination.name", Destination(message)));
+        tags.Add(new("messaging.rabbitmq.destination.routing_key", message.Name));
     }
 
     private async Task<PublishResult> PublishAloneAsync(string exchange, OutgoingMessage message, CancellationToken cancellationToken)
@@ -128,8 +159,23 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
 
         try
         {
-            await channel.BasicPublishAsync(exchange, message.Name, mandatory: true, properties, message.Payload, cancellationToken)
-                .ConfigureAwait(false);
+            // The message's context is current while the client publishes (its span hangs from it): the dispatcher's
+            // send span, or, when there is none, a propagation activity. Set inside this per-message async method: an
+            // async method gives its caller the caller's execution context back when it returns, so Current never
+            // reaches the other messages of the batch nor the dispatcher.
+            var previous = Activity.Current;
+            using var propagation = message.SendActivity is null ? StartPropagation(message) : null;
+            if (message.SendActivity is { } send)
+                Activity.Current = send;
+            try
+            {
+                await channel.BasicPublishAsync(exchange, message.Name, mandatory: true, properties, message.Payload, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                Activity.Current = previous;
+            }
             return new Attempt(PublishResult.Confirmed, false);
         }
         catch (PublishReturnException returned)
@@ -161,6 +207,33 @@ internal sealed partial class RabbitMqTransport(IOptions<WaybillRabbitMqOptions>
             // Closed channel or connection: the outcome is unknown, so publish again. Never a defect of the message.
             return new Attempt(PublishResult.RetryAfter(TransportFailure.Connection, exception.Message), false);
         }
+    }
+
+    // A source with the client's publisher name: listeners pick sources by name, so it has listeners exactly when the
+    // client's own does. Nothing is ever started from it.
+    private static readonly ActivitySource s_clientPublisher = new(RabbitMQActivitySource.PublisherSourceName);
+
+    /// <summary>
+    /// While anything listens to the client's publisher source, the client opens a span of its own for each publish, with
+    /// <see cref="Activity.Current"/> as parent, and writes that span's traceparent over the message's. The dispatcher
+    /// has no Current, so the consumer would start a new trace. This puts the message's recorded context there: a
+    /// sourceless activity, child of it, that no exporter records. The client's span then hangs from an id that is not
+    /// exported, in the message's trace. Called inside the per-message async method, so Current never leaks out of it.
+    /// </summary>
+    /// <returns>The started activity, or null when nothing listens or the message has no valid W3C traceparent.</returns>
+    internal static Activity? StartPropagation(OutgoingMessage message)
+    {
+        if (!s_clientPublisher.HasListeners() || !message.Headers.TryGetValue("traceparent", out var traceParent))
+            return null;
+        message.Headers.TryGetValue("tracestate", out var traceState);
+        if (!ActivityContext.TryParse(traceParent, traceState, isRemote: true, out var parent))
+            return null;
+
+        var activity = new Activity("Waybill.Propagation");
+        activity.SetIdFormat(ActivityIdFormat.W3C); // even under a process-wide hierarchical default
+        activity.SetParentId(parent.TraceId, parent.SpanId, parent.TraceFlags);
+        activity.TraceStateString = parent.TraceState;
+        return activity.Start();
     }
 
     // 406 PRECONDITION_FAILED from the broker on a channel whose connection is still up: the broker refused something

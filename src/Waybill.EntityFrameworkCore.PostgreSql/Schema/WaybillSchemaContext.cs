@@ -69,6 +69,10 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
                 .HasFilter("sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq')");
             outbox.HasIndex(m => m.Key).HasDatabaseName("ix_outbox_blocked_keys")
                 .HasFilter("status = 'dlq' AND sequence IS NOT NULL");
+
+            // The count behind waybill.outbox.dlq. Named in HasIndex, not by HasDatabaseName: an unnamed index on Id would
+            // be the claim index above, reconfigured.
+            outbox.HasIndex(m => m.Id, "ix_outbox_dlq").HasFilter("status = 'dlq'");
         });
 
         // One row per key ever numbered, holding its last sequence. Never cleaned: starting a key again at 1 would look

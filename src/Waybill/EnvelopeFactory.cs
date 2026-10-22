@@ -28,8 +28,34 @@ internal static class EnvelopeFactory
 
         var id = MessageId.NewV7();
         var keyHash = key is null ? KeyHash.Of(id) : KeyHash.Of(key);
+        // After every check: a refused Enqueue opens nothing. The stored traceparent is the create span's, so what the
+        // message causes later hangs from it; without one (nothing listens, or nobody samples the caller), the caller's.
+        using var create = StartCreate(options, id, messageType.Name, key, tenantId);
         return new MessageEnvelope(id, messageType.Name, key, keyHash, payload, JsonContentType,
-            Headers(Activity.Current, correlationId, tenantId));
+            Headers(create ?? Activity.Current, correlationId, tenantId));
+    }
+
+    // A short span in the caller's flow, child of whatever is current, in W3C whatever the process default; closing it
+    // gives the caller its Current back. The message id goes in at creation, where a sampler can see it.
+    private static Activity? StartCreate(WaybillOptions options, Guid id, string name, string? key, string? tenantId)
+    {
+        if (!WaybillActivity.Source.HasListeners())
+            return null;
+        List<KeyValuePair<string, object?>> tags =
+        [
+            new("messaging.operation.type", "create"),
+            new("messaging.operation.name", "create"),
+            new("messaging.message.id", id.ToString()),
+            new("waybill.message.name", name),
+        ];
+        if (options.RecordKeyAndTenantInTraces)
+        {
+            if (key is not null)
+                tags.Add(new("waybill.key", key));
+            if (tenantId is not null)
+                tags.Add(new("waybill.tenant_id", tenantId));
+        }
+        return WaybillActivity.Source.CreateActivity("create", ActivityKind.Producer, default(ActivityContext), tags, idFormat: ActivityIdFormat.W3C)?.Start();
     }
 
     /// <summary>

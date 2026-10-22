@@ -42,6 +42,9 @@ internal sealed partial class WaybillDispatcherService(
 
     private async Task RunAsync(CancellationToken stoppingToken)
     {
+        // The loop inherits the execution context of whoever started the host, maybe inside a span that has ended since:
+        // nothing the dispatcher does (its SQL, its logs) belongs to it.
+        System.Diagnostics.Activity.Current = null;
         var databaseFailures = 0;
         var isolationVerified = false;
         long? orderingCheckedAt = null; // Environment.TickCount64 of the last ordering check

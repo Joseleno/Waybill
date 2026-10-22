@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Waybill.EntityFrameworkCore;
@@ -32,6 +33,7 @@ public static class WaybillEntityFrameworkCoreExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.TryAddScoped<IInbox<TContext>, DbContextInbox<TContext>>();
+        services.TryAddSingleton(sp => new InboxMetrics(sp.GetService<IMeterFactory>())); // once, whatever the contexts
         services.ConfigureDbContext<TContext>(options => options.AddInterceptors(InboxGuardInterceptor.Instance));
         return services;
     }
