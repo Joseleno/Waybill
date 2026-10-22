@@ -1,5 +1,6 @@
 using System.Transactions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -17,14 +18,35 @@ internal sealed partial class DbContextOutbox<TContext>(
     where TContext : DbContext
 {
     private bool _mappingVerified;
+    private bool _interceptorChecked;
+    private static int s_missingInterceptorLogged; // once per context type and process
 
     public Guid Enqueue<TMessage>(TMessage message, string? key = null, string? correlationId = null, string? tenantId = null)
         where TMessage : notnull
     {
         Verify(context, ref _mappingVerified);
+        if (key is not null && !_interceptorChecked)
+        {
+            _interceptorChecked = true;
+            NoteIfLockInterceptorMissing();
+        }
         var envelope = EnvelopeFactory.Create(options.Value, message, key, correlationId, tenantId);
         context.Add(OutboxRecord.From(envelope));
         return envelope.Id;
+    }
+
+    // A context built outside AddDbContext, AddDbContextPool or a context factory misses the interceptor that orders the
+    // key locks of a SaveChanges (ADR 0008). Nothing is lost or reordered without it: while ordering by key is on, a
+    // transaction enqueuing several keys can deadlock, and the database aborts it so it can be retried. Only a message
+    // with a key takes a key lock. Information, not a warning: contexts built by hand are the usual way to test with the
+    // fakes, and the producer cannot tell whether a dispatcher, maybe in another process, orders by key.
+    private void NoteIfLockInterceptorMissing()
+    {
+        var interceptors = context.GetService<IDbContextOptions>().FindExtension<CoreOptionsExtension>()?.Interceptors;
+        if (interceptors?.Contains(OutboxKeyLockInterceptor.Instance) == true)
+            return;
+        if (Interlocked.Exchange(ref s_missingInterceptorLogged, 1) == 0)
+            LogMissingLockInterceptor(logger, typeof(TContext).Name);
     }
 
     // Fail at Enqueue, with what to do, instead of letting messages silently miss the table or commit apart from
@@ -78,4 +100,8 @@ internal sealed partial class DbContextOutbox<TContext>(
     [LoggerMessage(EventId = 1, Level = LogLevel.Error,
         Message = "{Count} message(s) were enqueued on {Context} but never saved: SaveChanges was not called, or it failed. They were discarded.")]
     private static partial void LogPendingMessages(ILogger logger, int count, string context);
+
+    [LoggerMessage(EventId = 2, Level = LogLevel.Information,
+        Message = "{Context} was not registered with AddDbContext, AddDbContextPool or a context factory, so it lacks the interceptor AddWaybillOutbox adds. While ordering by key is on, transactions that enqueue several keys may deadlock and have to be retried.")]
+    private static partial void LogMissingLockInterceptor(ILogger logger, string context);
 }

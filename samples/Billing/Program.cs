@@ -1,6 +1,12 @@
 using System.Text.Json.Serialization;
 using Billing;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using RabbitMQ.Client;
+using Waybill;
 using Waybill.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -23,9 +29,23 @@ builder.Services.AddWaybillRabbitMQ(o =>
     o.Uri = new Uri(broker);
     o.Exchange = "events";
 });
-builder.Services.AddWaybillDispatcher<BillingDbContext>(); // same database as the context
+// Ordered by key: each invoice's messages go out in commit order, numbered, and Receipts checks the numbers.
+builder.Services.AddWaybillDispatcher<BillingDbContext>(o => o.OrderByKey = true); // same database as the context
 builder.Services.AddWaybillRetention<BillingDbContext>();
 builder.Services.AddHealthChecks().AddWaybillDispatcherCheck();
+
+// OpenTelemetry, in the sample only: Waybill reports through System.Diagnostics and depends on none of it. A payment's
+// trace runs from the HTTP request through Waybill's create and send spans and RabbitMQ.Client's publish, on to
+// Receipts. Listen to the incoming requests too: a request nobody samples takes the whole message trace with it. The
+// exporter reads OTEL_EXPORTER_OTLP_ENDPOINT, the compose's Aspire dashboard.
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService("billing"))
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddSource(WaybillDiagnostics.ActivitySourceName, RabbitMQActivitySource.PublisherSourceName)
+        .AddOtlpExporter())
+    .WithMetrics(metrics => metrics.AddMeter(WaybillDiagnostics.MeterName).AddOtlpExporter())
+    .WithLogging(logging => logging.AddOtlpExporter());
 
 var app = builder.Build();
 

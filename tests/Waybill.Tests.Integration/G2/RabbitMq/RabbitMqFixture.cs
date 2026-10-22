@@ -47,6 +47,12 @@ public sealed class RabbitMqFixture : IAsyncLifetime
         await channel.QueueBindAsync(queue, exchange, bindingKey);
     }
 
+    /// <inheritdoc cref="SampleTopology.DeclareAsync"/>
+    public Task<IReadOnlyDictionary<string, string>> DeclareSampleTopologyAsync() => SampleTopology.DeclareAsync(_connection!);
+
+    /// <inheritdoc cref="SampleTopology.QueueCountsAsync"/>
+    public Task<(long Messages, long Ready, long Unacked)> QueueCountsAsync(string queue) => SampleTopology.QueueCountsAsync(_container, queue);
+
     /// <summary>Drains up to <paramref name="max"/> messages from <paramref name="queue"/>.</summary>
     public async Task<List<BasicGetResult>> DrainAsync(string queue, int max = 1000)
     {

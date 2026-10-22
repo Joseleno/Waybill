@@ -19,7 +19,7 @@ Cada etapa termina num conjunto de testes, não numa data. A duração é estima
 | 4. Inbox | 1 semana | Concluído em Oct 4, 2026: G3 provada, incluindo consumidor que também produz; fake do inbox. A limpeza do inbox foi para a etapa 5, junto da do outbox |
 | 5. Limpeza e observabilidade | 3 a 4 dias | Concluído em Oct 5, 2026: retenção, métrica e health check (PR #8); carga longa verde em 5 h, depois de achar que o índice do claim fica inchado após uma transação longa e documentar a reconstrução (ADR 0004) |
 | 6. Exemplo executável | 1 semana | Concluído em Oct 5, 2026 (PR #9): exemplo validado por um estranho, ergonomia do registro revista (ADR 0005) |
-| 7. Documentação e release | 3 a 4 dias | v0.1.0-alpha publicada |
+| 7. Documentação e release | 3 a 4 dias | Concluído em Oct 6, 2026: v0.1.0-alpha publicada no nuget.org (PRs #11 e #12, tag assinada); `GUARANTEES.md` com rastreabilidade testada |
 
 Das quatro decisões que estavam abertas, três foram fechadas em Oct 4, 2026: a licença é Apache-2.0; a matriz é só .NET 10 e EF Core 10, com PostgreSQL 15+; e a ordenação fica na v0.2, porque o spike mediu o custo e ele não passou nos critérios escritos antes da medição. Falta a métrica mínima da v0.1, necessária só na etapa 5.
 
@@ -190,7 +190,7 @@ Ao travar uma linha que outra transação alterou e commitou, o PostgreSQL só r
 
 ## Ordenação — primeiro item do plano da v0.2
 
-Esta era a etapa 3b, condicional. O spike da etapa 0 disse que o custo não compensa na v0.1, então ela não entra no cronograma de oito semanas e vira o primeiro item do plano da v0.2. Fica aqui como insumo, com o que o spike deixou em aberto.
+Esta era a etapa 3b, condicional. O spike da etapa 0 disse que o custo não compensa na v0.1, então ela não entra no cronograma de oito semanas e vira o primeiro item do plano da v0.2. Fica aqui como insumo, com o que o spike deixou em aberto. As entregas e os cenários agora vivem na etapa 8 do `docs/plano-v0.2.md`, que vence esta seção.
 
 **Entregas**
 
@@ -317,9 +317,9 @@ Se uma frase do README descreve comportamento sem teste correspondente, ela sai 
 
 **Pronto quando**
 
-- [ ] O pacote instala num projeto novo e publica o primeiro evento seguindo só o README
-- [ ] Cada linha do `GUARANTEES.md` aponta para um teste nomeado no repositório
-- [ ] A v0.1.0-alpha está no NuGet com Source Link e símbolos funcionando
+- [x] O pacote instala num projeto novo e publica o primeiro evento seguindo só o README
+- [x] Cada linha do `GUARANTEES.md` aponta para um teste nomeado no repositório
+- [x] A v0.1.0-alpha está no NuGet com Source Link e símbolos funcionando
 
 ## Rastreabilidade
 

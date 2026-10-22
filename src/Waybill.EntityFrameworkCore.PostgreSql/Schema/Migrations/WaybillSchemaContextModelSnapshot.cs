@@ -23,6 +23,32 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.InboxKeyRow", b =>
+                {
+                    b.Property<string>("Handler")
+                        .HasColumnType("text")
+                        .HasColumnName("handler");
+
+                    b.Property<string>("Key")
+                        .HasColumnType("text")
+                        .HasColumnName("key");
+
+                    b.Property<Guid>("LastMessageId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("last_message_id");
+
+                    b.Property<long>("LastSeq")
+                        .HasColumnType("bigint")
+                        .HasColumnName("last_seq");
+
+                    b.HasKey("Handler", "Key")
+                        .HasName("pk_inbox_keys");
+
+                    b.ToTable("inbox_keys", "waybill");
+
+                    b.HasAnnotation("Npgsql:StorageParameter:fillfactor", 80);
+                });
+
             modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.InboxRow", b =>
                 {
                     b.Property<string>("Handler")
@@ -46,6 +72,40 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                         .HasDatabaseName("ix_inbox_processed_at");
 
                     b.ToTable("inbox", "waybill");
+                });
+
+            modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.InstanceRow", b =>
+                {
+                    b.Property<string>("Owner")
+                        .HasColumnType("text")
+                        .HasColumnName("owner");
+
+                    b.Property<DateTimeOffset>("HeartbeatAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("heartbeat_at");
+
+                    b.HasKey("Owner")
+                        .HasName("pk_outbox_instances");
+
+                    b.ToTable("outbox_instances", "waybill");
+                });
+
+            modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.KeyRow", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasColumnType("text")
+                        .HasColumnName("key");
+
+                    b.Property<long>("Seq")
+                        .HasColumnType("bigint")
+                        .HasColumnName("seq");
+
+                    b.HasKey("Key")
+                        .HasName("pk_outbox_keys");
+
+                    b.ToTable("outbox_keys", "waybill");
+
+                    b.HasAnnotation("Npgsql:StorageParameter:fillfactor", 80);
                 });
 
             modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.OutboxRow", b =>
@@ -85,6 +145,12 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("headers");
 
+                    b.Property<bool?>("IsHead")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("is_head");
+
                     b.Property<string>("Key")
                         .HasColumnType("text")
                         .HasColumnName("key");
@@ -96,6 +162,14 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     b.Property<DateTimeOffset?>("LeaseUntil")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("lease_until");
+
+                    b.PrimitiveCollection<string[]>("LockKeys")
+                        .HasColumnType("text[]")
+                        .HasColumnName("lock_keys");
+
+                    b.Property<DateTimeOffset?>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_attempt_at");
 
                     b.Property<string>("Owner")
                         .HasColumnType("text")
@@ -109,6 +183,14 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
                     b.Property<DateTimeOffset?>("PublishedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("published_at");
+
+                    b.Property<DateTimeOffset?>("ReleasedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("released_at");
+
+                    b.Property<string>("ReleasedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("released_by");
 
                     b.Property<long?>("Sequence")
                         .HasColumnType("bigint")
@@ -131,11 +213,77 @@ namespace Waybill.EntityFrameworkCore.Schema.Migrations
 
                     b.HasIndex("Id")
                         .HasDatabaseName("ix_outbox_claimable")
-                        .HasFilter("status IN ('pending', 'claimed')");
+                        .HasFilter("status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)");
+
+                    b.HasIndex("Key")
+                        .HasDatabaseName("ix_outbox_blocked_keys")
+                        .HasFilter("status = 'dlq' AND sequence IS NOT NULL");
+
+                    b.HasIndex("Key", "Sequence")
+                        .HasDatabaseName("ix_outbox_key_sequence")
+                        .HasFilter("sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq')");
+
+                    b.HasIndex(new[] { "Id" }, "ix_outbox_dlq")
+                        .HasFilter("status = 'dlq'");
 
                     b.ToTable("outbox", "waybill", t =>
                         {
-                            t.HasCheckConstraint("ck_outbox_status", "status IN ('pending', 'claimed', 'published', 'dlq')");
+                            t.HasCheckConstraint("ck_outbox_status", "status IN ('pending', 'claimed', 'published', 'dlq', 'released')");
+                        });
+                });
+
+            modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.PartitionRow", b =>
+                {
+                    b.Property<int>("Partition")
+                        .HasColumnType("integer")
+                        .HasColumnName("partition");
+
+                    b.Property<long>("Epoch")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("epoch");
+
+                    b.Property<DateTimeOffset?>("LeaseUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_until");
+
+                    b.Property<string>("Owner")
+                        .HasColumnType("text")
+                        .HasColumnName("owner");
+
+                    b.HasKey("Partition")
+                        .HasName("pk_outbox_partitions");
+
+                    b.ToTable("outbox_partitions", "waybill");
+                });
+
+            modelBuilder.Entity("Waybill.EntityFrameworkCore.Schema.SettingsRow", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("clock_timestamp()");
+
+                    b.Property<TimeSpan>("PartitionLease")
+                        .HasColumnType("interval")
+                        .HasColumnName("partition_lease");
+
+                    b.Property<int>("Partitions")
+                        .HasColumnType("integer")
+                        .HasColumnName("partitions");
+
+                    b.HasKey("Id")
+                        .HasName("pk_settings");
+
+                    b.ToTable("settings", "waybill", t =>
+                        {
+                            t.HasCheckConstraint("ck_settings_single_row", "id = 1");
                         });
                 });
 #pragma warning restore 612, 618

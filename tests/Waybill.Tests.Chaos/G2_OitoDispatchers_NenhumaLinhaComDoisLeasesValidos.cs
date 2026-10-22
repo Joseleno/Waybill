@@ -6,9 +6,10 @@ using Waybill.Tests.Integration.G2;
 namespace Waybill.Tests.Chaos;
 
 // Eight dispatchers on one outbox with a short lease, a transport that sometimes stalls past the lease (forcing
-// reclaims and late, fenced markings) and sometimes fails. The oracle is a trigger on waybill.outbox that records
-// every claim and when it ended: for each row, a claim may only start after the previous one ended or its lease
-// ran out. No hook in production code.
+// reclaims and late, fenced markings), sometimes fails, and sometimes returns a batch as unroutable (a short wait
+// after each basic.return, ADR 0006). The oracle is a trigger on waybill.outbox that records every claim and when it
+// ended: for each row, a claim may only start after the previous one ended or its lease ran out, and never while the
+// row still waits after a return. No hook in production code.
 [Collection(PostgresCollection.Name)]
 public sealed class G2_OitoDispatchers_NenhumaLinhaComDoisLeasesValidos(PostgresFixture postgres)
 {
@@ -29,6 +30,7 @@ public sealed class G2_OitoDispatchers_NenhumaLinhaComDoisLeasesValidos(Postgres
         await DispatcherHarness.EnqueueAsync(database, messages);
 
         var stalls = 0;
+        var returns = 0;
         var transport = new FakeTransport(async (_, batch, _) =>
         {
             var roll = Random.Shared.NextDouble();
@@ -41,6 +43,11 @@ public sealed class G2_OitoDispatchers_NenhumaLinhaComDoisLeasesValidos(Postgres
             {
                 throw new IOException("connection reset by broker");
             }
+            else if (roll < 0.25)
+            {
+                Interlocked.Add(ref returns, batch.Count);
+                return batch.Select(_ => PublishResult.Returned("312 NO_ROUTE")).ToList();
+            }
             return batch.Select(_ => PublishResult.Confirmed).ToList();
         });
         var options = DispatcherHarness.Options(database, o =>
@@ -48,6 +55,9 @@ public sealed class G2_OitoDispatchers_NenhumaLinhaComDoisLeasesValidos(Postgres
             o.BatchSize = 50;
             o.PublishTimeout = TimeSpan.FromMilliseconds(200);
             o.LeaseMargin = TimeSpan.FromMilliseconds(150);   // lease = 350 ms
+            o.ReturnBackoff = TimeSpan.FromMilliseconds(30);
+            o.MaxReturnBackoff = TimeSpan.FromMilliseconds(120);
+            o.MaxReturns = 1_000;                            // returns are retried here, never dead-lettered
         });
 
         await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
@@ -83,30 +93,35 @@ public sealed class G2_OitoDispatchers_NenhumaLinhaComDoisLeasesValidos(Postgres
             """);
         var owners = await database.ScalarAsync("SELECT count(DISTINCT owner) FROM claim_audit");
         var reclaims = await database.ScalarAsync("SELECT count(*) FROM claim_audit WHERE fence > 1");
+        var early = await database.ScalarAsync("SELECT count(*) FROM claim_audit WHERE early");
+        var spent = await database.ScalarAsync("SELECT coalesce(sum(attempts), 0) FROM waybill.outbox");
         var received = transport.Received.Select(m => m.MessageId).Distinct().Count();
 
         TestContext.Current.SendDiagnosticMessage(
-            $"produced {produced}, received {received}, stalls {stalls}, reclaims {reclaims}, owners {owners}, overlaps {overlaps}");
+            $"produced {produced}, received {received}, stalls {stalls}, returns {returns} (spent {spent}), early {early}, reclaims {reclaims}, owners {owners}, overlaps {overlaps}");
 
         Assert.Equal(produced, await database.CountAsync("published"));
         Assert.Equal(produced, received);              // at least once, each
         Assert.Equal(8, owners);                       // every instance did work
         Assert.True(stalls > 0 && reclaims > 0, "the scenario produced no stalled publish or reclaim");
         Assert.Equal(0, overlaps);                     // never two valid leases on one row
-        Assert.Equal(0, await database.ScalarAsync("SELECT coalesce(max(attempts), 0) FROM waybill.outbox"));
+        Assert.Equal(0, early);                        // never claimed while waiting after a return
+        // Only returns spend attempts (a fenced return spends none); transport failures and reclaims never do.
+        Assert.True(returns > 0 && spent > 0 && spent <= returns, $"returns {returns}, attempts spent {spent}");
     }
 
-    // The wall clock of Docker/WSL2 steps back up to ~1.7 ms (stage 0 spike), hence the 5 ms tolerance; a real
+    // The wall clock of Docker/WSL2 steps back up to ~1.7 ms (stage 0 spike), hence the 5 ms tolerances; a real
     // double claim overlaps by up to the whole lease (350 ms).
     private const string AuditTriggerSql = """
-        CREATE TABLE claim_audit (id uuid, fence bigint, owner text, claimed_at timestamptz, lease_until timestamptz, ended_at timestamptz);
+        CREATE TABLE claim_audit (id uuid, fence bigint, owner text, claimed_at timestamptz, lease_until timestamptz, ended_at timestamptz, early boolean);
         CREATE FUNCTION audit_claims() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF OLD.status = 'claimed' AND (NEW.status <> 'claimed' OR NEW.fence <> OLD.fence) THEN
                 UPDATE claim_audit SET ended_at = clock_timestamp() WHERE id = OLD.id AND fence = OLD.fence AND ended_at IS NULL;
             END IF;
             IF NEW.status = 'claimed' AND NEW.fence <> OLD.fence THEN
-                INSERT INTO claim_audit (id, fence, owner, claimed_at, lease_until) VALUES (NEW.id, NEW.fence, NEW.owner, clock_timestamp(), NEW.lease_until);
+                INSERT INTO claim_audit (id, fence, owner, claimed_at, lease_until, early)
+                VALUES (NEW.id, NEW.fence, NEW.owner, clock_timestamp(), NEW.lease_until, coalesce(OLD.next_attempt_at > clock_timestamp() + interval '5 milliseconds', false));
             END IF;
             RETURN NEW;
         END $$;

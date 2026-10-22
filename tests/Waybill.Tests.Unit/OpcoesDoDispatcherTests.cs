@@ -14,6 +14,11 @@ public sealed class OpcoesDoDispatcherTests
         { "MetricsInterval", o => o.MetricsInterval = TimeSpan.FromSeconds(-1) },
         { "MetricsInterval", o => o.MetricsInterval = TimeSpan.FromDays(2) },
         { "PollingInterval", o => o.PollingInterval = TimeSpan.FromDays(2) },
+        { "ReturnBackoff", o => o.ReturnBackoff = TimeSpan.FromSeconds(-1) },
+        { "MaxReturnBackoff", o => o.MaxReturnBackoff = TimeSpan.FromSeconds(30) }, // below the 1 min ReturnBackoff
+        { "MaxReturnBackoff", o => o.MaxReturnBackoff = TimeSpan.FromDays(2) },
+        { "Partitions", o => o.Partitions = 0 },
+        { "Partitions", o => o.Partitions = 1025 },
     };
 
     [Theory]
@@ -31,5 +36,121 @@ public sealed class OpcoesDoDispatcherTests
 
         var error = Assert.Throws<OptionsValidationException>(() => services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
         Assert.Contains($"WaybillDispatcherOptions.{option}", error.Message);
+    }
+
+    public static TheoryData<string, Action<WaybillDispatcherOptions>> ValidasNaFronteira => new()
+    {
+        { "no wait after a return, as in 0.1", o => { o.ReturnBackoff = TimeSpan.Zero; o.MaxReturnBackoff = TimeSpan.Zero; } },
+        { "a one-day ceiling", o => o.MaxReturnBackoff = TimeSpan.FromDays(1) },
+        { "wait equal to its ceiling", o => { o.ReturnBackoff = TimeSpan.FromDays(1); o.MaxReturnBackoff = TimeSpan.FromDays(1); } },
+    };
+
+    [Theory]
+    [MemberData(nameof(ValidasNaFronteira))]
+    public void Dispatcher_EsperaEntreRetornosNaFronteira_SobeNormalmente(string why, Action<WaybillDispatcherOptions> configure)
+    {
+        using var services = new ServiceCollection()
+            .AddLogging()
+            .AddWaybillDispatcher(o =>
+            {
+                o.ConnectionString = "Host=localhost";
+                configure(o);
+            })
+            .BuildServiceProvider();
+
+        Assert.NotNull(services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+        Assert.False(string.IsNullOrEmpty(why));
+    }
+
+    // The partition lease is checked only when ordering is on: a dispatcher that does not order must not fail because
+    // PublishTimeout grew past half of a lease it never uses.
+    [Theory]
+    [InlineData(false, 59, true)]
+    [InlineData(true, 60, true)]   // exactly twice the default 30 s lease
+    [InlineData(true, 59, false)]
+    [InlineData(true, 86_401, false)]
+    [InlineData(false, 0, false)]  // also the period of the settings check when ordering is off
+    public void Dispatcher_PartitionLease_SoValidadoComOrdenacao(bool orderByKey, int partitionLeaseSeconds, bool valid)
+    {
+        using var services = new ServiceCollection()
+            .AddLogging()
+            .AddWaybill(o =>
+            {
+                o.MaxPayloadBytes = 1024;
+            })
+            .AddWaybillDispatcher(o =>
+            {
+                o.OrderByKey = orderByKey;
+                o.ConnectionString = "Host=localhost";
+                o.PartitionLease = TimeSpan.FromSeconds(partitionLeaseSeconds);
+            })
+            .BuildServiceProvider();
+
+        if (valid)
+        {
+            Assert.NotNull(services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+            return;
+        }
+        var error = Assert.Throws<OptionsValidationException>(() => services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+        Assert.Contains("WaybillDispatcherOptions.PartitionLease", error.Message);
+    }
+
+    [Fact]
+    public void Dispatcher_PartitionLeaseComFracaoDeMilissegundo_FalhaComOrdenacao()
+    {
+        using var services = new ServiceCollection()
+            .AddLogging()
+            .AddWaybill(o =>
+            {
+                o.MaxPayloadBytes = 1024;
+            })
+            .AddWaybillDispatcher(o =>
+            {
+                o.OrderByKey = true;
+                o.ConnectionString = "Host=localhost";
+                o.PartitionLease = TimeSpan.FromSeconds(60) + TimeSpan.FromTicks(1);
+            })
+            .BuildServiceProvider();
+
+        var error = Assert.Throws<OptionsValidationException>(() => services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+        Assert.Contains("whole number of milliseconds", error.Message);
+    }
+
+    [Fact]
+    public void Dispatcher_MaxPerKey_DefaultUm() => Assert.Equal(1, new WaybillDispatcherOptions().MaxPerKey);
+
+    // M ≥ 2 needs ordering: without it there are no keys' series to send in rounds, and a value above 1 left over from
+    // an ordered deployment would silently mean nothing.
+    [Theory]
+    [InlineData(false, 1, true)]
+    [InlineData(true, 1, true)]
+    [InlineData(true, 100, true)]
+    [InlineData(true, 0, false)]
+    [InlineData(true, 101, false)]
+    [InlineData(false, 2, false)]
+    [InlineData(false, 0, false)]
+    public void Dispatcher_MaxPerKey_DeUmACemESoComOrdenacao(bool orderByKey, int maxPerKey, bool valid)
+    {
+        using var services = new ServiceCollection()
+            .AddLogging()
+            .AddWaybill(o =>
+            {
+                o.MaxPayloadBytes = 1024;
+            })
+            .AddWaybillDispatcher(o =>
+            {
+                o.OrderByKey = orderByKey;
+                o.ConnectionString = "Host=localhost";
+                o.MaxPerKey = maxPerKey;
+            })
+            .BuildServiceProvider();
+
+        if (valid)
+        {
+            Assert.NotNull(services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+            return;
+        }
+        var error = Assert.Throws<OptionsValidationException>(() => services.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value);
+        Assert.Contains("WaybillDispatcherOptions.MaxPerKey", error.Message);
     }
 }

@@ -41,6 +41,30 @@ public sealed class FakeOutboxEquivalenceTests(PostgresFixture postgres)
         }, real);
     }
 
+    // The fake builds envelopes with the same factory: under a listened request, the same create span.
+    [Fact]
+    public async Task FakeOutbox_EquivalenteAoReal_SpanDeCriacao()
+    {
+        var database = await TestDatabase.CreateAsync(postgres);
+        await using var realServices = database.Services();
+        await using var fakeServices = FakeServices(database);
+
+        foreach (var services in new[] { realServices, fakeServices })
+        {
+            using var recorder = new TraceRecorder(WaybillDiagnostics.ActivitySourceName);
+            using (recorder.StartRoot())
+            {
+                await using var scope = services.CreateAsyncScope();
+                scope.ServiceProvider.GetRequiredService<IOutbox<AppDbContext>>().Enqueue(new InvoicePaid(Guid.NewGuid(), 1m));
+                await scope.ServiceProvider.GetRequiredService<AppDbContext>().SaveChangesAsync(TestContext.Current.CancellationToken);
+            }
+
+            var create = Assert.Single(recorder.Stopped);
+            Assert.Equal("create", create.OperationName);
+            Assert.Equal(recorder.Root.SpanId, create.ParentSpanId);
+        }
+    }
+
     [Fact]
     public async Task FakeOutbox_EquivalenteAoReal_ValidacaoNoEnqueue()
     {

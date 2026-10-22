@@ -4,6 +4,8 @@ namespace Waybill.Tests.Integration.G2;
 
 // basic.return (unroutable) has its own attempt budget: each return spends one, the last one sends the message to
 // the DLQ with the broker's reason. Unlike a transport failure, it is not retried forever.
+// With ReturnBackoff = 0 the message is claimable again at once, as in v0.1; the growing wait is proven in
+// G2_Returned_EspacamentoCrescenteAteOTeto.
 [Collection(PostgresCollection.Name)]
 public sealed class G2_Returned_OrcamentoProprioDepoisDlq(PostgresFixture postgres)
 {
@@ -16,7 +18,12 @@ public sealed class G2_Returned_OrcamentoProprioDepoisDlq(PostgresFixture postgr
         await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
         var transport = new FakeTransport((_, batch, _) => Task.FromResult<IReadOnlyList<PublishResult>>(
             batch.Select(_ => new PublishResult(PublishStatus.Returned, "312 NO_ROUTE")).ToList()));
-        var dispatcher = DispatcherHarness.Create(dataSource, transport, DispatcherHarness.Options(database, o => o.MaxReturns = 3));
+        var dispatcher = DispatcherHarness.Create(dataSource, transport, DispatcherHarness.Options(database, o =>
+        {
+            o.MaxReturns = 3;
+            o.ReturnBackoff = TimeSpan.Zero;
+            o.MaxReturnBackoff = TimeSpan.Zero;
+        }));
 
         for (var attempt = 1; attempt <= 2; attempt++)
         {

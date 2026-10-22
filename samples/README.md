@@ -25,9 +25,9 @@ POST /invoices/{id}/payments
 
 ## Prerequisites
 
-- Docker with Compose v2 (`docker compose up --wait`). Ports 8080, 8081 and 15672 must be free; if one is
-  taken, set `BILLING_PORT`, `RECEIPTS_PORT` or `RABBITMQ_UI_PORT` before `docker compose up` (the scripts read
-  `BILLING` and `RECEIPTS` for the URLs).
+- Docker with Compose v2 (`docker compose up --wait`). Ports 8080, 8081, 15672 and 18888 must be free; if one is
+  taken, set `BILLING_PORT`, `RECEIPTS_PORT`, `RABBITMQ_UI_PORT` or `DASHBOARD_PORT` before `docker compose up` (the
+  scripts read `BILLING`, `RECEIPTS` and `DASHBOARD` for the URLs).
 - To run the scripts: Bash (on Windows, Git Bash or WSL) or PowerShell 7 (`pwsh`).
 - To run the sample's tests: the .NET 10 SDK.
 
@@ -69,10 +69,20 @@ again, even concurrently, returns `409` and publishes nothing; so does creating 
 
 What to look at:
 
+- **The trace:** the Aspire dashboard at http://localhost:18888, "Traces". The payment's trace starts with
+  `POST /invoices/{id}/payments` in `billing` and goes on, in one trace, through:
+  - Waybill's `create` (at `Enqueue`) and `send` (the dispatcher's publish, with `waybill.send.outcome`);
+  - RabbitMQ.Client's `publish` and, in `receipts`, its `deliver`;
+  - the inbox's `process`, with `waybill.inbox.result`;
+  - the second event's `create` and `send` from Receipts.
+
+  The dispatcher publishes after the request has returned, so the `send` spans start after the request's span ends.
+  "Metrics" has Waybill's gauges and counters (`waybill.outbox.*`, `waybill.inbox.regressions`), and "Structured" the
+  logs of both services. Only this sample depends on OpenTelemetry; Waybill reports through `System.Diagnostics`.
 - **The events:** the RabbitMQ UI at http://localhost:15672 (user `waybill`, password `waybill`), queue `audit`,
   "Get messages". Waybill sets `message_id` (the id the inbox deduplicates on), `type` (the registered name),
-  `content_type`, `timestamp`, and the headers `waybill-key` and, when the publishing code runs inside a trace,
-  `traceparent`. `x-dotnet-pub-seq-no` comes from the RabbitMQ client; the broker adds
+  `content_type`, `timestamp`, and the headers `waybill-key`, `waybill-sequence` and `traceparent`, the context of
+  the payment's trace. `x-dotnet-pub-seq-no` comes from the RabbitMQ client; the broker adds
   `x-acquired-count` once a message has been fetched.
 - **The outboxes** (one per service):
   ```
@@ -171,6 +181,22 @@ at boot from [`rabbitmq/definitions.json`](rabbitmq/definitions.json):
 - the `events` exchange;
 - the `receipts.invoice-paid` queue bound to `billing.invoice-paid.v1`, with its dead-letter queue;
 - the `audit` queue bound to `#`.
+
+Billing orders each invoice's messages by key (`OrderByKey`), and Receipts checks their sequence in its inbox
+(`ProcessInOrderAsync`). A message older than one already applied for its invoice is not applied: the consumer sends it
+to `receipts.invoice-paid.dead`, and the warning with EventId 50 in the Receipts log says why. That promise rests on the
+queue's arguments, all in `definitions.json` (docs/OPERATIONS.md, "Sequence verification in the inbox"):
+
+- `x-single-active-consumer`: one consumer at a time, so a second Receipts instance waits instead of taking messages out
+  of order;
+- `x-dead-letter-strategy: at-least-once` with `x-overflow: reject-publish`: a rejected message is never dropped on its
+  way to the dead-letter queue (without `reject-publish`, RabbitMQ falls back to at-most-once and only logs it);
+- `x-overflow: reject-publish` on the dead-letter queue: full, it holds new dead letters back instead of dropping its
+  oldest.
+
+RabbitMQ keeps a queue's arguments: after pulling a version of the sample with new ones, recreate the broker and the
+databases with `docker compose down -v` (the smoke script checks the arguments and says so). The databases need it too
+while v0.2 is unreleased: its schema migration still changes.
 
 ## Clean up
 

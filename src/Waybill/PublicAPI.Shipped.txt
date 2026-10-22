@@ -59,3 +59,21 @@ static Waybill.PublishResult.operator ==(Waybill.PublishResult left, Waybill.Pub
 static Microsoft.Extensions.DependencyInjection.WaybillServiceCollectionExtensions.AddWaybill(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Waybill.WaybillOptions!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 ~override Waybill.PublishResult.Equals(object obj) -> bool
 ~override Waybill.PublishResult.ToString() -> string
+Waybill.OutgoingMessage.Sequence.get -> long?
+Waybill.OutgoingMessage.Sequence.init -> void
+Waybill.MessageOrder
+Waybill.MessageOrder.Equals(Waybill.MessageOrder other) -> bool
+Waybill.MessageOrder.Key.get -> string!
+Waybill.MessageOrder.MessageOrder() -> void
+Waybill.MessageOrder.MessageOrder(string! key, long sequence) -> void
+Waybill.MessageOrder.Sequence.get -> long
+override Waybill.MessageOrder.GetHashCode() -> int
+static Waybill.MessageOrder.operator !=(Waybill.MessageOrder left, Waybill.MessageOrder right) -> bool
+static Waybill.MessageOrder.operator ==(Waybill.MessageOrder left, Waybill.MessageOrder right) -> bool
+~override Waybill.MessageOrder.Equals(object obj) -> bool
+~override Waybill.MessageOrder.ToString() -> string
+Waybill.WaybillDiagnostics
+const Waybill.WaybillDiagnostics.MeterName = "Waybill" -> string!
+const Waybill.WaybillDiagnostics.ActivitySourceName = "Waybill" -> string!
+Waybill.WaybillOptions.RecordKeyAndTenantInTraces.get -> bool
+Waybill.WaybillOptions.RecordKeyAndTenantInTraces.set -> void

@@ -1,5 +1,11 @@
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using RabbitMQ.Client;
 using Receipts;
+using Waybill;
 using Waybill.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -26,6 +32,17 @@ builder.Services.AddWaybillRabbitMQ(o =>
 builder.Services.AddWaybillDispatcher<ReceiptsDbContext>();
 builder.Services.AddWaybillRetention<ReceiptsDbContext>();
 builder.Services.AddHealthChecks().AddWaybillDispatcherCheck();
+
+// OpenTelemetry, in the sample only (see Billing). RabbitMQ.Client's subscriber source opens a deliver span around each
+// delivery, child of the publisher's; the inbox's process span hangs from it, in the payment's trace.
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService("receipts"))
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddSource(WaybillDiagnostics.ActivitySourceName, RabbitMQActivitySource.PublisherSourceName, RabbitMQActivitySource.SubscriberSourceName)
+        .AddOtlpExporter())
+    .WithMetrics(metrics => metrics.AddMeter(WaybillDiagnostics.MeterName).AddOtlpExporter())
+    .WithLogging(logging => logging.AddOtlpExporter());
 
 var app = builder.Build();
 

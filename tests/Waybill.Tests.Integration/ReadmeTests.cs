@@ -1,8 +1,16 @@
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using Waybill.EntityFrameworkCore;
+using Waybill.EntityFrameworkCore.Dispatching;
+using Waybill.RabbitMQ;
 
 namespace Waybill.Tests.Integration;
 
@@ -48,25 +56,100 @@ public sealed partial class ReadmeTests(PostgresFixture postgres)
 
         Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox"));
 
-        var root = FindRoot();
-        var snippet = ApiSnippet().Match(File.ReadAllText(Path.Combine(root, "README.md")));
-        Assert.True(snippet.Success, "README.md has no <!-- api --> code block");
-        var code = snippet.Groups[1].Value.Split('\n')
-            .Select(line => line.Trim())
-            .Where(line => line.Length > 0 && !line.StartsWith("//", StringComparison.Ordinal))
-            .ToArray();
-        var sources = File.ReadAllText(Path.Combine(root, "tests/Waybill.Tests.Integration/ReadmeTests.cs"))
-            + File.ReadAllText(Path.Combine(root, "tests/Waybill.Tests.Integration/TestModel.cs"));
-        var known = sources.Split('\n').Select(line => line.Trim()).ToHashSet();
-
-        var missing = code.Where(line => !known.Contains(StripComment(line))).ToArray();
-        Assert.Empty(missing);
+        var code = SnippetLines(ApiSnippet(), "api");
+        Assert.Empty(MissingFromTests(code));
         // Ten lines of Waybill: braces, usings and the System.Text.Json context of the messages do not count.
         var counted = code.Count(line => line is not ("{" or "}" or "});")
             && !line.StartsWith("using ", StringComparison.Ordinal)
             && !line.StartsWith("[JsonSerializable", StringComparison.Ordinal)
             && !line.Contains(": JsonSerializerContext", StringComparison.Ordinal));
         Assert.True(counted <= 10, $"The README API takes {counted} lines, more than ten");
+    }
+
+    // The README's "Ordering by key" section. Every line must be in this file (the Enqueue line runs in the test above).
+    // The dispatcher line is registered and read back; the consumer line runs against a real database, on deliveries
+    // built as RabbitMQ.Client hands them over, and the one older than the applied one comes back Regressed.
+    [Fact]
+    public async Task Readme_Ordenacao_Compila()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        var connectionString = database.ConnectionString;
+        await WaybillSchema.MigrateAsync(connectionString, ct);
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDbContext<AppDbContext>(o => o.UseNpgsql(connectionString));
+        services.AddWaybill(o =>
+        {
+            o.MaxPayloadBytes = 16 * 1024;
+            o.AddMessage("billing.invoice-paid.v1", AppJson.Default.InvoicePaid);
+        });
+        services.AddWaybillOutbox<AppDbContext>();
+        services.AddWaybillInbox<AppDbContext>();
+        services.AddWaybillRabbitMQ(o => { o.Uri = new Uri("amqp://localhost"); o.Exchange = "events"; });
+        services.AddWaybillDispatcher<AppDbContext>(o => o.OrderByKey = true);
+
+        await using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
+        Assert.True(provider.GetRequiredService<IOptions<WaybillDispatcherOptions>>().Value.OrderByKey);
+        var invoiceId = Guid.NewGuid();
+        var results = new List<OrderedInboxResult>();
+        foreach (var args in new[] { Delivery(invoiceId, 2), Delivery(invoiceId, 1) })
+        {
+            await using var scope = provider.CreateAsyncScope();
+            var inbox = scope.ServiceProvider.GetRequiredService<IInbox<AppDbContext>>();
+
+            var result = await inbox.ProcessInOrderAsync("receipts", args.BasicProperties.GetWaybillMessageId(),
+                args.BasicProperties.GetWaybillOrder(), (db, ct) => ApplyAsync(db, args.Body, ct), ct);
+            results.Add(result);
+        }
+
+        Assert.Equal([OrderedInboxResult.Processed, OrderedInboxResult.Regressed], results);
+        Assert.Equal(1, await database.ScalarAsync("SELECT count(*) FROM invoices"));
+        Assert.Empty(MissingFromTests(SnippetLines(OrderingSnippet(), "ordering")));
+    }
+
+    // A delivery as RabbitMQ.Client hands it to a consumer, with the headers the Waybill transport writes: header strings
+    // arrive from the broker as bytes.
+    private static BasicDeliverEventArgs Delivery(Guid invoiceId, long sequence)
+    {
+        var properties = new BasicProperties
+        {
+            MessageId = Guid.CreateVersion7().ToString(),
+            Headers = new Dictionary<string, object?>
+            {
+                ["waybill-key"] = Encoding.UTF8.GetBytes(invoiceId.ToString()),
+                ["waybill-sequence"] = Encoding.UTF8.GetBytes(sequence.ToString(CultureInfo.InvariantCulture)),
+            },
+        };
+        var body = JsonSerializer.SerializeToUtf8Bytes(new InvoicePaid(invoiceId, sequence), AppJson.Default.InvoicePaid);
+        return new BasicDeliverEventArgs("consumer", (ulong)sequence, false, "events", "billing.invoice-paid.v1", properties, body);
+    }
+
+    private static Task ApplyAsync(AppDbContext db, ReadOnlyMemory<byte> body, CancellationToken ct)
+    {
+        var paid = JsonSerializer.Deserialize(body.Span, AppJson.Default.InvoicePaid)!;
+        db.Invoices.Add(new Invoice { Number = "INV-" + paid.Amount.ToString(CultureInfo.InvariantCulture), Amount = paid.Amount });
+        return Task.CompletedTask;
+    }
+
+    private static string[] SnippetLines(Regex block, string name)
+    {
+        var snippet = block.Match(File.ReadAllText(Path.Combine(FindRoot(), "README.md")));
+        Assert.True(snippet.Success, $"README.md has no <!-- {name} --> code block");
+        return snippet.Groups[1].Value.Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith("//", StringComparison.Ordinal))
+            .ToArray();
+    }
+
+    // The README lines that appear in no line of this file or of the test model.
+    private static string[] MissingFromTests(string[] code)
+    {
+        var root = FindRoot();
+        var sources = File.ReadAllText(Path.Combine(root, "tests/Waybill.Tests.Integration/ReadmeTests.cs"))
+            + File.ReadAllText(Path.Combine(root, "tests/Waybill.Tests.Integration/TestModel.cs"));
+        var known = sources.Split('\n').Select(line => line.Trim()).ToHashSet();
+        return code.Where(line => !known.Contains(StripComment(line))).ToArray();
     }
 
     // A trailing "// comment" in the README explains the line; the code before it is what must exist.
@@ -84,6 +167,9 @@ public sealed partial class ReadmeTests(PostgresFixture postgres)
 
     [GeneratedRegex(@"<!-- api -->\s*```csharp\r?\n(.*?)```", RegexOptions.Singleline)]
     private static partial Regex ApiSnippet();
+
+    [GeneratedRegex(@"<!-- ordering -->\s*```csharp\r?\n(.*?)```", RegexOptions.Singleline)]
+    private static partial Regex OrderingSnippet();
 
     [GeneratedRegex(@"\s+//.*$")]
     private static partial Regex TrailingComment();

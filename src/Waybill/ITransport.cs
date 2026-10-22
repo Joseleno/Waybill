@@ -16,6 +16,14 @@ namespace Waybill;
 /// next cycle. An implementation must therefore tolerate a previous, abandoned call still running when the next one
 /// starts.
 /// </para>
+/// <para>
+/// With ordering by key and <c>MaxPerKey</c> above 1, the dispatcher publishes a batch in rounds: several calls in a
+/// row, each one only after the previous one returned, each carrying at most one ordered message of a key, and all of
+/// them within the batch's publish timeout, so a later call has only what the earlier ones left of it. The k-th message
+/// of a key is handed over only after its (k−1)-th came back <see cref="PublishStatus.Confirmed"/>: ordering relies on
+/// <c>Confirmed</c> meaning that the broker holds the message and orders it before any message published after,
+/// on any channel or connection, not that it was buffered on the client.
+/// </para>
 /// </remarks>
 public interface ITransport
 {
@@ -35,17 +43,35 @@ public sealed class OutgoingMessage
     /// <summary>Aggregate key, if any.</summary>
     public string? Key { get; init; }
 
+    /// <summary>
+    /// The message's position among its key's messages, in commit order, when ordering by key is on: 1, 2, 3… with a gap
+    /// only where a message was released from the DLQ. Null for a message that is not ordered: without a key, written
+    /// before ordering was turned on, or published by a dispatcher that does not order.
+    /// </summary>
+    public long? Sequence { get; init; }
+
     /// <summary>Serialized message body.</summary>
     public required ReadOnlyMemory<byte> Payload { get; init; }
 
     /// <summary>Payload content type, for example <c>application/json</c>.</summary>
     public required string ContentType { get; init; }
 
-    /// <summary>Envelope headers: <c>traceparent</c>, <c>tracestate</c>, <c>correlation_id</c>, <c>tenant_id</c> when present.</summary>
+    /// <summary>
+    /// Envelope headers: <c>traceparent</c>, <c>tracestate</c>, <c>correlation_id</c>, <c>tenant_id</c> when present. The
+    /// <c>traceparent</c> is the trace context recorded at enqueue or, while anything listens to Waybill's activity source
+    /// (<see cref="WaybillDiagnostics.ActivitySourceName"/>), that of the dispatcher's <c>send</c> span for this message,
+    /// which hangs from it: propagate it as it is.
+    /// </summary>
     public required IReadOnlyDictionary<string, string> Headers { get; init; }
 
     /// <summary>When the message was written, by the database clock.</summary>
     public required DateTimeOffset CreatedAt { get; init; }
+
+    /// <summary>
+    /// The dispatcher's <c>send</c> span for this message, if any, for Waybill's own transport to make current while it
+    /// publishes. Internal: a transport outside Waybill could stop it before the dispatcher records the outcome.
+    /// </summary>
+    internal System.Diagnostics.Activity? SendActivity { get; set; }
 }
 
 /// <summary>What happened to one message of a published batch.</summary>

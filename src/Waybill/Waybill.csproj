@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Waybill.EntityFrameworkCore.PostgreSql" />
+    <InternalsVisibleTo Include="Waybill.RabbitMQ" />
     <InternalsVisibleTo Include="Waybill.Testing" />
     <InternalsVisibleTo Include="Waybill.Tests.Unit" />
     <InternalsVisibleTo Include="Waybill.Tests.Integration" />

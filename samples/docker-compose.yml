@@ -8,7 +8,20 @@ x-connections: &connections
   ConnectionStrings__Receipts: Host=postgres;Database=receipts;Username=postgres;Password=postgres
   ConnectionStrings__RabbitMQ: amqp://waybill:waybill@rabbitmq:5672
 
+x-services: &services
+  <<: *connections
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://dashboard:18889   # traces, metrics and logs, over OTLP/gRPC
+
 services:
+  # The Aspire dashboard, standalone: traces, metrics and logs of billing and receipts at http://localhost:18888.
+  # In memory only, and without a login: a sample, never a deployment.
+  dashboard:
+    image: mcr.microsoft.com/aspire/dashboard:13.6.1
+    ports:
+      - "${DASHBOARD_PORT:-18888}:18888"
+    environment:
+      ASPIRE_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true"
+
   postgres:
     image: postgres:18-alpine
     environment:
@@ -55,17 +68,19 @@ services:
     image: waybill-sample/billing
     ports:
       - "${BILLING_PORT:-8080}:8080"
-    environment: *connections
+    environment: *services
     depends_on:
       billing-migrate: { condition: service_completed_successfully }
       rabbitmq: { condition: service_healthy }
+      dashboard: { condition: service_started }
 
   receipts:
     build: { context: .., dockerfile: samples/Receipts/Dockerfile }
     image: waybill-sample/receipts
     ports:
       - "${RECEIPTS_PORT:-8081}:8080"
-    environment: *connections
+    environment: *services
     depends_on:
       receipts-migrate: { condition: service_completed_successfully }
       rabbitmq: { condition: service_healthy }
+      dashboard: { condition: service_started }

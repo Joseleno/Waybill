@@ -28,6 +28,46 @@ public sealed class WaybillDispatcherOptions
     public int MaxReturns { get; set; } = 5;
 
     /// <summary>
+    /// How long a message returned as unroutable waits before it is published again; the wait doubles with each return,
+    /// up to <see cref="MaxReturnBackoff"/>. With the defaults, a message spends 15 minutes waiting before it goes to
+    /// the DLQ, time to create the missing binding. Zero publishes it again on the next cycle. Default 1 minute.
+    /// </summary>
+    public TimeSpan ReturnBackoff { get; set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>The longest single wait after a return (see <see cref="ReturnBackoff"/>). Default 10 minutes.</summary>
+    public TimeSpan MaxReturnBackoff { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Publishes the messages of each aggregate key in commit order (v0.2, in progress). Off by default: ordering costs
+    /// throughput, and messages without a key are never ordered. Every dispatcher must agree; the setting is kept in the
+    /// database and checked at startup. The applications that enqueue need no setting: the database numbers keyed
+    /// messages while ordering is on.
+    /// </summary>
+    public bool OrderByKey { get; set; }
+
+    /// <summary>
+    /// With <c>OrderByKey</c>: how many partitions (P) the keys are spread over, as <c>key_hash % P</c>. Each partition is
+    /// held by one dispatcher at a time; more dispatchers than P leave the extra ones idle for keyed messages. Every
+    /// dispatcher must use the same value. Default 16, from 1 to 1024.
+    /// </summary>
+    public int Partitions { get; set; } = 16;
+
+    /// <summary>
+    /// With <c>OrderByKey</c>: how long a dispatcher holds a partition without renewing it. A crashed dispatcher's keys
+    /// move to another one after this. At least twice <see cref="Lease"/> and at most one day; every dispatcher must use
+    /// the same value. Default 60 seconds.
+    /// </summary>
+    public TimeSpan PartitionLease { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// With <c>OrderByKey</c>: how many messages of one key a batch may carry (M). Above 1, the batch is published in
+    /// rounds: the k-th message of a key goes out only after the broker confirmed its (k−1)-th, so a busy key moves M
+    /// messages per cycle instead of one. The whole batch shares <see cref="PublishTimeout"/>. Default 1, from 1 to 100;
+    /// above 1 only with <c>OrderByKey</c>. Set it back to 1 before turning ordering off.
+    /// </summary>
+    public int MaxPerKey { get; set; } = 1;
+
+    /// <summary>
     /// How often the age of the oldest message not yet published is sampled for the
     /// <c>waybill.outbox.oldest_pending.age</c> gauge (meter <c>Waybill</c>). Default 15 seconds.
     /// </summary>

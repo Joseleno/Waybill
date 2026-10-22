@@ -16,6 +16,8 @@ public sealed class ChaosBrokerFixture : IAsyncLifetime
 {
     private const int ApiPort = 8474;
     private const int ProxyPort = 8666;
+    private const int ZombieProxyPort = 8667;
+    private const string ZombieProxy = "rabbitmq-zombie";
     private const string Proxy = "rabbitmq";
 
     private readonly INetwork _network = new NetworkBuilder().Build();
@@ -31,6 +33,7 @@ public sealed class ChaosBrokerFixture : IAsyncLifetime
             .WithNetwork(_network)
             .WithPortBinding(ApiPort, true)
             .WithPortBinding(ProxyPort, true)
+            .WithPortBinding(ZombieProxyPort, true)
             .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r => r.ForPort(ApiPort).ForPath("/version")))
             .Build();
     }
@@ -39,11 +42,16 @@ public sealed class ChaosBrokerFixture : IAsyncLifetime
 
     public Uri ProxiedUri => new UriBuilder(DirectUri) { Host = _toxiproxy.Hostname, Port = _toxiproxy.GetMappedPublicPort(ProxyPort) }.Uri;
 
+    /// <summary>A second path to the broker, for one dispatcher alone: its own toxics leave the others untouched.</summary>
+    public Uri ZombieUri => new UriBuilder(DirectUri) { Host = _toxiproxy.Hostname, Port = _toxiproxy.GetMappedPublicPort(ZombieProxyPort) }.Uri;
+
     public async ValueTask InitializeAsync()
     {
         await _network.CreateAsync();
         await Task.WhenAll(_rabbit.StartAsync(), _toxiproxy.StartAsync());
         _api = new HttpClient { BaseAddress = new Uri($"http://{_toxiproxy.Hostname}:{_toxiproxy.GetMappedPublicPort(ApiPort)}") };
+        (await _api.PostAsJsonAsync("/proxies", new { name = ZombieProxy, listen = $"0.0.0.0:{ZombieProxyPort}", upstream = "rabbitmq:5672", enabled = true }))
+            .EnsureSuccessStatusCode();
         (await _api.PostAsJsonAsync("/proxies", new { name = Proxy, listen = $"0.0.0.0:{ProxyPort}", upstream = "rabbitmq:5672", enabled = true }))
             .EnsureSuccessStatusCode();
         _direct = await new ConnectionFactory { Uri = DirectUri }.CreateConnectionAsync();
@@ -76,6 +84,34 @@ public sealed class ChaosBrokerFixture : IAsyncLifetime
         .EnsureSuccessStatusCode();
 
     public async Task RemoveBlackholeAsync() => (await _api.DeleteAsync($"/proxies/{Proxy}/toxics/blackhole")).EnsureSuccessStatusCode();
+
+    /// <summary>
+    /// Delays what the zombie's client sends to the broker: its publishes reach the broker <paramref name="milliseconds"/>
+    /// late, after its confirm timeout, while its connection stays open.
+    /// </summary>
+    public async Task AddZombieLatencyAsync(int milliseconds) =>
+        (await _api.PostAsJsonAsync($"/proxies/{ZombieProxy}/toxics",
+            new { name = "latency", type = "latency", stream = "upstream", toxicity = 1.0, attributes = new { latency = milliseconds } }))
+        .EnsureSuccessStatusCode();
+
+    public async Task RemoveZombieLatencyAsync() => (await _api.DeleteAsync($"/proxies/{ZombieProxy}/toxics/latency")).EnsureSuccessStatusCode();
+
+    /// <inheritdoc cref="Integration.G2.RabbitMq.SampleTopology.DeclareAsync"/>
+    public Task<IReadOnlyDictionary<string, string>> DeclareSampleTopologyAsync() => Integration.G2.RabbitMq.SampleTopology.DeclareAsync(_direct);
+
+    /// <inheritdoc cref="Integration.G2.RabbitMq.SampleTopology.QueueCountsAsync"/>
+    public Task<(long Messages, long Ready, long Unacked)> QueueCountsAsync(string queue) =>
+        Integration.G2.RabbitMq.SampleTopology.QueueCountsAsync(_rabbit, queue);
+
+    /// <summary>Messages in <paramref name="queue"/> (drains it), with their properties.</summary>
+    public async Task<List<BasicGetResult>> DrainAsync(string queue)
+    {
+        await using var channel = await _direct.CreateChannelAsync();
+        var messages = new List<BasicGetResult>();
+        while (await channel.BasicGetAsync(queue, autoAck: true) is { } message)
+            messages.Add(message);
+        return messages;
+    }
 
     /// <summary>The application's topology: a topic exchange and a quorum queue bound with <c>billing.#</c>, unique to the test.</summary>
     public async Task<(string Exchange, string Queue)> DeclareTopologyAsync()

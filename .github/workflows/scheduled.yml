@@ -1,6 +1,7 @@
 name: scheduled
 
-# Long scenarios that do not fit a pull request: 1 h broker outage, 5 h load with a long transaction open, 8 dispatchers for 10 min.
+# Long scenarios that do not fit a pull request: 1 h broker outage, 5 h load with a long transaction open, 8 dispatchers for
+# 10 min, the ordering property test for 10 min, the ordered claim against a large backlog, and the cost of ordering off.
 # Tests opt in with [Trait("Category", "Long")].
 
 on:
@@ -35,8 +36,10 @@ jobs:
         with:
           global-json-file: global.json
       - run: dotnet build -c Release
-      # The only long integration scenario is the long load, which has its own job below.
       - run: dotnet test --project tests/Waybill.Tests.Chaos -c Release --no-build --filter-trait "Category=Long"
+      # Ordering by key (ADR 0008): the claim against a large backlog, and the cost of ordering off against 0.1.0-alpha.
+      # The long load has its own job below.
+      - run: dotnet test --project tests/Waybill.Tests.Integration -c Release --no-build --filter-trait "Category=Long" --filter-not-class "*CargaLonga*"
 
   # GitHub-hosted runners cap a job at 6 h, so the long load runs 5 h in a job of its own (ADR 0004);
   # 24 h would need a self-hosted runner.

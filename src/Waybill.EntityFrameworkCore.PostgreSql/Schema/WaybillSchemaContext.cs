@@ -17,6 +17,9 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
 {
     public DbSet<OutboxRow> Outbox => Set<OutboxRow>();
     public DbSet<InboxRow> Inbox => Set<InboxRow>();
+    public DbSet<SettingsRow> Settings => Set<SettingsRow>();
+    public DbSet<PartitionRow> Partitions => Set<PartitionRow>();
+    public DbSet<InstanceRow> Instances => Set<InstanceRow>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -25,7 +28,7 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
         modelBuilder.Entity<OutboxRow>(outbox =>
         {
             outbox.ToTable(WaybillSchema.OutboxTable, table => table.HasCheckConstraint(
-                "ck_outbox_status", "status IN ('pending', 'claimed', 'published', 'dlq')"));
+                "ck_outbox_status", "status IN ('pending', 'claimed', 'published', 'dlq', 'released')"));
             outbox.HasKey(m => m.Id).HasName("pk_outbox");
             outbox.Property(m => m.Id).HasColumnName("id").ValueGeneratedNever();
             outbox.Property(m => m.Type).HasColumnName("type");
@@ -43,9 +46,76 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
             outbox.Property(m => m.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("clock_timestamp()");
             outbox.Property(m => m.PublishedAt).HasColumnName("published_at");
             outbox.Property(m => m.DlqReason).HasColumnName("dlq_reason");
+            outbox.Property(m => m.NextAttemptAt).HasColumnName("next_attempt_at"); // after a basic.return (ADR 0006)
 
-            // The dispatcher's claim walks this index in id (UUIDv7) order; it only holds rows still in flight.
-            outbox.HasIndex(m => m.Id).HasDatabaseName("ix_outbox_claimable").HasFilter("status IN ('pending', 'claimed')");
+            // Ordering by key (ADR 0008): the keys of one SaveChanges, locked in order by the numbering trigger and then
+            // cleared by it; and who released a dead-lettered row of a key, and when.
+            outbox.Property(m => m.LockKeys).HasColumnName("lock_keys");
+            outbox.Property(m => m.ReleasedAt).HasColumnName("released_at");
+            outbox.Property(m => m.ReleasedBy).HasColumnName("released_by");
+
+            // The head pointer: true for a row the claim may take (its key's head, or a harmless false positive), false or
+            // null behind an earlier row of its key. Defaults to true, so anything that skips the triggers stays claimable.
+            outbox.Property(m => m.IsHead).HasColumnName("is_head").HasDefaultValue(true);
+
+            // The dispatcher's claim walks this index in id (UUIDv7) order; it only holds rows still in flight that a claim
+            // can take. Every SQL that walks it repeats the predicate, or a generic plan cannot use it.
+            outbox.HasIndex(m => m.Id).HasDatabaseName("ix_outbox_claimable")
+                .HasFilter("status IN ('pending', 'claimed') AND (sequence IS NULL OR is_head)");
+
+            // A key's head is its first row not yet published or released; with ordering off no row has a sequence,
+            // so neither index holds anything. The migration builds both CONCURRENTLY.
+            outbox.HasIndex(m => new { m.Key, m.Sequence }).HasDatabaseName("ix_outbox_key_sequence")
+                .HasFilter("sequence IS NOT NULL AND status IN ('pending', 'claimed', 'dlq')");
+            outbox.HasIndex(m => m.Key).HasDatabaseName("ix_outbox_blocked_keys")
+                .HasFilter("status = 'dlq' AND sequence IS NOT NULL");
+
+            // The count behind waybill.outbox.dlq. Named in HasIndex, not by HasDatabaseName: an unnamed index on Id would
+            // be the claim index above, reconfigured.
+            outbox.HasIndex(m => m.Id, "ix_outbox_dlq").HasFilter("status = 'dlq'");
+        });
+
+        // One row per key ever numbered, holding its last sequence. Never cleaned: starting a key again at 1 would look
+        // like a regression to its consumers. The increment rewrites only seq, so the row can be updated in place (HOT).
+        modelBuilder.Entity<KeyRow>(key =>
+        {
+            key.ToTable(WaybillSchema.KeysTable);
+            key.HasKey(k => k.Key).HasName("pk_outbox_keys");
+            key.Property(k => k.Key).HasColumnName("key");
+            key.Property(k => k.Seq).HasColumnName("seq");
+            key.HasStorageParameter("fillfactor", 80);
+        });
+
+        // Ordering by key (v0.2, ADR 0007). One row while ordering is on: P and the partition lease, shared by every
+        // dispatcher and checked at startup.
+        modelBuilder.Entity<SettingsRow>(settings =>
+        {
+            settings.ToTable(WaybillSchema.SettingsTable, table => table.HasCheckConstraint("ck_settings_single_row", "id = 1"));
+            settings.HasKey(s => s.Id).HasName("pk_settings");
+            settings.Property(s => s.Id).HasColumnName("id").ValueGeneratedNever();
+            settings.Property(s => s.Partitions).HasColumnName("partitions");
+            settings.Property(s => s.PartitionLease).HasColumnName("partition_lease");
+            settings.Property(s => s.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("clock_timestamp()");
+        });
+
+        // Who holds each partition key_hash % P, for how long, and in which tenure (epoch, raised on every change of owner).
+        modelBuilder.Entity<PartitionRow>(partition =>
+        {
+            partition.ToTable(WaybillSchema.PartitionsTable);
+            partition.HasKey(p => p.Partition).HasName("pk_outbox_partitions");
+            partition.Property(p => p.Partition).HasColumnName("partition").ValueGeneratedNever();
+            partition.Property(p => p.Owner).HasColumnName("owner");
+            partition.Property(p => p.Epoch).HasColumnName("epoch").HasDefaultValue(0L);
+            partition.Property(p => p.LeaseUntil).HasColumnName("lease_until");
+        });
+
+        // Live dispatchers, for the fair share of partitions; a row is collected long after its heartbeat stops.
+        modelBuilder.Entity<InstanceRow>(instance =>
+        {
+            instance.ToTable(WaybillSchema.InstancesTable);
+            instance.HasKey(i => i.Owner).HasName("pk_outbox_instances");
+            instance.Property(i => i.Owner).HasColumnName("owner");
+            instance.Property(i => i.HeartbeatAt).HasColumnName("heartbeat_at");
         });
 
         modelBuilder.Entity<InboxRow>(inbox =>
@@ -58,6 +128,20 @@ internal sealed class WaybillSchemaContext(DbContextOptions<WaybillSchemaContext
 
             // Retention deletes by age; the message_id may come from another system and not be a UUIDv7 (ADR 0004).
             inbox.HasIndex(m => m.ProcessedAt).HasDatabaseName("ix_inbox_processed_at");
+        });
+
+        // Sequence verification in the inbox (stage 10): the last sequence each handler applied per key, and its message.
+        // Never cleaned: forgetting it would let a late copy of an old message through as new. Every message in order
+        // rewrites the row without touching the key, so it can be updated in place (HOT).
+        modelBuilder.Entity<InboxKeyRow>(key =>
+        {
+            key.ToTable(WaybillSchema.InboxKeysTable);
+            key.HasKey(k => new { k.Handler, k.Key }).HasName("pk_inbox_keys");
+            key.Property(k => k.Handler).HasColumnName("handler");
+            key.Property(k => k.Key).HasColumnName("key");
+            key.Property(k => k.LastSeq).HasColumnName("last_seq");
+            key.Property(k => k.LastMessageId).HasColumnName("last_message_id");
+            key.HasStorageParameter("fillfactor", 80);
         });
     }
 
@@ -85,6 +169,39 @@ internal sealed class OutboxRow
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? PublishedAt { get; set; }
     public string? DlqReason { get; set; }
+    public DateTimeOffset? NextAttemptAt { get; set; }
+    public string[]? LockKeys { get; set; }
+    public DateTimeOffset? ReleasedAt { get; set; }
+    public string? ReleasedBy { get; set; }
+    public bool? IsHead { get; set; }
+}
+
+internal sealed class KeyRow
+{
+    public required string Key { get; set; }
+    public long Seq { get; set; }
+}
+
+internal sealed class SettingsRow
+{
+    public int Id { get; set; }
+    public int Partitions { get; set; }
+    public TimeSpan PartitionLease { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+internal sealed class PartitionRow
+{
+    public int Partition { get; set; }
+    public string? Owner { get; set; }
+    public long Epoch { get; set; }
+    public DateTimeOffset? LeaseUntil { get; set; }
+}
+
+internal sealed class InstanceRow
+{
+    public required string Owner { get; set; }
+    public DateTimeOffset HeartbeatAt { get; set; }
 }
 
 internal sealed class InboxRow
@@ -92,6 +209,14 @@ internal sealed class InboxRow
     public required string Handler { get; set; }
     public Guid MessageId { get; set; }
     public DateTimeOffset ProcessedAt { get; set; }
+}
+
+internal sealed class InboxKeyRow
+{
+    public required string Handler { get; set; }
+    public required string Key { get; set; }
+    public long LastSeq { get; set; }
+    public Guid LastMessageId { get; set; }
 }
 
 /// <summary>Lets <c>dotnet ef migrations add</c> build the schema context; no database is touched.</summary>

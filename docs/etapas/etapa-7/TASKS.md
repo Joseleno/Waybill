@@ -8,4 +8,5 @@
 - [x] Tag `v0.1.0-alpha-test.1` verde; validação por agente sem contexto com feed local; `FRICCAO.md`
 - [x] Revisão de código independente; CI verde; validação do autor (substituída por um segundo agente sem contexto, por decisão do autor); PR #11
 - [x] Linha "Operação sustentável" no `GUARANTEES.md`, só depois da carga longa verde (etapa 5)
-- [ ] Com ok do autor: tag assinada `v0.1.0-alpha`, publicação no NuGet, Source Link conferido do nuget.org; pedido do prefixo `Waybill.*`
+- [x] Com ok do autor: tag assinada `v0.1.0-alpha` (run 37401817096), publicação no NuGet com Trusted Publishing, Source Link e símbolos conferidos nos pacotes baixados do nuget.org (Oct 6, 2026)
+- [ ] Pedido de reserva do prefixo `Waybill.*` (pelo autor; seguir sem a reserva se for recusado)

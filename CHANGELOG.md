@@ -5,6 +5,62 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0-alpha] - 2026-10-22
+
+Ordering by key, with sequence verification in the inbox, and tracing. What each guarantee covers, now with G4, and the test that proves it, is in [GUARANTEES.md](GUARANTEES.md).
+
+### Upgrading from 0.1.0-alpha
+
+- **Migrate the schema first.** Run `WaybillSchema.MigrateAsync` before deploying the applications that enqueue with 0.2: their INSERT writes the new `outbox.lock_keys` column. The migration only adds, and pending messages stay claimable and drain as before. It builds its indexes concurrently, outside its transaction: run it over a direct connection, not a pooler in transaction mode, and run it again if it stops halfway (`OPERATIONS.md`, "Upgrading and rolling back").
+- **Then deploy the 0.2 dispatchers.** The claim index is rebuilt under the same name with a predicate a 0.1 dispatcher's claim cannot use. While a 0.1 dispatcher still runs, it ignores the wait after a `basic.return` and may publish a returned message once more before its time, which is harmless.
+- **Breaking:** `IInbox<TContext>` gains `ProcessInOrderAsync`; an implementation outside Waybill must add it. `ProcessAsync` is unchanged.
+- **Unroutable messages wait longer before the DLQ** (below). Set `ReturnBackoff` to zero for the 0.1 behavior.
+- **Going back** to the 0.1 binaries: turn ordering off and keep the 0.2 schema. The migration's `Down` refuses once ordering has numbered a key or released a message, or an inbox handler has verified a sequence.
+
+### Added
+
+#### Ordering by key
+
+- `WaybillDispatcherOptions.OrderByKey` (off by default) publishes the messages of each aggregate key in commit order, one per key at a time. Keys map to `key_hash % Partitions`; each partition is held by one dispatcher at a time, shared evenly among live dispatchers, renewed in the background and handed back on shutdown, and the claim checks ownership in the same statement. `Partitions` and `PartitionLease` are stored in the database by the first dispatcher that orders and checked by every other one; a mismatch, a dispatcher that does not order while the database does, a missing or disabled ordering trigger, or a session running as a replica stops the dispatcher with a critical log (ADR 0007).
+- While ordering is on, the database numbers every keyed message as it is written, in commit order, and the claim takes only the first unfinished message of each key, marked by `outbox.is_head`, so a long queue behind one key does not slow the claim. The keys of one `SaveChanges` are locked in one order, so transactions writing them in opposite orders do not deadlock (ADR 0008).
+- `OutgoingMessage.Sequence`, the position of an ordered message in its key; the RabbitMQ transport sends it in the `waybill-sequence` header.
+- `WaybillDispatcherOptions.MaxPerKey` (1 by default, up to 100, above 1 only with `OrderByKey`): a batch may carry up to that many messages of a key, published in rounds. Each call to the transport carries at most one ordered message of a key, and a key's next message goes out only after the broker confirmed its previous one. All the rounds of a batch share `PublishTimeout`, and the dispatcher lowers its effective M while rounds run out of time (ADR 0008, part 2; ADR 0003).
+- A message in the outbox DLQ stops its key, and only its key, until it is requeued or released. The `released` status, with `released_at` and `released_by`, and in `OPERATIONS.md` the SQL to find stopped keys and release one. `published` and `released` are final: a trigger refuses to move a message back. Releasing or deleting a message of an ordered key outside `READ COMMITTED` is refused.
+- Turning ordering on or off and changing `Partitions` or `PartitionLease` are steps with SQL in `OPERATIONS.md`; `outbox_keys` is never to be deleted.
+- `waybill.outbox.blocked_keys`, the keys stopped by the DLQ while ordering is on.
+- `waybill.outbox.heads_repaired`, the messages a dispatcher found first in their key yet not marked claimable and marked, with an error log each: zero unless something changed the outbox outside Waybill. `OPERATIONS.md` has the SQL to find and mark them at once.
+
+#### Sequence verification in the inbox
+
+- `IInbox.ProcessInOrderAsync` never applies, for a key, a message whose sequence is not after the last one the handler applied for it. It deduplicates first, then checks the sequence, and returns `OrderedInboxResult.Regressed` for a regression: nothing applied, nothing recorded, a warning (EventId 50) with the reason, and the application sends the message to the dead-letter exchange. It detects; it never reorders, and a gap is not an error. The broker conditions it relies on (one active consumer per queue, one delivery at a time, at-least-once dead-lettering) are in `OPERATIONS.md` (ADR 0010).
+- `MessageOrder` carries a message's key and sequence; `GetWaybillOrder` reads them from the RabbitMQ headers.
+- The `waybill` schema gains `inbox_keys`, the last sequence each handler applied per key. Retention never deletes it.
+- `FakeInbox` verifies sequences the same way and counts `Regressions`.
+
+#### Tracing and metrics
+
+- Spans on the activity source `WaybillDiagnostics.ActivitySourceName`, with no telemetry package (ADR 0011): `create` at `Enqueue`; `send` for each message the dispatcher publishes, child of the context recorded at `Enqueue` and linked to it, so every attempt lands in the same trace, ending with `waybill.send.outcome` from what the database recorded; `process` in the inbox, with the result. With RabbitMQ.Client's sources listened too, a message's trace runs from the request that wrote it to the handler. Claims, upkeep, sampling and retention open no span. The spans follow the OpenTelemetry semantic conventions for messaging 1.44.0, still in development: attribute names may change with them. `OPERATIONS.md` lists the spans, their attributes and the values of `error.type`.
+- `WaybillOptions.RecordKeyAndTenantInTraces` (off): Waybill's spans carry the message's key and tenant id.
+- `waybill.outbox.dlq`, the messages in the outbox DLQ, with ordering on or off, read through a new partial index; nothing is reported before a dispatcher's first sample. Every dispatcher instance reports the same value of the outbox gauges: aggregate them by max, not sum (`OPERATIONS.md`).
+- `waybill.inbox.regressions`, a counter of the messages the inbox's sequence check refused, tagged with the handler and the reason (`lower`, `reused`). The inbox registers it, so a service that only consumes reports it too.
+- `WaybillDiagnostics.MeterName`, the name of Waybill's meter, for `AddMeter`.
+
+### Changed
+
+- A message returned as unroutable (`basic.return`) now waits a growing interval before it is published again: `ReturnBackoff` (1 minute by default) after the first return, doubling with each return up to `MaxReturnBackoff` (10 minutes). With the defaults it reaches the outbox DLQ after 15 minutes of waiting instead of about 5 seconds, time to create the missing binding (ADR 0006).
+- Message ids are UUIDv7 that increase in enqueue order within a process, also inside one millisecond, so the dispatcher claims messages of one process in the order they were enqueued.
+- While anything listens to Waybill's activity source, the `traceparent` stored with a message is that of its `create` span, and a transport receives in `OutgoingMessage.Headers` the `traceparent` of the message's `send` span, both in the trace of the code that enqueued the message. A transport outside Waybill propagates it as before.
+- `AddWaybillOutbox` adds an interceptor to the context's options; on a context registered by hand, outside `AddDbContext`, `AddDbContextPool` or a context factory, the first message enqueued with a key logs that once, at `Information`.
+- With ordering off, writing a message with a key runs the numbering trigger, which reads `waybill.settings` once per row. The cost is measured and published in `OPERATIONS.md` ("What it costs"); messages without a key pay nothing.
+- `waybill.outbox.oldest_pending.age` counts only messages a claim could take.
+- The dispatcher turns JIT off on its own connections; behind a pooler in transaction mode, set it for its role (`OPERATIONS.md`).
+- The `waybill` schema gains, besides the above, `outbox.next_attempt_at` and the `settings`, `outbox_partitions`, `outbox_instances` and `outbox_keys` tables. `outbox_keys` and `inbox_keys` are never deleted by retention.
+- The samples: Billing orders by key; Receipts verifies sequences, retries a failing message in the consumer before dead-lettering it (a `basic.nack` with requeue never counts toward `x-delivery-limit`), and its queue gets single active consumer and at-least-once dead-lettering. Both export traces, metrics and logs to an Aspire dashboard.
+
+### Fixed
+
+- With RabbitMQ.Client's publisher source listened to (`RabbitMQActivitySource.PublisherSourceName`), the client wrote its own span's context over each message's `traceparent`, and consumers started a new trace. The transport now makes the message's stored context current while the client publishes, so consumers stay in the trace of the code that enqueued the message (ADR 0011).
+
 ## [0.1.0-alpha] - 2026-10-06
 
 First release. What each guarantee covers, and the test that proves it, is in [GUARANTEES.md](GUARANTEES.md).
@@ -55,5 +111,6 @@ First release. What each guarantee covers, and the test that proves it, is in [G
 - `GUARANTEES.md`, with a test that fails the build when a cited test disappears.
 - Design documents and ADRs 0001 to 0005 in `docs/` (in Portuguese).
 
-[Unreleased]: https://github.com/Joseleno/Waybill/compare/v0.1.0-alpha...HEAD
+[Unreleased]: https://github.com/Joseleno/Waybill/compare/v0.2.0-alpha...HEAD
+[0.2.0-alpha]: https://github.com/Joseleno/Waybill/compare/v0.1.0-alpha...v0.2.0-alpha
 [0.1.0-alpha]: https://github.com/Joseleno/Waybill/releases/tag/v0.1.0-alpha
