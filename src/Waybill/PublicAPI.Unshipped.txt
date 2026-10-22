@@ -12,3 +12,5 @@ static Waybill.MessageOrder.operator !=(Waybill.MessageOrder left, Waybill.Messa
 static Waybill.MessageOrder.operator ==(Waybill.MessageOrder left, Waybill.MessageOrder right) -> bool
 ~override Waybill.MessageOrder.Equals(object obj) -> bool
 ~override Waybill.MessageOrder.ToString() -> string
+Waybill.WaybillDiagnostics
+const Waybill.WaybillDiagnostics.MeterName = "Waybill" -> string!

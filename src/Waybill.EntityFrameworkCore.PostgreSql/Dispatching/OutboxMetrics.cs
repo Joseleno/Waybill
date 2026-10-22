@@ -9,7 +9,7 @@ namespace Waybill.EntityFrameworkCore.Dispatching;
 /// </summary>
 internal sealed class OutboxMetrics : IDisposable
 {
-    public const string MeterName = "Waybill";
+    public const string MeterName = WaybillDiagnostics.MeterName;
 
     private readonly Meter _meter;
     private readonly bool _ownsMeter;
@@ -21,7 +21,7 @@ internal sealed class OutboxMetrics : IDisposable
     {
         // A meter from the host's factory is disposed with the container; one created here is disposed by this class.
         _ownsMeter = factory is null;
-        _meter = factory?.Create(new MeterOptions(MeterName)) ?? new Meter(MeterName);
+        _meter = WaybillDiagnostics.CreateMeter(factory);
         _meter.CreateObservableGauge(
             "waybill.outbox.oldest_pending.age",
             () => Volatile.Read(ref _oldestPendingAge),
@@ -32,6 +32,11 @@ internal sealed class OutboxMetrics : IDisposable
             BlockedKeysMeasurements,
             unit: "{key}",
             description: "Keys stopped by a message in the outbox DLQ while ordering by key is on, until it is requeued or released; not reported while ordering is off.");
+        _meter.CreateObservableGauge(
+            "waybill.outbox.dlq",
+            DlqMeasurements,
+            unit: "{message}",
+            description: "Messages in the outbox DLQ, with ordering on or off, until they are requeued or released. Every dispatcher instance reports the same total: aggregate by max, not sum.");
         _headsRepaired = _meter.CreateCounter<long>(
             "waybill.outbox.heads_repaired",
             unit: "{message}",
@@ -61,6 +66,19 @@ internal sealed class OutboxMetrics : IDisposable
     public long? BlockedKeys => Volatile.Read(ref _blockedKeys) is var blocked and >= 0 ? blocked : null;
 
     public void RecordBlockedKeys(long? blockedKeys) => Volatile.Write(ref _blockedKeys, blockedKeys ?? -1);
+
+    private long _dlq = -1; // -1: not sampled yet; a 0 would read as an empty DLQ
+
+    private IEnumerable<Measurement<long>> DlqMeasurements()
+    {
+        var dlq = Volatile.Read(ref _dlq);
+        return dlq < 0 ? [] : [new Measurement<long>(dlq)];
+    }
+
+    /// <summary>The last sampled count of messages in the DLQ; null before the first sample.</summary>
+    public long? Dlq => Volatile.Read(ref _dlq) is var dlq and >= 0 ? dlq : null;
+
+    public void RecordDlq(long dlq) => Volatile.Write(ref _dlq, dlq);
 
     /// <summary>The last sampled age, in seconds.</summary>
     public double OldestPendingAge => Volatile.Read(ref _oldestPendingAge);

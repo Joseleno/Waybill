@@ -435,18 +435,23 @@ internal sealed class OutboxStore(NpgsqlDataSource dataSource)
                     THEN (SELECT count(DISTINCT key) FROM waybill.outbox WHERE status = 'dlq' AND sequence IS NOT NULL) END
         """;
 
-    /// <summary>How many keys a DLQ row stops; null while ordering by key is off.</summary>
-    public async Task<long?> BlockedKeysAsync(CancellationToken cancellationToken)
-    {
-        await using var command = dataSource.CreateCommand(BlockedKeysSql);
-        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is long blocked ? blocked : null;
-    }
+    // The three gauges' readings in one round trip, each a scalar subquery through its own index.
+    private const string SampleSql = $"SELECT ({OldestPendingAgeSql}), ({BlockedKeysSql}), ({DlqCountSql})";
 
-    /// <summary>Seconds since the oldest message not yet published was written; 0 when there is none.</summary>
-    public async Task<double> OldestPendingAgeAsync(CancellationToken cancellationToken)
+    /// <summary>What the gauges report, read in one statement.</summary>
+    /// <returns>
+    /// Seconds since the oldest message not yet published was written (0 when there is none); how many keys a DLQ row
+    /// stops (null while ordering by key is off); how many messages are in the DLQ.
+    /// </returns>
+    public async Task<(double OldestPendingAge, long? BlockedKeys, long Dlq)> SampleAsync(CancellationToken cancellationToken)
     {
-        await using var command = dataSource.CreateCommand(OldestPendingAgeSql);
-        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is double age ? Math.Max(age, 0) : 0;
+        await using var command = dataSource.CreateCommand(SampleSql);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        return (
+            reader.IsDBNull(0) ? 0 : Math.Max(reader.GetDouble(0), 0),
+            reader.IsDBNull(1) ? null : reader.GetInt64(1),
+            reader.GetInt64(2));
     }
 
     private static Dictionary<string, string> ParseHeaders(string? json)

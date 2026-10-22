@@ -7,7 +7,7 @@ using Waybill.Tests.Integration.Retencao;
 namespace Waybill.Tests.Integration.Observabilidade;
 
 // With nothing waiting to be published the gauge reads 0, in seconds; published and dead-lettered rows do not count
-// (the DLQ is watched on its own, see OPERATIONS.md).
+// (the DLQ has a gauge of its own, waybill.outbox.dlq).
 [Collection(PostgresCollection.Name)]
 public sealed class Metrica_SemPendentes_Zero(PostgresFixture postgres)
 {
