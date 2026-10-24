@@ -33,4 +33,31 @@ public sealed class Convivencia_Ordenacao01(PostgresFixture postgres)
             Assert.Equal(enqueued, transport.Received.Select(m => m.MessageId));
         }
     }
+
+    // A limit, not a promise: a 0.1 dispatcher knows nothing of key heads, and leaves no trace 0.2 could check, so with
+    // ordering on it publishes a key's next message while the head is stopped in the DLQ. OPERATIONS.md says to turn
+    // ordering on only once no 0.1 dispatcher is left.
+    [Fact]
+    public async Task Convivencia_Dispatcher01ComOrdenacaoLigada_PublicaForaDeOrdem()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var database = await TestDatabase.CreateAsync(postgres);
+        await using var dataSource = NpgsqlDataSource.Create(database.ConnectionString);
+        var dispatcher = OrderingHarness.Create(dataSource, new FakeTransport(), OrderingHarness.Options(database, partitions: 4));
+        Assert.Null(await dispatcher.CheckOrderingAsync(atStartup: true, ct));
+        var ids = await DispatcherHarness.EnqueueAsync(database, 2, key: _ => "order-9"); // sequences 1 and 2
+        await database.ExecuteAsync($"UPDATE waybill.outbox SET status = 'dlq', dlq_reason = 'test' WHERE id = '{ids[0]}'");
+
+        // Control: the 0.2 dispatcher holds the key back behind its head.
+        Assert.Equal(0, (await dispatcher.RunOnceAsync(ct)).Claimed);
+        Assert.Equal(4, dispatcher.HeldPartitions.Count);
+        await dispatcher.ReleaseOwnedAsync(ct);
+
+        await using var legacy = await LegacyHost.StartAsync("dispatch", database.ConnectionString);
+        Assert.Equal(ids[1], Guid.Parse(await legacy.WaitForAsync("PUBLISHED ", TimeSpan.FromSeconds(30))));
+        await legacy.StopAsync();
+
+        Assert.Equal(1, await database.ScalarAsync($"SELECT count(*) FROM waybill.outbox WHERE id = '{ids[0]}' AND status = 'dlq'"));
+        Assert.Equal(1, await database.ScalarAsync($"SELECT count(*) FROM waybill.outbox WHERE id = '{ids[1]}' AND status = 'published'"));
+    }
 }

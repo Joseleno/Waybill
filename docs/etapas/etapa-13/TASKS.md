@@ -12,7 +12,7 @@ Um commit por cenário provado, na ordem abaixo.
 - [x] 5. `Convivencia_Rollback_LinhaEmEsperaDeReturn_01PublicaNoCicloSeguinte`
 - [x] 6. Bloco `<!-- rollback-claim-index -->` no `OPERATIONS.md` e `Convivencia_Rollback_IndiceDa01_ClaimDa01UsaOIndice`
 - [x] 7. `Convivencia_Produtor01ComOrdenacaoLigada_SaiEmOrdem`
-- [ ] 8. `Convivencia_Dispatcher01ComOrdenacaoLigada_PublicaForaDeOrdem`
+- [x] 8. `Convivencia_Dispatcher01ComOrdenacaoLigada_PublicaForaDeOrdem`
 - [ ] 9. Log de partida: teste `Dispatcher_LogDePartida_DizAOrdenacao` primeiro, depois o `LogStarted`
 - [ ] 10. Mutações do PLAN, cada uma derrubando o teste indicado
 - [ ] 11. `OPERATIONS.md` ("Upgrading from 0.1", "Upgrading and rolling back", "Ordering by key"): cada frase sobre a 0.1 com o teste dela; CHANGELOG em `[Unreleased]`; ADR 0012
