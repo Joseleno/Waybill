@@ -351,6 +351,15 @@ SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
 
 The schema only moves forward once ordering has numbered a key or released a message, or an inbox handler has verified
 a sequence: the v0.2 migration's `Down` refuses then. To go back to the 0.1 binaries, turn ordering off first (above) and keep the v0.2 schema.
+The 0.1 claim cannot use the v0.2 claim index, so before starting the 0.1 dispatchers, build the index it can use:
+
+<!-- rollback-claim-index -->
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_outbox_claimable_v01 ON waybill.outbox (id) WHERE status IN ('pending', 'claimed');
+```
+
+When you move to 0.2 again, drop it (`DROP INDEX CONCURRENTLY waybill.ix_outbox_claimable_v01;`): the migration is
+already applied and does not run again, and the 0.2 claim does not need it.
 
 ### A key stopped by the DLQ
 
