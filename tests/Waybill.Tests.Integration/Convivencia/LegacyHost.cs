@@ -66,6 +66,8 @@ internal sealed class LegacyHost : IAsyncDisposable
         return host;
     }
 
+    public bool HasExited => _process.HasExited;
+
     /// <summary>The payload of every line so far that starts with <paramref name="prefix"/>.</summary>
     public IReadOnlyList<string> Lines(string prefix)
     {

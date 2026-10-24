@@ -6,7 +6,7 @@ Um commit por cenário provado, na ordem abaixo.
 - [x] PLAN revisto: viabilidade do host da 0.1 conferida (restauração do nuget.org e build da solution com 0 avisos)
 - [x] PLAN aprovado pelo autor (Oct 24, 2026)
 - [x] 1. `Waybill.Tests.LegacyHost` (os quatro modos) e o harness `LegacyHost`, com a versão `0.1.0-alpha` conferida no stdout; plano, SPEC e PLAN no mesmo commit
-- [ ] 2. `Convivencia_JanelaDoUpgrade_01E02Juntas_NenhumaSePerde`
+- [x] 2. `Convivencia_JanelaDoUpgrade_01E02Juntas_NenhumaSePerde`
 - [ ] 3. `Convivencia_Consumidor01_Recebe02EDeduplica`
 - [ ] 4. `Convivencia_Rollback_01DrenaBacklogNumerado`
 - [ ] 5. `Convivencia_Rollback_LinhaEmEsperaDeReturn_01PublicaNoCicloSeguinte`
