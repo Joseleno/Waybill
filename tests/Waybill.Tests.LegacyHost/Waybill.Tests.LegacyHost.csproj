@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Child process for the coexistence tests: the 0.1.0-alpha packages from nuget.org, never the code in src/. -->
+    <IsTestHost>true</IsTestHost>
+  </PropertyGroup>
+
+  <!-- PrivateAssets: the integration tests reference this project only to build it, and must not get 0.1 transitively. -->
+  <ItemGroup>
+    <PackageReference Include="Waybill.EntityFrameworkCore.PostgreSql" VersionOverride="0.1.0-alpha" PrivateAssets="all" />
+    <PackageReference Include="Waybill.RabbitMQ" VersionOverride="0.1.0-alpha" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

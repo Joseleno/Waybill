@@ -23,11 +23,16 @@ Any number of instances may run either service against the same database.
 2. Run `WaybillSchema.MigrateAsync` over a direct connection, not a pooler in transaction mode, before deploying the
    applications that enqueue with 0.2. Then check that no index was left invalid (see
    [Upgrading and rolling back](#upgrading-and-rolling-back)).
-3. Deploy the 0.2 dispatchers right after the migration.
+3. Move the applications to 0.2 in any order. Until the last one moves, 0.1 producers, dispatchers and consumers keep
+   working beside 0.2 ones on the migrated schema: every message either version writes is published, a 0.1 consumer
+   reads what 0.2 publishes, and its inbox still drops the copies. Move the dispatchers soon, though: the 0.1 claim
+   cannot use the new claim index, and a 0.1 dispatcher ignores the wait after a `basic.return`, publishing a message
+   that waits after one on its next cycle.
 4. Decide on unroutable messages: in 0.2 one waits up to 15 minutes in all before the DLQ, where 0.1 took seconds.
    `ReturnBackoff` at zero keeps the 0.1 behavior (see [Defaults](#defaults)).
-5. Optionally, turn ordering on, as [Ordering by key](#ordering-by-key) describes. Nothing about ordering changes
-   until you do.
+5. Optionally, turn ordering on, as [Ordering by key](#ordering-by-key) describes, once no 0.1 dispatcher is left.
+   Nothing about ordering changes until you do. 0.1 producers may still run: the database numbers their keyed
+   messages too (see [Before turning it on](#before-turning-it-on)).
 
 ## Defaults
 
@@ -257,6 +262,12 @@ COMMIT;
 
 - **Upgrade order.** Apply the v0.2 schema (`WaybillSchema.MigrateAsync`) before deploying the applications that
   enqueue with the v0.2 package: their INSERT carries a column the 0.1 schema does not have.
+- **No 0.1 dispatcher left.** A 0.1 dispatcher knows nothing of key heads and registers nowhere a 0.2 one could see,
+  so with ordering on it would publish a key's next message before an earlier one, for instance while that one is in
+  the DLQ.
+  Producers still on 0.1 may stay: the database numbers their keyed messages like any other, and a key written one
+  transaction at a time goes out in order. A 0.1 producer has no interceptor, so it behaves like a context built by
+  hand (next item): a transaction that enqueues several keys may deadlock with another and need a retry.
 - **Register the context with `AddDbContext`, `AddDbContextPool` or a context factory.** `AddWaybillOutbox` then adds an
   interceptor that hands the database the keys of each `SaveChanges`, so it locks them in one order. A context built by
   hand lacks it (an Information log says so once, at the first keyed `Enqueue`): nothing is lost or reordered, but transactions that enqueue several keys may
@@ -351,6 +362,15 @@ SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
 
 The schema only moves forward once ordering has numbered a key or released a message, or an inbox handler has verified
 a sequence: the v0.2 migration's `Down` refuses then. To go back to the 0.1 binaries, turn ordering off first (above) and keep the v0.2 schema.
+The 0.1 claim cannot use the v0.2 claim index, so before starting the 0.1 dispatchers, build the index it can use:
+
+<!-- rollback-claim-index -->
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_outbox_claimable_v01 ON waybill.outbox (id) WHERE status IN ('pending', 'claimed');
+```
+
+When you move to 0.2 again, drop it (`DROP INDEX CONCURRENTLY waybill.ix_outbox_claimable_v01;`): the migration is
+already applied and does not run again.
 
 ### A key stopped by the DLQ
 

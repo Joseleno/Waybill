@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The dispatcher's startup log (EventId 20) says whether ordering by key is on, with `Partitions` and `MaxPerKey` when it is, also in its `Ordering` field.
+- `OPERATIONS.md` says what holds while 0.1 and 0.2 share a database, now proved against the 0.1.0-alpha packages from nuget.org. During an upgrade, applications move to 0.2 in any order: 0.1 producers, dispatchers and consumers keep working beside 0.2 ones with ordering off, and nothing is lost. Ordering is turned on only once no 0.1 dispatcher is left; 0.1 producers may stay, with the deadlock caveat of a context built by hand for transactions that enqueue several keys. After a rollback, the 0.1 dispatcher drains what 0.2 left, and a new SQL block rebuilds the claim index 0.1 can use (ADR 0012).
+
 ## [0.2.0-alpha] - 2026-10-22
 
 Ordering by key, with sequence verification in the inbox, and tracing. What each guarantee covers, now with G4, and the test that proves it, is in [GUARANTEES.md](GUARANTEES.md).

@@ -4,6 +4,8 @@
     <ProjectReference Include="..\..\src\Waybill.EntityFrameworkCore.PostgreSql\Waybill.EntityFrameworkCore.PostgreSql.csproj" />
     <ProjectReference Include="..\..\src\Waybill.RabbitMQ\Waybill.RabbitMQ.csproj" />
     <ProjectReference Include="..\..\src\Waybill.Testing\Waybill.Testing.csproj" />
+    <!-- Built for the coexistence tests, which run it as a child process: Waybill 0.1.0-alpha from nuget.org. -->
+    <ProjectReference Include="..\Waybill.Tests.LegacyHost\Waybill.Tests.LegacyHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
