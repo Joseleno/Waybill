@@ -41,8 +41,10 @@ public sealed class Convivencia_JanelaDoUpgrade(PostgresFixture postgres)
                    || await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE status IN ('pending', 'claimed')") > 0)
             {
                 stop.Token.ThrowIfCancellationRequested();
-                if ((await dispatcher.RunOnceAsync(ct)).Claimed == 0)
-                    await Task.Delay(50, ct);
+                // Paced as the hosted dispatcher and the 0.1 one are: on at once after a full batch, else 100 ms of polling.
+                var cycle = await dispatcher.RunOnceAsync(ct);
+                if (cycle.Claimed < cycle.BatchSize)
+                    await Task.Delay(100, ct);
             }
             current.AddRange(await produced);
         }
@@ -59,9 +61,10 @@ public sealed class Convivencia_JanelaDoUpgrade(PostgresFixture postgres)
         Assert.Empty(lost);
         Assert.Equal(400, await database.CountAsync("published"));
 
-        // Both dispatchers took part, and the 0.1 rows went in unnumbered, as with ordering off they must.
-        Assert.NotEmpty(legacyDispatcher.Lines("PUBLISHED "));
-        Assert.NotEmpty(transport.Received);
+        // Both dispatchers took a real share, and the 0.1 rows went in unnumbered, as with ordering off they must.
+        TestContext.Current.TestOutputHelper?.WriteLine($"0.1 published {legacyDispatcher.Lines("PUBLISHED ").Count}, 0.2 {transport.Received.Count}");
+        Assert.True(legacyDispatcher.Lines("PUBLISHED ").Count >= 40, $"0.1 published {legacyDispatcher.Lines("PUBLISHED ").Count}");
+        Assert.True(transport.Received.Count >= 40, $"0.2 published {transport.Received.Count}");
         Assert.Equal(0, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE sequence IS NOT NULL"));
     }
 }

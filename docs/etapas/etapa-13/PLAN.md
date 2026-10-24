@@ -29,7 +29,7 @@ Derivado de `docs/etapas/etapa-13/SPEC.md`, aprovado com as três recomendaçõe
 
 | Teste | Cenário | Resultado esperado | Onde |
 | --- | --- | --- | --- |
-| `Convivencia_JanelaDoUpgrade_01E02Juntas_NenhumaSePerde` | Schema da 0.2, ordenação desligada. Produtor e dispatcher da 0.1 (processo) e da 0.2 (no teste) ao mesmo tempo, 200 mensagens de cada, metade com chave | Todo id gravado é publicado; nada fica `pending` ou `claimed`; as linhas da 0.1 ficam sem `sequence` | Integration |
+| `Convivencia_JanelaDoUpgrade_01E02Juntas_NenhumaSePerde` | Schema da 0.2, ordenação desligada. Produtor e dispatcher da 0.1 (processo) e da 0.2 (no teste, no ritmo do serviço hospedado) ao mesmo tempo, 200 mensagens de cada, metade com chave | Todo id gravado é publicado; nada fica `pending` ou `claimed`; cada dispatcher publica ao menos 40 das 400; as linhas da 0.1 ficam sem `sequence` | Integration |
 | `Convivencia_Consumidor01_Recebe02EDeduplica` | Dispatcher da 0.2 com o transporte RabbitMQ publica; consumidor da 0.1 (processo) com o inbox da 0.1; uma cópia republicada à mão | Cada mensagem `PROCESSED` uma vez; a cópia `DUPLICATE`; uma linha no `waybill.inbox` por mensagem | Integration |
 | `Convivencia_Rollback_01DrenaBacklogNumerado` | Com a ordenação ligada, backlog numerado de 3 chaves, 5 mensagens cada, sucessoras não marcadas e nenhum dispatcher. Ordenação desligada pelo `<!-- ordering-reset -->`; depois só o dispatcher da 0.1 | As 15 publicadas; nada pendente | Integration |
 | `Convivencia_Rollback_LinhaEmEsperaDeReturn_01PublicaNoCicloSeguinte` | Linha `pending` com `next_attempt_at` uma hora à frente; só o dispatcher da 0.1 | Publicada no primeiro ciclo da 0.1 | Integration |
@@ -44,7 +44,7 @@ Derivado de `docs/etapas/etapa-13/SPEC.md`, aprovado com as três recomendaçõe
 | --- | --- |
 | `LogStarted` sem o campo `Ordering` | `Dispatcher_LogDePartida_DizAOrdenacao` |
 | Bloco `<!-- rollback-claim-index -->` com o predicado da 0.2 (`AND (sequence IS NULL OR is_head)`) | `Convivencia_Rollback_IndiceDa01_ClaimDa01UsaOIndice` |
-| Transporte do `LegacyHost` que confirma sem imprimir um id em cada cem (o oráculo precisa ver a perda) | `Convivencia_JanelaDoUpgrade_01E02Juntas_NenhumaSePerde` |
+| Transporte do `LegacyHost` que confirma sem imprimir um id em cada dez (`WAYBILL_LEGACY_DROP_EVERY=10`, herdado pelo filho; o oráculo precisa ver a perda) | `Convivencia_JanelaDoUpgrade_01E02Juntas_NenhumaSePerde` |
 | Gatilho `outbox_sequence` desabilitado antes de a 0.1 gravar | `Convivencia_Produtor01ComOrdenacaoLigada_SaiEmOrdem`: as linhas da 0.1 ficam sem `sequence`. Mostra que a ordem das mensagens da 0.1 vem do banco, não do pacote |
 
 ## Armadilhas
