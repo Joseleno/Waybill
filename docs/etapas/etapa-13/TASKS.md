@@ -16,5 +16,5 @@ Um commit por cenário provado, na ordem abaixo.
 - [x] 9. Log de partida: teste `Dispatcher_LogDePartida_DizAOrdenacao` primeiro, depois o `LogStarted`
 - [x] 10. Mutações do PLAN, cada uma derrubando o teste indicado. A do transporte sobreviveu à primeira versão do teste da janela: a 0.2 em laço apertado levava quase tudo, e a 0.1 publicava menos de 50. O teste passou a rodar a 0.2 no ritmo do serviço e a exigir ao menos 40 publicadas por versão (de 100 a 217 para a 0.1 em cinco rodadas)
 - [x] 11. `OPERATIONS.md` ("Upgrading from 0.1", "Upgrading and rolling back", "Ordering by key"): cada frase sobre a 0.1 com o teste dela; CHANGELOG em `[Unreleased]`; ADR 0012
-- [ ] 12. Verificação completa, revisão independente e `guarantee-auditor` se o diff tocar README ou `GUARANTEES.md`; PR para a `develop`
-- [ ] 13. Comentário na issue #21 (os itens resolvidos com teste ou ADR; aberta só com os três da migration)
+- [x] 12. Verificação completa, revisão independente (4 achados menores, tratados) e `guarantee-auditor` (o diff toca o escopo; 4 achados, corrigidos); PR #36 para a `develop`, CI verde
+- [x] 13. Comentário na issue #21 (os itens resolvidos com teste ou ADR; aberta só com os três da migration)

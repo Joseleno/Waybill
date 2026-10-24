@@ -20,6 +20,6 @@ O `OPERATIONS.md` já diz duas coisas sobre binários da 0.1 sobre o schema da 0
 
 **Pronto quando**
 
-- [ ] Os cenários do SPEC passam no CI, com a 0.1 restaurada do nuget.org
-- [ ] Cada frase do `OPERATIONS.md` sobre a 0.1 sobre o schema da 0.2 aponta para um teste
-- [ ] O log de partida diz se a ordenação está ligada, com P e M
+- [x] Os cenários do SPEC passam no CI, com a 0.1 restaurada do nuget.org
+- [x] Cada frase do `OPERATIONS.md` sobre a 0.1 sobre o schema da 0.2 aponta para um teste
+- [x] O log de partida diz se a ordenação está ligada, com P e M
