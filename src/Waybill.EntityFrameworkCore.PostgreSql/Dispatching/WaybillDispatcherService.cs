@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -29,7 +30,9 @@ internal sealed partial class WaybillDispatcherService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        LogStarted(logger, dispatcher.Owner);
+        LogStarted(logger, dispatcher.Owner, dispatcher.OrdersByKey
+            ? string.Create(CultureInfo.InvariantCulture, $"on (Partitions = {options.Value.Partitions}, MaxPerKey = {options.Value.MaxPerKey})")
+            : "off");
         try
         {
             await RunAsync(stoppingToken).ConfigureAwait(false);
@@ -150,8 +153,9 @@ internal sealed partial class WaybillDispatcherService(
         }
     }
 
-    [LoggerMessage(EventId = 20, Level = LogLevel.Information, Message = "Waybill dispatcher {Owner} started.")]
-    private static partial void LogStarted(ILogger logger, string owner);
+    // Ordering: "off", or "on (Partitions = P, MaxPerKey = M)".
+    [LoggerMessage(EventId = 20, Level = LogLevel.Information, Message = "Waybill dispatcher {Owner} started; ordering by key is {Ordering}.")]
+    private static partial void LogStarted(ILogger logger, string owner, string ordering);
 
     [LoggerMessage(EventId = 21, Level = LogLevel.Information, Message = "Waybill dispatcher {Owner} stopped; {Released} claimed row(s) handed back.")]
     private static partial void LogStopped(ILogger logger, string owner, int released);

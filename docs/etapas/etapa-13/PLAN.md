@@ -22,7 +22,7 @@ Derivado de `docs/etapas/etapa-13/SPEC.md`, aprovado com as três recomendaçõe
 | Harness | `LegacyHost` no projeto de integração: sobe o processo, lê o stdout linha a linha, fecha o stdin para parar e mata o processo no `Dispose`. Um tempo-limite por espera, com o stderr do filho na mensagem de falha |
 | Oráculo de entrega | Os ids gravados pelas duas versões contra os publicados pelas duas (o `FakeTransport` da 0.2 e o stdout da 0.1): todo id gravado aparece ao menos uma vez, e nenhuma linha fica `pending` ou `claimed` depois do dreno |
 | SQL novo no `OPERATIONS.md` | Bloco `<!-- rollback-claim-index -->` em "Upgrading and rolling back": `CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_outbox_claimable_v01 ON waybill.outbox (id) WHERE status IN ('pending', 'claimed');`. É o predicado da 0.1, sob o nome que o `Up` da 0.2 já usa para o índice antigo. Quem volta à 0.2 o apaga à mão: a migration já está no histórico e não roda de novo |
-| Log de partida | `LogStarted` (EventId 20) ganha `OrderByKey`, `Partitions` e `MaxPerKey`, com duas mensagens: `Waybill dispatcher {Owner} started; ordering by key is on (Partitions = {Partitions}, MaxPerKey = {MaxPerKey}).` e `Waybill dispatcher {Owner} started; ordering by key is off.` |
+| Log de partida | `LogStarted` (EventId 20) ganha o campo `Ordering`: `Waybill dispatcher {Owner} started; ordering by key is {Ordering}.`, com `off` ou `on (Partitions = P, MaxPerKey = M)`. Um método só: duas mensagens no mesmo EventId quebrariam `EventIds_UnicosEmTodosOsPacotes`, e P e M não têm valor com a ordenação desligada |
 | CI | Sem job novo: o `ci.yml` já roda a integração em PG15 e PG18, e o host compila com ela. A restauração da 0.1 vem do nuget.org, como os outros pacotes |
 
 ## Testes que provam
@@ -36,13 +36,13 @@ Derivado de `docs/etapas/etapa-13/SPEC.md`, aprovado com as três recomendaçõe
 | `Convivencia_Rollback_IndiceDa01_ClaimDa01UsaOIndice` | 20 mil linhas `published` e 100 `pending`; `EXPLAIN EXECUTE` do claim da 0.1 (texto do `claim-sql`) em plano genérico, antes e depois do `<!-- rollback-claim-index -->` | Antes, sem `ix_outbox_claimable_v01`; depois, o plano o usa e não tem `Seq Scan` | Integration |
 | `Convivencia_Produtor01ComOrdenacaoLigada_SaiEmOrdem` | Ordenação ligada num dispatcher da 0.2; produtor da 0.1 grava 10 mensagens de uma chave | Numeradas de 1 a 10 pelo gatilho e publicadas nessa ordem | Integration |
 | `Convivencia_Dispatcher01ComOrdenacaoLigada_PublicaForaDeOrdem` | Limite: cabeça de uma chave na DLQ, sucessora `pending` sem marca; dispatcher da 0.1 | A 0.1 publica a sucessora com a cabeça parada. Prova a frase "ligue a ordenação só sem dispatcher da 0.1" | Integration |
-| `Dispatcher_LogDePartida_DizAOrdenacao` | Teoria, ordenação ligada (P = 4, M = 2) e desligada | Um EventId 20 com `OrderByKey` e, ligada, `Partitions` e `MaxPerKey` nos campos | Integration |
+| `Dispatcher_LogDePartida_DizAOrdenacao` | Teoria, ordenação ligada (P = 4, M = 2) e desligada | Um EventId 20 com o estado na mensagem e no campo `Ordering`; ligada, com P e M | Integration |
 
 ## Mutações
 
 | Mutação | Derruba |
 | --- | --- |
-| `LogStarted` sem os campos da ordenação | `Dispatcher_LogDePartida_DizAOrdenacao` |
+| `LogStarted` sem o campo `Ordering` | `Dispatcher_LogDePartida_DizAOrdenacao` |
 | Bloco `<!-- rollback-claim-index -->` com o predicado da 0.2 (`AND (sequence IS NULL OR is_head)`) | `Convivencia_Rollback_IndiceDa01_ClaimDa01UsaOIndice` |
 | Transporte do `LegacyHost` que confirma sem imprimir um id em cada cem (o oráculo precisa ver a perda) | `Convivencia_JanelaDoUpgrade_01E02Juntas_NenhumaSePerde` |
 | Gatilho `outbox_sequence` desabilitado antes de a 0.1 gravar | `Convivencia_Produtor01ComOrdenacaoLigada_SaiEmOrdem`: as linhas da 0.1 ficam sem `sequence`. Mostra que a ordem das mensagens da 0.1 vem do banco, não do pacote |
