@@ -18,6 +18,7 @@ internal sealed class LegacyHost : IAsyncDisposable
     private readonly SemaphoreSlim _arrived = new(0);
     private readonly Task _reader;
     private int _consumed; // lines before this index were already returned by WaitForAsync
+    private bool _eof; // stdout closed; set under the lock on _lines before the last release, unlike _reader.IsCompleted
 
     private LegacyHost(Process process)
     {
@@ -57,13 +58,18 @@ internal sealed class LegacyHost : IAsyncDisposable
             start.Environment[name] = value;
 
         var host = new LegacyHost(Process.Start(start)!);
-        var version = await host.WaitForAsync("VERSION ", TimeSpan.FromSeconds(60));
-        if (!version.StartsWith(Version + "+", StringComparison.Ordinal))
+        try
         {
-            await host.DisposeAsync();
-            throw new InvalidOperationException($"the legacy host loaded Waybill {version}, not {Version}");
+            var version = await host.WaitForAsync("VERSION ", TimeSpan.FromSeconds(60));
+            if (!version.StartsWith(Version + "+", StringComparison.Ordinal))
+                throw new InvalidOperationException($"the legacy host loaded Waybill {version}, not {Version}");
+            return host;
         }
-        return host;
+        catch
+        {
+            await host.DisposeAsync(); // the caller's await using is not reached: nobody else would kill the child
+            throw;
+        }
     }
 
     public bool HasExited => _process.HasExited;
@@ -92,7 +98,7 @@ internal sealed class LegacyHost : IAsyncDisposable
                         return _lines[i][prefix.Length..];
                     }
                 }
-                if (_reader.IsCompleted)
+                if (_eof)
                     throw Failure($"the legacy host exited before a \"{prefix}\" line");
             }
             try
@@ -113,7 +119,10 @@ internal sealed class LegacyHost : IAsyncDisposable
         cts.CancelAfter(timeout);
         while (!done(this))
         {
-            if (_reader.IsCompleted)
+            bool eof;
+            lock (_lines)
+                eof = _eof;
+            if (eof && !done(this))
                 throw Failure($"the legacy host exited before {what}");
             try
             {
@@ -152,6 +161,8 @@ internal sealed class LegacyHost : IAsyncDisposable
                 _lines.Add(line);
             _arrived.Release();
         }
+        lock (_lines)
+            _eof = true;
         _arrived.Release();
     }
 
@@ -168,6 +179,7 @@ internal sealed class LegacyHost : IAsyncDisposable
             _process.Kill(entireProcessTree: true);
             await _process.WaitForExitAsync();
         }
+        await _reader; // ends with stdout; it must not release the semaphore after it is disposed
         _process.Dispose();
         _arrived.Dispose();
     }

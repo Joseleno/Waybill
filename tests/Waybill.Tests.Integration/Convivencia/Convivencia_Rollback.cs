@@ -22,7 +22,11 @@ public sealed class Convivencia_Rollback(PostgresFixture postgres)
         var ids = await DispatcherHarness.EnqueueAsync(database, 15, key: n => $"order-{n % 3}");
         Assert.Equal(12, await database.ScalarAsync("SELECT count(*) FROM waybill.outbox WHERE sequence IS NOT NULL AND is_head IS NOT TRUE"));
 
-        await database.ExecuteAsync(OperationsDoc.Sql("ordering-reset")); // every dispatcher stopped, as the SQL requires
+        // The rollback as OPERATIONS.md writes it, with every dispatcher stopped. The 0.1 claim reads neither is_head nor
+        // sequence, so it would drain the rows without the reset too: what the reset is for is the order (a 0.1 dispatcher
+        // beside ordering, Convivencia_Dispatcher01ComOrdenacaoLigada_PublicaForaDeOrdem), and Operacao_ReiniciarOrdenacao
+        // proves what it does.
+        await database.ExecuteAsync(OperationsDoc.Sql("ordering-reset"));
 
         await using var legacy = await LegacyHost.StartAsync("dispatch", database.ConnectionString);
         await legacy.WaitUntilAsync(h => h.Lines("PUBLISHED ").Count >= 15, TimeSpan.FromSeconds(60), "15 messages published");

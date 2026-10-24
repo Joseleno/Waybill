@@ -41,6 +41,7 @@ A etapa 13 roda os pacotes `0.1.0-alpha` do nuget.org num processo à parte (`te
 ## Testes que provam
 
 - `Convivencia_LegacyHost_CarregaA01DoNuGet`: o filho carrega a `0.1.0-alpha` (`+6b04362`, o commit da tag) e lê o claim do pacote; com a versão esperada trocada, o harness recusa o filho.
+- `Convivencia_LegacyHost_FilhoQueMorre_FalhaNaHora`: um filho que morre sem a linha esperada falha o teste na hora, dizendo isso, e não depois do tempo-limite (achado da revisão; a corrida depende do agendamento e não foi vista falhando antes da correção).
 - `Convivencia_JanelaDoUpgrade_01E02Juntas_NenhumaSePerde` (decisão 1): 200 mensagens de cada versão, metade com chave, publicadas pelos dois dispatchers; cada um publica ao menos 40, e as linhas da 0.1 ficam sem `sequence`.
 - `Convivencia_Consumidor01_Recebe02EDeduplica` (decisão 1): o consumidor da 0.1 lê o que a 0.2 publica com a ordenação ligada, com `waybill-sequence`, e o inbox da 0.1 descarta uma cópia.
 - `Convivencia_Rollback_01DrenaBacklogNumerado` (decisão 1): backlog numerado com sucessoras não marcadas, ordenação desligada pelo `<!-- ordering-reset -->`, drenado só pela 0.1.

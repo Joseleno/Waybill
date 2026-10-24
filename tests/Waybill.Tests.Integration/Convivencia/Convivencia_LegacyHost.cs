@@ -17,4 +17,17 @@ public sealed class Convivencia_LegacyHost
         Assert.Contains("FOR UPDATE SKIP LOCKED", sql, StringComparison.Ordinal);
         Assert.DoesNotContain("is_head", sql, StringComparison.Ordinal); // the 0.2 claim has it
     }
+
+    // A child that dies without the line a test waits for fails that test at once, saying so, not after the timeout.
+    [Fact]
+    public async Task Convivencia_LegacyHost_FilhoQueMorre_FalhaNaHora()
+    {
+        await using var host = await LegacyHost.StartAsync("no-such-mode"); // prints its version, then throws
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => host.WaitForAsync("NEVER ", TimeSpan.FromSeconds(60)));
+
+        Assert.Contains("exited before", failure.Message, StringComparison.Ordinal);
+        Assert.True(waited.Elapsed < TimeSpan.FromSeconds(20), $"failed after {waited.Elapsed}");
+    }
 }
