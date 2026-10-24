@@ -18,7 +18,7 @@ O timebox é de oito semanas, como o da v0.1. A duração de cada etapa é estim
 | ~~9. Transporte Kafka~~ | **Adiada** (ADR 0009) | Fora da v0.2 até haver pedido com caso de uso real; era `Waybill.Kafka` com producer transacional por partição, com G2 e G4 estrita no Kafka |
 | 10. Verificação de sequência no inbox | 4 a 5 dias | Concluída em Oct 21, 2026 (PR #27, ADR 0010): `inbox_keys`, regressão detectada e devolvida à aplicação para a DLX; G4 do RabbitMQ completa |
 | 11. OpenTelemetry | 3 a 5 dias | Concluída em Oct 22, 2026 (PR #30, ADR 0011): spans `create`, `send` e `process` num só trace da requisição HTTP até o handler, com a correção do trace partido da v0.1; métricas da DLQ e de regressões no inbox, ao lado das de atraso e de chaves bloqueadas; o exemplo mostra o trace no dashboard do Aspire |
-| 12. Documentação e release | 3 a 4 dias | `GUARANTEES.md` com a G4, `OPERATIONS.md`, `0.2.0-alpha` no nuget.org |
+| 12. Documentação e release | 3 a 4 dias | Concluída em Oct 22, 2026 (PRs #32 a #34): `GUARANTEES.md` com a G4, `OPERATIONS.md`, `0.2.0-alpha` no nuget.org |
 
 **Linha de corte.** O núcleo da versão eram as etapas 8, 9 e 10, para sustentar a G4 nos dois transportes. Desde o ADR 0009 (Oct 21, 2026), a etapa 9 está adiada, e o núcleo são as etapas 8 e 10: a G4 da v0.2 é a do RabbitMQ. A etapa 11 era cortável e saiu inteira, em Oct 22, 2026; a tabela "Funcionalidades por versão" do escopo, que promete OpenTelemetry na v0.2, fica como está. Um segundo corte, se preciso, é o cenário de backlog de um milhão de linhas, que passa do PR para o job agendado.
 
@@ -195,9 +195,9 @@ A G4 entra no `GUARANTEES.md` agora, com a redação assimétrica do escopo e o 
 
 **Pronto quando**
 
-- [ ] Cada linha nova do `GUARANTEES.md` aponta para um teste nomeado
-- [ ] O upgrade de um banco da `0.1.0-alpha` com backlog pendente passa, agora com a migration final
-- [ ] A `0.2.0-alpha` está no nuget.org com Source Link e símbolos funcionando, em todos os pacotes
+- [x] Cada linha nova do `GUARANTEES.md` aponta para um teste nomeado
+- [x] O upgrade de um banco da `0.1.0-alpha` com backlog pendente passa, agora com a migration final
+- [x] A `0.2.0-alpha` está no nuget.org com Source Link e símbolos funcionando, em todos os pacotes
 
 ## Rastreabilidade
 
