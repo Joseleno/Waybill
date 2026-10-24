@@ -9,7 +9,7 @@ Um commit por cenário provado, na ordem abaixo.
 - [x] 2. `Convivencia_JanelaDoUpgrade_01E02Juntas_NenhumaSePerde`
 - [x] 3. `Convivencia_Consumidor01_Recebe02EDeduplica`
 - [x] 4. `Convivencia_Rollback_01DrenaBacklogNumerado`
-- [ ] 5. `Convivencia_Rollback_LinhaEmEsperaDeReturn_01PublicaNoCicloSeguinte`
+- [x] 5. `Convivencia_Rollback_LinhaEmEsperaDeReturn_01PublicaNoCicloSeguinte`
 - [ ] 6. Bloco `<!-- rollback-claim-index -->` no `OPERATIONS.md` e `Convivencia_Rollback_IndiceDa01_ClaimDa01UsaOIndice`
 - [ ] 7. `Convivencia_Produtor01ComOrdenacaoLigada_SaiEmOrdem`
 - [ ] 8. `Convivencia_Dispatcher01ComOrdenacaoLigada_PublicaForaDeOrdem`
